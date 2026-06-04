@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project256.com/schemas/doctriage_workflow_capabilities.v1.schema.json",
+  "title": "DocTriage Workflow Capabilities",
+  "type": "object",
+  "required": ["schema_version", "commands", "stable_fields"],
+  "properties": {
+    "schema_version": {
+      "const": "doctriage_workflow_capabilities.v1"
+    },
+    "commands": {
+      "type": "object",
+      "required": ["analyze", "export-manifest"],
+      "properties": {
+        "analyze": {"type": "object"},
+        "export-manifest": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "stable_fields": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "additionalProperties": true
+}

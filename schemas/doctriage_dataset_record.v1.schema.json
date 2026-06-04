@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project256.com/schemas/doctriage_dataset_record.v1.schema.json",
+  "title": "DocTriage Dataset Record",
+  "type": "object",
+  "required": ["schema_version", "id", "purpose", "include", "path", "relative_path", "scores", "workflow"],
+  "properties": {
+    "schema_version": {
+      "const": "doctriage_dataset_record.v1"
+    },
+    "id": {"type": "string"},
+    "purpose": {
+      "enum": ["rag", "pretraining", "sft", "public_writing", "all"]
+    },
+    "include": {"type": "boolean"},
+    "path": {"type": "string"},
+    "source_path": {"type": "string"},
+    "target_path": {"type": "string"},
+    "relative_path": {"type": "string"},
+    "media_type": {"type": "string"},
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "title": {"type": "string"},
+        "category": {"type": "string"},
+        "document_kind": {"type": "string"},
+        "topic_tags": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "scores": {
+      "$ref": "#/$defs/scores"
+    },
+    "summary": {"type": "string"},
+    "reason": {"type": "string"},
+    "workflow": {
+      "$ref": "#/$defs/workflow"
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "scores": {
+      "type": "object",
+      "properties": {
+        "quality": {"$ref": "#/$defs/score"},
+        "knowledge_density": {"$ref": "#/$defs/score"},
+        "implementation_specificity": {"$ref": "#/$defs/score"},
+        "logical_structure": {"$ref": "#/$defs/score"},
+        "evidence_richness": {"$ref": "#/$defs/score"},
+        "actionability": {"$ref": "#/$defs/score"},
+        "strategic_value": {"$ref": "#/$defs/score"},
+        "freshness": {"$ref": "#/$defs/score"},
+        "uniqueness": {"$ref": "#/$defs/score"},
+        "sensitivity_risk": {"$ref": "#/$defs/score"},
+        "public_writing_suitability": {"$ref": "#/$defs/score"}
+      },
+      "additionalProperties": true
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["routes", "recommended_uses"],
+      "properties": {
+        "routes": {
+          "type": "object",
+          "properties": {
+            "rag": {"type": "boolean"},
+            "pretraining": {"type": "boolean"},
+            "sft": {"type": "boolean"},
+            "public_writing": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        "recommended_uses": {
+          "type": "array",
+          "items": {
+            "enum": ["rag", "pretraining", "sft", "public_writing"]
+          }
+        },
+        "policy": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

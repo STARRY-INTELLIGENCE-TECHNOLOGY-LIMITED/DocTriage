@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "DocTriage"
+version = "0.1.0"
+description = "Document triage and classification middleware for RAG and agent systems."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "docling>=2.18.0",
+    "httpx>=0.28.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "pypdf>=4.3.0",
+]
+
+[project.scripts]
+doctriage = "main:main"
+doctriage-relationships = "relationship_miner:main"
+doctriage-graph = "knowledge_graph:main"
+doctriage-bundle = "bundle_exporter:main"
+doctriage-reading = "reading_tracker:main"
+doctriage-reading-ui = "reading_ui:main"
+doctriage-workflow = "workflow_adapter:main"
+
+[tool.setuptools]
+py-modules = ["bundle_exporter", "cleaner", "config", "knowledge_graph", "main", "meta_profiler", "ranker_engine", "reading_tracker", "reading_ui", "relationship_miner", "workflow_adapter"]
+packages = ["relationship_strategies"]

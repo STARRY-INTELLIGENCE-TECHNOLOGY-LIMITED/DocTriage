@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://project256.com/schemas/doctriage_file_analysis.v1.schema.json",
+  "title": "DocTriage File Analysis",
+  "type": "object",
+  "required": ["schema_version", "ok", "generated_at", "source_path"],
+  "properties": {
+    "schema_version": {
+      "const": "doctriage_file_analysis.v1"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "source_path": {
+      "type": "string"
+    },
+    "relative_path": {
+      "type": "string"
+    },
+    "file": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "suffix": {"type": "string"},
+        "media_type": {"type": "string"},
+        "fingerprint": {"type": "object"}
+      },
+      "additionalProperties": true
+    },
+    "triage": {
+      "$ref": "#/$defs/triage"
+    },
+    "profile": {
+      "type": "object"
+    },
+    "text": {
+      "type": "object",
+      "properties": {
+        "summary": {"type": "string"},
+        "clean_preview": {"type": "string"},
+        "extraction_notes": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "workflow": {
+      "$ref": "#/$defs/workflow"
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string"},
+        "message": {"type": "string"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "triage": {
+      "type": "object",
+      "required": ["quality", "category"],
+      "properties": {
+        "quality": {"$ref": "#/$defs/score"},
+        "category": {"type": "string"},
+        "document_kind": {"type": "string"},
+        "topic_tags": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "knowledge_density": {"$ref": "#/$defs/score"},
+        "implementation_specificity": {"$ref": "#/$defs/score"},
+        "logical_structure": {"$ref": "#/$defs/score"},
+        "evidence_richness": {"$ref": "#/$defs/score"},
+        "actionability": {"$ref": "#/$defs/score"},
+        "strategic_value": {"$ref": "#/$defs/score"},
+        "freshness": {"$ref": "#/$defs/score"},
+        "uniqueness": {"$ref": "#/$defs/score"},
+        "sensitivity_risk": {"$ref": "#/$defs/score"},
+        "public_writing_suitability": {"$ref": "#/$defs/score"},
+        "reason": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "workflow": {
+      "type": "object",
+      "required": ["routes", "recommended_uses"],
+      "properties": {
+        "routes": {
+          "type": "object",
+          "properties": {
+            "rag": {"type": "boolean"},
+            "pretraining": {"type": "boolean"},
+            "sft": {"type": "boolean"},
+            "public_writing": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        "recommended_uses": {
+          "type": "array",
+          "items": {
+            "enum": ["rag", "pretraining", "sft", "public_writing"]
+          }
+        },
+        "policy": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
