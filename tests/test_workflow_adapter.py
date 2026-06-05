@@ -29,6 +29,7 @@ class StubScorer:
             uniqueness=72,
             sensitivity_risk=18,
             public_writing_suitability=84,
+            summary="This guide explains how to build a RAG workflow with tests and reusable validation steps.",
             reason="usable",
         )
 
@@ -155,4 +156,5 @@ def test_analyze_document_returns_machine_readable_record(tmp_path: Path) -> Non
     assert record["ok"] is True
     assert record["relative_path"] == "guide.md"
     assert record["triage"]["quality"] == 86
+    assert record["text"]["summary"].startswith("This guide explains")
     assert record["workflow"]["routes"]["rag"] is True

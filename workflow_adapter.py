@@ -20,7 +20,7 @@ from bundle_exporter import (
 )
 from cleaner import DocumentWasher
 from config import Settings
-from main import build_file_fingerprint, build_local_summary
+from main import build_file_fingerprint, build_local_summary, summary_for_decision
 from meta_profiler import MetadataProfiler
 from ranker_engine import LLMClient, ManifestResult, SemanticScore, SemanticScoring
 
@@ -73,9 +73,14 @@ def analyze_document(
         profile,
         ManifestResult(),
     )
-    summary = build_local_summary(
+    fallback_summary = build_local_summary(
         washed.clean_markdown,
         max_chars=settings.DOCUMENT_SUMMARY_MAX_CHARS,
+    )
+    summary = summary_for_decision(
+        score,
+        fallback_summary,
+        settings.DOCUMENT_SUMMARY_MAX_CHARS,
     )
     fingerprint = build_file_fingerprint(path, settings)
 
@@ -395,6 +400,8 @@ def build_settings_for_analyze(args: argparse.Namespace, paths: list[Path]) -> S
         overrides["LLM_TIMEOUT_SECONDS"] = args.timeout_seconds
     if args.retry_count is not None:
         overrides["LLM_RETRY_COUNT"] = args.retry_count
+    if args.output_language is not None:
+        overrides["OUTPUT_LANGUAGE"] = args.output_language
     return Settings(**overrides)
 
 
@@ -445,6 +452,10 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--llm-model")
     analyze.add_argument("--timeout-seconds", type=int)
     analyze.add_argument("--retry-count", type=int)
+    analyze.add_argument(
+        "--output-language",
+        choices=["auto", "zh-CN", "en", "ja", "ko", "de", "fr", "es"],
+    )
     analyze.add_argument("--no-ocr", action="store_true")
     analyze.add_argument("--pdf-metadata", action="store_true")
     analyze.add_argument("--require-local-llm", action="store_true")

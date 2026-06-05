@@ -100,6 +100,51 @@ def test_previous_failures_are_scored_first(tmp_path: Path, monkeypatch) -> None
     assert order[0] == "z.md"
 
 
+def test_pipeline_writes_llm_summary_when_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    file_path = source_dir / "doc.md"
+    file_path.write_text(
+        "<!-- page 1 -->\n\n# Title\n\n创作中心\n\nLocal noisy body",
+        encoding="utf-8",
+    )
+
+    def fake_score_document(self, file_path, clean_markdown, profile, manifest):
+        return SemanticScore(
+            quality=80,
+            category="Design",
+            summary="本文聚焦复杂表单的状态管理，通过分层模型和校验流水线减少重复逻辑，适合复用到前端配置平台。",
+            knowledge_density=80,
+            implementation_specificity=40,
+            logical_structure=80,
+            reason="test",
+        )
+
+    monkeypatch.setattr(main.SemanticScoring, "score_document", fake_score_document)
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        COPY_FILES=False,
+        CONCURRENCY_LIMIT=1,
+        SKIP_MANIFEST_ANALYSIS=True,
+        DOCUMENT_SUMMARY_ENABLED=True,
+    )
+
+    main.run_pipeline(settings)
+
+    decision = json.loads(
+        (output_root / "_state" / "decisions.jsonl").read_text(encoding="utf-8")
+    )
+    assert decision["summary"].startswith("本文聚焦复杂表单")
+    assert "<!-- page" not in decision["summary"]
+    assert "创作中心" not in decision["summary"]
+
+
 def test_failed_document_is_retried_once_at_end(tmp_path: Path, monkeypatch) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"
@@ -144,6 +189,10 @@ def test_failed_document_is_retried_once_at_end(tmp_path: Path, monkeypatch) -> 
         (output_root / "_state" / "progress.json").read_text(encoding="utf-8")
     )
     assert summary["completed"] == 1
+    assert summary["plan_only"] is True
+    assert summary["copy_files"] is False
+    assert progress["plan_only"] is True
+    assert progress["copy_files"] is False
     assert summary["failed"] == 0
     assert summary["failed_attempts"] == 1
     assert summary["retry_attempted"] == 1

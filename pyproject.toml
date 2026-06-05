@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "DocTriage"
 version = "0.1.0"
-description = "Document triage and classification middleware for RAG and agent systems."
+description = "Local-first document triage for manual curation, connected learning, RAG, and agent workflows."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [

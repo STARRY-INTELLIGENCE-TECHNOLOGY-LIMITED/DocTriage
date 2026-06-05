@@ -1,27 +1,68 @@
 # DocTriage
 
-Local document triage for RAG and agent workflows. DocTriage scans a source directory, scores documents with a local LLM, records resumable state, and gives you a browser console for analysis, reading, and relationship review.
+Local-first document triage for manual curation, connected learning, RAG, and agent workflows.
 
-The source directory is treated as read-only. All state, logs, and exports are written to `OUTPUT_ROOT`.
+[Chinese README](README.zh-CN.md)
+
+DocTriage scans a source folder, extracts text, asks a local LLM to score and explain each document, and gives you a browser console for review, reading status, failure handling, relationship mining, and export. It is useful both for modern AI pipelines and for old-school document selection, sequential reading, and learning by association.
+
+Your source folder stays read-only. DocTriage writes state, logs, relationship results, and optional routed copies under `OUTPUT_ROOT`.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/triage.jpg" alt="DocTriage overview" width="900">
+</p>
+
+DocTriage is built around a practical loop: run local analysis, review and mark documents in the reading console, then use relationship clusters when you need connected learning or downstream exports.
+
+## Why
+
+- Triage large, messy folders without reorganizing the original files.
+- Curate documents manually by quality, path order, modification time, and reading status.
+- Score documents with explainable signals, not just filenames.
+- Review files in a reading console with open, reveal, read, defer, and skip actions.
+- Keep failed files visible until they are fixed, skipped, or accepted as failures.
+- Learn across related documents through duplicates, series, same-topic clusters, and source-folder context.
+- Export stable bundles for downstream RAG or agent tools when needed.
 
 ## Features
 
-- Resume-safe analysis with `OUTPUT_ROOT/_state/run.lock`
-- `plan-only` mode for first-pass scoring without copying files
-- Reading console with filters, sorting, open/reveal, and reading status
-- Relationship mining with clusters and a local graph tab
-- Reset button for clearing one output root after confirmation
-- CLI exports for knowledge graph and downstream bundle files
+- Resume-safe analysis with a per-output lock.
+- `--plan-only` mode for scoring without copying files into routed folders.
+- Reading console with analysis-result and all-source-file views.
+- Explainable rows: summary, scoring reason, and dimension scores.
+- Failed-file rows with stage, reason, attempts, and direct open/reveal actions.
+- Filtered CSV/JSONL export from the current reading view.
+- Output language selection for generated summaries and reasons.
+- Separate UI language switch in the top-right corner.
+- Relationship graph for connected learning, deduplication, and downstream bundle export.
+
+## Screenshots
+
+**Analysis Execution**
+
+![Analysis execution](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/analysis_eng.png)
+
+Configure source/output folders, local model settings, plan-only runs, resume behavior, progress, logs, and failure status from one place.
+
+**Reading Console**
+
+![Reading console](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/reading_eng.png)
+
+Review scored documents or browse all source files in folder order, then open, reveal, mark, filter, and export the current working set.
+
+**Relationship Graph**
+
+![Relationship graph](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/graph_eng.png)
+
+Mine relationship clusters for duplicate detection, series discovery, connected learning, knowledge graph export, and bundle generation.
 
 ## Requirements
 
-- Python `>=3.11`
-- A local LLM endpoint such as Ollama
-- Optional: LibreOffice for legacy `.ppt`
+- Python `>=3.11,<3.15`
+- A local LLM endpoint, for example Ollama
+- Optional: LibreOffice for legacy `.ppt` ingestion
 
 ## Install
-
-Windows:
 
 ```powershell
 python -m venv .venv
@@ -30,35 +71,22 @@ pip install -e .
 Copy-Item .env.example .env
 ```
 
-Linux / macOS:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-cp .env.example .env
-```
+Linux and macOS use the same flow with `source .venv/bin/activate` and `cp .env.example .env`.
 
 ## Quick Start
 
-Start the UI:
+Start the browser console:
 
 ```powershell
-.\.venv\Scripts\python.exe reading_ui.py --host 127.0.0.1 --port 8765
-```
-
-Or launch the default UI entrypoint:
-
-```powershell
-.\.venv\Scripts\python.exe main.py
+doctriage-reading-ui --host 127.0.0.1 --port 8765
 ```
 
 Open `http://127.0.0.1:8765/`.
 
-Recommended first run for large folders:
+Recommended first pass for a large folder:
 
 ```powershell
-.\.venv\Scripts\python.exe main.py `
+doctriage `
   --source-dir "D:\example_docs" `
   --output-root "D:\doctriage_run" `
   --llm-endpoint http://localhost:11434/api/generate `
@@ -71,85 +99,91 @@ Recommended first run for large folders:
   --timeout-seconds 240
 ```
 
-## UI
-
-The browser console has three tabs:
-
-- `分析执行`
-  - Start, stop, resume, or reset one output root
-  - Shows current phase such as scan, resume, scoring, or relationship mining
-  - Supports templates and collapsible advanced options
-- `阅读台`
-  - Filter by status, quality, category, tags, sensitivity, and writing suitability
-  - Open or reveal files and mark reading status
-- `关系图谱`
-  - Review mined clusters and local document-to-document edges
-  - Generate relationship results, export a knowledge graph, or export a bundle
-  - Inspect one cluster at a time instead of rendering an unreadable global graph
-
-## CLI
-
-Main analysis:
+If console scripts are not on `PATH`, run the modules from the checkout:
 
 ```powershell
+.\.venv\Scripts\python.exe reading_ui.py --host 127.0.0.1 --port 8765
 .\.venv\Scripts\python.exe main.py --help
 ```
 
-Relationship mining:
+## Core Workflow
 
-```powershell
-.\.venv\Scripts\python.exe relationship_miner.py --help
-```
+1. **Run a plan-only pass**
 
-Knowledge graph export:
+   Get scores, categories, summaries, and reasons without creating copied `HQ` or `LQ` folders.
 
-```powershell
-.\.venv\Scripts\python.exe knowledge_graph.py --help
-```
+2. **Review in the reading console**
 
-Bundle export:
+   Use the analysis view for scored documents and the source view for folder-ordered browsing across every current source file.
 
-```powershell
-.\.venv\Scripts\python.exe bundle_exporter.py --help
-```
+3. **Close the loop on failures**
 
-Reading status CLI:
+   Failed files appear as rows with stage, reason, attempts, size, and direct open/reveal actions.
 
-```powershell
-.\.venv\Scripts\python.exe reading_tracker.py --help
-```
+4. **Follow relationships and folder context**
 
-## Relationship Outputs
+   Use source-folder ordering for sequential reading, then use relationship clusters to jump across related documents.
 
-Relationship mining writes to `OUTPUT_ROOT/_relationships/`:
+5. **Export filtered decisions**
 
-- `relations.jsonl`: pairwise relationships and evidence
-- `clusters.json`: connected components for cluster review
-- `knowledge_graph.json`: exported graph projection
-- `doctriage_bundle.json`: downstream bundle for other tools
+   Filter the reading table, then export CSV or JSONL for audit, writing, RAG planning, or external review.
 
-The graph tab reads `clusters.json` and `relations.jsonl`. If they do not exist yet, use the graph tab action buttons to generate them after analysis.
+6. **Mine relationships when scores are stable**
+
+   Generate clusters and graph exports after the first-pass decisions are good enough.
+
+## CLI
+
+| Command | Purpose |
+| --- | --- |
+| `doctriage` | Run document analysis |
+| `doctriage-reading-ui` | Start the browser console |
+| `doctriage-reading` | Read or update reading status from CLI |
+| `doctriage-relationships` | Mine document relationships |
+| `doctriage-graph` | Export a knowledge graph |
+| `doctriage-bundle` | Export a stable downstream bundle |
+| `doctriage-workflow` | Workflow adapter entrypoint |
+
+Each command supports `--help`.
 
 ## Output Layout
 
-- `_state/progress.json`: current progress snapshot
-- `_state/decisions.jsonl`: scored document decisions
-- `_state/processed_files.jsonl`: processed log
-- `_state/failed_files.jsonl`: failure log
-- `_state/reading_status.jsonl`: reading events
-- `_logs/doctriage.log`: analysis and background task log
-- `_relationships/`: relationship and export artifacts
+```text
+OUTPUT_ROOT/
+  _state/
+    progress.json
+    run_summary.json
+    decisions.jsonl
+    processed_files.jsonl
+    failed_files.jsonl
+    reading_status.jsonl
+  _logs/
+    doctriage.log
+  _relationships/
+    relations.jsonl
+    clusters.json
+    knowledge_graph.json
+    doctriage_bundle.json
+```
 
-## Resume and Reset
+Downstream integrations should prefer `doctriage_bundle.json` over internal JSONL logs.
 
-- Re-running with the same `OUTPUT_ROOT` resumes automatically
-- Changed files or changed key settings are reprocessed
-- Only one analysis process may write to one `OUTPUT_ROOT` at a time
-- `重置分析` clears the selected output root after confirmation
-- Do not place `OUTPUT_ROOT` inside `SOURCE_DIR`
+## Language
+
+DocTriage has two separate language controls:
+
+- Output language controls generated summaries and scoring reasons. `Auto` infers the document language.
+- UI language changes console labels only. It does not affect LLM output.
+
+## More Documentation
+
+- [Bundle schema](docs/bundle_schema.md)
+- [Knowledge graph abstraction](docs/knowledge_graph.md)
+- [Recipes](recipes/README.md)
+- [Chinese README](README.zh-CN.md)
 
 ## Notes
 
-- Desktop integrations depend on the local environment
-- Headless servers can still run analysis and the web UI, but folder picker and open/reveal actions may be unavailable
-- Downstream integrations should prefer `doctriage_bundle.json` over internal JSONL logs
+- Do not place `OUTPUT_ROOT` inside `SOURCE_DIR`.
+- Desktop open/reveal actions depend on the local environment.
+- Headless servers can run analysis and the web UI, but folder picker and open/reveal actions may be unavailable.

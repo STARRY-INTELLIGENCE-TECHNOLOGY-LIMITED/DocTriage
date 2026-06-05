@@ -10,6 +10,7 @@ from relationship_miner import (
     load_records,
     mine_relationships,
     resolve_relationship_workers,
+    write_clusters,
 )
 
 
@@ -78,6 +79,126 @@ def test_mine_relationships_without_embeddings(tmp_path: Path) -> None:
 
     clusters = json.loads(clusters_path.read_text(encoding="utf-8"))
     assert clusters["clusters"]
+
+
+def test_clusters_ignore_weak_time_path_chain_edges(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    files = []
+    for name in ("2026-01.md", "2026-02.md", "2026-03.md"):
+        path = source_dir / name
+        path.write_text(name, encoding="utf-8")
+        files.append(path)
+    records = [
+        relationship_miner.RelationshipRecord(
+            source_path=path,
+            relative_path=path.name,
+            target_path="",
+            quality=65,
+            category="Thinking",
+            document_kind="MeetingNotes",
+            topic_tags=[],
+            reason="",
+            summary="",
+            normalized_name=relationship_miner.normalize_name(path.stem),
+        )
+        for path in files
+    ]
+    weak = [
+        relationship_miner.CandidateRelation(
+            left=0,
+            right=1,
+            relation_score=0.86,
+            filename_similarity=0.5,
+            time_proximity=1.0,
+            path_proximity=1.0,
+            type_compatibility=1.0,
+            signals=["time", "path", "category"],
+        ),
+        relationship_miner.CandidateRelation(
+            left=1,
+            right=2,
+            relation_score=0.86,
+            filename_similarity=0.5,
+            time_proximity=1.0,
+            path_proximity=1.0,
+            type_compatibility=1.0,
+            signals=["time", "path", "category"],
+        ),
+    ]
+    clusters_path = output_root / "_relationships" / "clusters.json"
+
+    write_clusters(weak, records, clusters_path, cluster_min_score=0.88)
+
+    clusters = json.loads(clusters_path.read_text(encoding="utf-8"))
+    assert clusters["cluster_min_score"] == 0.88
+    assert clusters["clusters"] == []
+
+    strong = [
+        relationship_miner.CandidateRelation(
+            left=0,
+            right=1,
+            relation_score=0.9,
+            filename_similarity=0.92,
+            time_proximity=1.0,
+            path_proximity=1.0,
+            type_compatibility=1.0,
+            signals=["filename", "time", "path", "category"],
+        )
+    ]
+    write_clusters(strong, records, clusters_path, cluster_min_score=0.88)
+    clusters = json.loads(clusters_path.read_text(encoding="utf-8"))
+    assert clusters["clusters"][0]["size"] == 2
+
+
+def test_clusters_ignore_cross_directory_periodic_reports(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    records = [
+        relationship_miner.RelationshipRecord(
+            source_path=source_dir / "a.md",
+            relative_path="alice/2025-01 月报.md",
+            target_path="",
+            quality=65,
+            category="Business",
+            document_kind="MeetingNotes",
+            topic_tags=[],
+            reason="",
+            summary="",
+            normalized_name=relationship_miner.normalize_name("2025-01 月报"),
+        ),
+        relationship_miner.RelationshipRecord(
+            source_path=source_dir / "b.md",
+            relative_path="bob/2025-01 月报.md",
+            target_path="",
+            quality=65,
+            category="Business",
+            document_kind="MeetingNotes",
+            topic_tags=[],
+            reason="",
+            summary="",
+            normalized_name=relationship_miner.normalize_name("2025-01 月报"),
+        ),
+    ]
+    candidate = relationship_miner.CandidateRelation(
+        left=0,
+        right=1,
+        relation_score=0.95,
+        filename_similarity=1.0,
+        time_proximity=1.0,
+        path_proximity=0.0,
+        type_compatibility=1.0,
+        citation_count=1,
+        signals=["filename", "time", "category", "citation", "version_or_sequence"],
+    )
+    clusters_path = output_root / "_relationships" / "clusters.json"
+
+    write_clusters([candidate], records, clusters_path, cluster_min_score=0.88)
+
+    clusters = json.loads(clusters_path.read_text(encoding="utf-8"))
+    assert clusters["clusters"] == []
 
 
 def test_relationship_records_use_latest_decision(tmp_path: Path) -> None:

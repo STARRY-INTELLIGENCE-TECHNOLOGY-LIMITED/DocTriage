@@ -73,3 +73,47 @@ def test_stale_run_lock_is_ignored_when_process_is_gone(tmp_path: Path) -> None:
 
     with main.OutputRunLock(settings):
         assert settings.state_dir.joinpath("run.lock").exists()
+
+
+def test_build_local_summary_removes_page_and_ui_chrome() -> None:
+    summary = main.build_local_summary(
+        "<!-- page 1 --> · \ue6fd 文 架构文章 创作中心 朗读文章 "
+        "Powered by 通义语音合成 摘要：本文介绍订单链路的隔离设计，"
+        "通过缓存分层、限流和故障演练降低大促风险。",
+        max_chars=300,
+    )
+
+    assert "<!-- page" not in summary
+    assert "\ue6fd" not in summary
+    assert "创作中心" not in summary
+    assert "Powered by" not in summary
+    assert "订单链路" in summary
+
+
+def test_configure_logging_skips_stream_when_stdio_is_log_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    settings = main.Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+    )
+    output_root.mkdir()
+    settings.log_dir.mkdir(parents=True)
+    settings.application_log_path.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        main,
+        "stream_points_to_path",
+        lambda stream, path: stream is main.sys.stderr,
+    )
+
+    main.configure_logging(settings)
+
+    handlers = main.logging.getLogger().handlers
+    assert any(isinstance(handler, main.logging.FileHandler) for handler in handlers)
+    assert not any(
+        type(handler) is main.logging.StreamHandler for handler in handlers
+    )

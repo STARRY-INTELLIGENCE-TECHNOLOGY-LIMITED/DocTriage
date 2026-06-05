@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +15,7 @@ import urllib.error
 import urllib.request
 import uuid
 import webbrowser
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
@@ -155,7 +158,9 @@ class ResumeJournal:
                 return False, "source_changed"
 
             record_signature = record.get("settings_signature")
-            if record_signature != settings_signature:
+            if record_signature not in build_compatible_settings_signatures(
+                settings, settings_signature
+            ):
                 return False, "settings_changed"
 
         if not require_target_exists and record.get("status") in {"planned", "success"}:
@@ -234,7 +239,9 @@ class ResumeJournal:
         if not settings.CHANGE_DETECTION_ENABLED:
             return True, "previous_failure"
 
-        if record.get("fingerprint") == fingerprint and record.get("settings_signature") == settings_signature:
+        if record.get("fingerprint") == fingerprint and record.get(
+            "settings_signature"
+        ) in build_compatible_settings_signatures(settings, settings_signature):
             return True, "previous_failure"
         return False, "failure_stale"
 
@@ -283,16 +290,25 @@ class ResumeJournal:
             "reason": score.reason,
             "summary": summary,
             "fingerprint": fingerprint,
+            "source_size_bytes": fingerprint.get("size_bytes"),
+            "source_mtime_ns": fingerprint.get("mtime_ns"),
+            "source_ctime_ns": fingerprint.get("ctime_ns"),
+            "source_mtime": fingerprint_mtime_iso(fingerprint),
             "settings_signature": settings_signature,
         }
         self._append_jsonl(self.decision_log_path, record)
 
     def record_run_summary(self, stats: RunStats, settings: Settings | None = None) -> None:
         self.run_summary_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            **stats.as_dict(),
-            **self.failure_summary(settings),
-        }
+        payload = stats.as_dict()
+        if settings is not None:
+            payload.update(
+                {
+                    "copy_files": settings.COPY_FILES,
+                    "plan_only": not settings.COPY_FILES,
+                }
+            )
+        payload.update(self.failure_summary(settings))
         with self.run_summary_path.open("w", encoding="utf-8", errors="ignore") as handle:
             json.dump(payload, handle, ensure_ascii=False, indent=2)
 
@@ -473,6 +489,8 @@ class ProgressReporter:
 
         return {
             **self.stats.as_dict(),
+            "copy_files": self.settings.COPY_FILES,
+            "plan_only": not self.settings.COPY_FILES,
             "total": total,
             "completed": completed,
             "remaining": remaining,
@@ -517,14 +535,32 @@ def configure_logging(settings: Settings) -> None:
     settings.log_dir.mkdir(parents=True, exist_ok=True)
     logging.getLogger("pypdf").setLevel(logging.ERROR)
     handlers: list[logging.Handler] = [
-        logging.StreamHandler(),
         logging.FileHandler(settings.application_log_path, encoding="utf-8"),
     ]
+    if not any(
+        stream_points_to_path(stream, settings.application_log_path)
+        for stream in (sys.stdout, sys.stderr)
+    ):
+        handlers.insert(0, logging.StreamHandler())
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
         handlers=handlers,
         force=True,
+    )
+
+
+def stream_points_to_path(stream: Any, path: Path) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        stream_stat = os.fstat(stream.fileno())
+        path_stat = path.stat()
+    except (OSError, AttributeError, ValueError):
+        return False
+    return (
+        stream_stat.st_ino == path_stat.st_ino
+        and stream_stat.st_dev == path_stat.st_dev
     )
 
 
@@ -657,11 +693,51 @@ def build_local_summary(clean_markdown: str, max_chars: int) -> str:
     if max_chars <= 0:
         return ""
 
-    normalized = " ".join(clean_markdown.split())
+    normalized = normalize_summary_text(clean_markdown)
     if len(normalized) <= max_chars:
         return normalized
 
     return normalized[:max_chars].rstrip() + "..."
+
+
+def normalize_summary_text(value: str) -> str:
+    text = html.unescape(value)
+    text = re.sub(r"<!--\s*page\s+\d+\s*-->", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<!--.*?-->", " ", text)
+    text = re.sub(r"[\ue000-\uf8ff]", " ", text)
+    text = re.sub(r"(?i)\bpowered by\b.*?(?=\s|$)", " ", text)
+    text = re.sub(
+        r"(创作中心|朗读文章|通义语音合成|字号|笔记|分享|浏览|发表|更新|阅读全文|阅读助手)",
+        " ",
+        text,
+    )
+    lines = []
+    for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.strip(" #*-•·\t")
+        if not line:
+            continue
+        if len(line) <= 2:
+            continue
+        if re.fullmatch(r"(目录|文章|专题|视频&活动|New)", line, flags=re.IGNORECASE):
+            continue
+        if re.fullmatch(r"\d+(?:\.\d+){0,4}", line):
+            continue
+        lines.append(line)
+    text = " ".join(lines)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def summary_for_decision(
+    score: SemanticScore, fallback_summary: str, max_chars: int
+) -> str:
+    if max_chars <= 0:
+        return ""
+    summary = normalize_summary_text(score.summary)
+    selected = summary or fallback_summary
+    if len(selected) <= max_chars:
+        return selected
+    return selected[:max_chars].rstrip() + "..."
 
 
 def build_file_fingerprint(path: Path, settings: Settings) -> dict[str, Any]:
@@ -676,6 +752,14 @@ def build_file_fingerprint(path: Path, settings: Settings) -> dict[str, Any]:
     return fingerprint
 
 
+def fingerprint_mtime_iso(fingerprint: dict[str, Any]) -> str:
+    try:
+        mtime_ns = int(fingerprint.get("mtime_ns"))
+    except (TypeError, ValueError):
+        return ""
+    return datetime.fromtimestamp(mtime_ns / 1_000_000_000, timezone.utc).isoformat()
+
+
 def compute_file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -688,7 +772,33 @@ def compute_file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
 
 
 def build_settings_signature(settings: Settings) -> str:
-    signature_payload = {
+    signature_payload = build_settings_signature_payload(settings)
+    serialized = json.dumps(signature_payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def build_compatible_settings_signatures(
+    settings: Settings, current_signature: str
+) -> set[str]:
+    signatures = {current_signature}
+    base_payload = build_settings_signature_payload(settings)
+
+    legacy_summary_payload = dict(base_payload)
+    legacy_summary_payload["document_summary_max_chars"] = 240
+    signatures.add(settings_signature_from_payload(legacy_summary_payload))
+
+    without_output_language = dict(base_payload)
+    without_output_language.pop("output_language", None)
+    signatures.add(settings_signature_from_payload(without_output_language))
+
+    legacy_without_output_language = dict(without_output_language)
+    legacy_without_output_language["document_summary_max_chars"] = 240
+    signatures.add(settings_signature_from_payload(legacy_without_output_language))
+    return signatures
+
+
+def build_settings_signature_payload(settings: Settings) -> dict[str, Any]:
+    return {
         "pipeline_version": settings.PIPELINE_VERSION,
         "llm_endpoint": settings.LLM_ENDPOINT,
         "llm_model": settings.LLM_MODEL,
@@ -700,12 +810,16 @@ def build_settings_signature(settings: Settings) -> str:
         "pdf_metadata_enabled": settings.PDF_METADSample_ENABLED,
         "document_summary_enabled": settings.DOCUMENT_SUMMARY_ENABLED,
         "document_summary_max_chars": settings.DOCUMENT_SUMMARY_MAX_CHARS,
+        "output_language": settings.OUTPUT_LANGUAGE,
         "skip_manifest_analysis": settings.SKIP_MANIFEST_ANALYSIS,
         "category_map": settings.CATEGORY_MAP,
         "noise_patterns": settings.NOISE_PATTERNS,
         "supported_extensions": settings.SUPPORTED_EXTENSIONS,
     }
-    serialized = json.dumps(signature_payload, ensure_ascii=False, sort_keys=True)
+
+
+def settings_signature_from_payload(payload: dict[str, Any]) -> str:
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
@@ -1345,7 +1459,13 @@ def _drain_completed_scores(
                 manifest=context.manifest,
             )
             summary = (
-                context.summary if settings.DOCUMENT_SUMMARY_ENABLED else ""
+                summary_for_decision(
+                    score,
+                    context.summary,
+                    settings.DOCUMENT_SUMMARY_MAX_CHARS,
+                )
+                if settings.DOCUMENT_SUMMARY_ENABLED
+                else ""
             )
 
             if not settings.COPY_FILES:
@@ -1549,6 +1669,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-seconds", type=int, help="LLM request timeout.")
     parser.add_argument("--retry-count", type=int, help="LLM retry count per request.")
     parser.add_argument("--num-ctx", type=int, help="Ollama context window option.")
+    parser.add_argument(
+        "--output-language",
+        choices=["auto", "zh-CN", "en", "ja", "ko", "de", "fr", "es"],
+        help="Natural-language output language for summaries/reasons. 'auto' infers from document body.",
+    )
     parser.add_argument("--manifest-max-files", type=int, help="Maximum file rows sent to manifest analysis per directory.")
     parser.add_argument("--pdf-fallback-max-pages", type=int, help="Maximum PDF pages to extract with the local text fallback.")
     parser.add_argument("--progress-interval", type=float, help="Progress log/write interval in seconds.")
@@ -1666,6 +1791,8 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["LLM_RETRY_COUNT"] = args.retry_count
     if args.num_ctx is not None:
         overrides["LLM_NUM_CTX"] = args.num_ctx
+    if args.output_language is not None:
+        overrides["OUTPUT_LANGUAGE"] = args.output_language
     if args.manifest_max_files is not None:
         overrides["MANIFEST_MAX_FILES"] = args.manifest_max_files
     if args.pdf_fallback_max_pages is not None:

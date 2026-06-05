@@ -45,6 +45,9 @@ from relationship_strategies.common import (
 VERSION_PATTERN = re.compile(
     r"(?i)(?:^|[\s._-])(v?\d+(?:\.\d+){0,3}|part\s*\d+|第\s*\d+\s*[篇章节]|上篇|下篇|续篇|完结篇|总结篇)(?:$|[\s._-])"
 )
+PERIODIC_REPORT_PATTERN = re.compile(
+    r"(?i)(月报|周报|日报|半周报|年报|年终总结|年度总结|\bokr\b|述职|周总结|月总结)"
+)
 TERMINAL_DECISION_STATUSES = {
     "planned",
     "success",
@@ -148,7 +151,12 @@ def mine_relationships(settings: Settings | None = None) -> None:
 
     candidates = build_candidate_relations(records, embeddings, current_settings)
     write_relations(candidates, records, current_settings.relationship_relations_path)
-    write_clusters(candidates, records, current_settings.relationship_clusters_path)
+    write_clusters(
+        candidates,
+        records,
+        current_settings.relationship_clusters_path,
+        cluster_min_score=current_settings.RELATIONSHIP_CLUSTER_MIN_SCORE,
+    )
 
 
 def validate_relationship_settings(settings: Settings) -> None:
@@ -693,6 +701,8 @@ def write_clusters(
     candidates: list[CandidateRelation],
     records: list[RelationshipRecord],
     path: Path,
+    *,
+    cluster_min_score: float = 0.88,
 ) -> None:
     parent = list(range(len(records)))
 
@@ -709,6 +719,13 @@ def write_clusters(
             parent[right_root] = left_root
 
     for candidate in candidates:
+        if not is_cluster_relation(
+            candidate,
+            records[candidate.left],
+            records[candidate.right],
+            cluster_min_score,
+        ):
+            continue
         union(candidate.left, candidate.right)
 
     grouped: dict[int, list[int]] = defaultdict(list)
@@ -731,7 +748,59 @@ def write_clusters(
     clusters.sort(key=lambda item: item["size"], reverse=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", errors="ignore") as handle:
-        json.dump({"clusters": clusters}, handle, ensure_ascii=False, indent=2)
+        json.dump(
+            {"cluster_min_score": cluster_min_score, "clusters": clusters},
+            handle,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
+def is_cluster_relation(
+    candidate: CandidateRelation,
+    left_record: RelationshipRecord,
+    right_record: RelationshipRecord,
+    cluster_min_score: float,
+) -> bool:
+    if is_cross_directory_periodic_relation(left_record, right_record, candidate):
+        return False
+    if candidate.citation_count > 0:
+        return True
+    if candidate.embedding_similarity >= 0.78:
+        return True
+    if candidate.filename_similarity >= 0.9 and candidate.relation_score >= 0.82:
+        return True
+    if candidate.relation_score < cluster_min_score:
+        return False
+    return candidate.filename_similarity >= 0.78 or candidate.embedding_similarity >= 0.72
+
+
+def is_cross_directory_periodic_relation(
+    left_record: RelationshipRecord,
+    right_record: RelationshipRecord,
+    candidate: CandidateRelation,
+) -> bool:
+    if candidate.embedding_similarity >= 0.78:
+        return False
+    if candidate.path_proximity > 0:
+        return False
+    left_top = top_level_path(left_record.relative_path)
+    right_top = top_level_path(right_record.relative_path)
+    if not left_top or not right_top or left_top == right_top:
+        return False
+    return is_periodic_report(left_record) and is_periodic_report(right_record)
+
+
+def top_level_path(relative_path: str) -> str:
+    parts = Path(relative_path).parts
+    return parts[0] if len(parts) > 1 else ""
+
+
+def is_periodic_report(record: RelationshipRecord) -> bool:
+    return bool(
+        PERIODIC_REPORT_PATTERN.search(record.relative_path)
+        or PERIODIC_REPORT_PATTERN.search(record.normalized_name)
+    )
 
 
 def redacted_record(record: RelationshipRecord) -> dict[str, Any]:
@@ -800,6 +869,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--embedding-endpoint")
     parser.add_argument("--embedding-model")
     parser.add_argument("--relationship-min-score", type=float)
+    parser.add_argument("--relationship-cluster-min-score", type=float)
     parser.add_argument("--relationship-max-records", type=int)
     parser.add_argument("--relationship-workers", type=int)
     parser.add_argument("--embedding-text-max-chars", type=int)
@@ -825,6 +895,8 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["EMBEDDING_MODEL"] = args.embedding_model
     if args.relationship_min_score is not None:
         overrides["RELATIONSHIP_MIN_SCORE"] = args.relationship_min_score
+    if args.relationship_cluster_min_score is not None:
+        overrides["RELATIONSHIP_CLUSTER_MIN_SCORE"] = args.relationship_cluster_min_score
     if args.relationship_max_records is not None:
         overrides["RELATIONSHIP_MAX_RECORDS"] = args.relationship_max_records
     if args.relationship_workers is not None:

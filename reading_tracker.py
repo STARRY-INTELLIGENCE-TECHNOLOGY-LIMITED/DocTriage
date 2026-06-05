@@ -118,7 +118,7 @@ def build_reading_rows(
                 "relative_path": relative_path,
                 "display_name": Path(relative_path).name,
                 "source_path": str(decision.get("source_path") or ""),
-                "target_path": str(decision.get("target_path") or ""),
+                "target_path": materialized_target_path(decision),
                 "status": effective_status,
                 "marked_status": str(event.get("status") if event else "unread"),
                 "updated_at": str(event.get("updated_at") if event else ""),
@@ -131,10 +131,32 @@ def build_reading_rows(
                     decision.get("public_writing_suitability"), 0
                 ),
                 "summary": str(decision.get("summary") or ""),
+                "reason": str(decision.get("reason") or ""),
+                "knowledge_density": coerce_int(decision.get("knowledge_density"), 0),
+                "implementation_specificity": coerce_int(
+                    decision.get("implementation_specificity"), 0
+                ),
+                "logical_structure": coerce_int(decision.get("logical_structure"), 0),
+                "evidence_richness": coerce_int(decision.get("evidence_richness"), 0),
+                "actionability": coerce_int(decision.get("actionability"), 0),
+                "strategic_value": coerce_int(decision.get("strategic_value"), 0),
+                "freshness": coerce_int(decision.get("freshness"), 0),
+                "uniqueness": coerce_int(decision.get("uniqueness"), 0),
                 "note": str(event.get("note") if event else ""),
+                "fingerprint": decision.get("fingerprint"),
+                "source_size_bytes": decision.get("source_size_bytes"),
+                "source_mtime_ns": decision.get("source_mtime_ns"),
+                "source_ctime_ns": decision.get("source_ctime_ns"),
+                "source_mtime": str(decision.get("source_mtime") or ""),
             }
         )
     return rows
+
+
+def materialized_target_path(decision: dict[str, Any]) -> str:
+    if str(decision.get("status") or "") == "planned":
+        return ""
+    return str(decision.get("target_path") or "")
 
 
 def infer_effective_status(

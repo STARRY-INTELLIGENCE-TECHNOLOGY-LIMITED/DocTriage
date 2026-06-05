@@ -1,7 +1,14 @@
 from pathlib import Path
 
 from config import Settings
-from main import ResumeJournal, build_file_fingerprint, build_settings_signature
+from main import (
+    ResumeJournal,
+    build_compatible_settings_signatures,
+    build_file_fingerprint,
+    build_settings_signature,
+    build_settings_signature_payload,
+    settings_signature_from_payload,
+)
 
 
 def make_settings(source_dir: Path, output_root: Path, **overrides: object) -> Settings:
@@ -112,6 +119,54 @@ def test_resume_reprocesses_when_settings_signature_changes(tmp_path: Path) -> N
 
     assert should_skip is False
     assert reason == "settings_changed"
+
+
+def test_resume_accepts_legacy_summary_signature_without_reprocessing(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    file_path = source_dir / "doc.md"
+    file_path.write_text("hello", encoding="utf-8")
+
+    settings = make_settings(
+        source_dir,
+        output_root,
+        DOCUMENT_SUMMARY_ENABLED=True,
+        DOCUMENT_SUMMARY_MAX_CHARS=600,
+        OUTPUT_LANGUAGE="auto",
+    )
+    assert settings.PIPELINE_VERSION == "0.1.0"
+    legacy_payload = build_settings_signature_payload(settings)
+    legacy_payload["document_summary_max_chars"] = 240
+    legacy_payload.pop("output_language", None)
+    legacy_signature = settings_signature_from_payload(legacy_payload)
+    current_signature = build_settings_signature(settings)
+    assert legacy_signature in build_compatible_settings_signatures(
+        settings, current_signature
+    )
+
+    journal = ResumeJournal(settings.processed_log_path, settings.failure_log_path)
+    fingerprint = build_file_fingerprint(file_path, settings)
+    journal.record_processed(
+        file_path.resolve(),
+        (output_root / "HQ" / "doc.md").resolve(),
+        "planned",
+        fingerprint=fingerprint,
+        settings_signature=legacy_signature,
+    )
+
+    should_skip, reason = journal.should_skip(
+        file_path.resolve(),
+        require_target_exists=False,
+        fingerprint=fingerprint,
+        settings_signature=current_signature,
+        settings=settings,
+    )
+
+    assert should_skip is True
+    assert reason == "processed"
 
 
 def test_legacy_resume_can_disable_change_detection(tmp_path: Path) -> None:

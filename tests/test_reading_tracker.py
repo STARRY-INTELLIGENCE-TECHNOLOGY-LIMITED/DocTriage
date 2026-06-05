@@ -29,6 +29,16 @@ def test_reading_tracker_marks_read_without_moving_files(tmp_path: Path) -> None
         "document_kind": "ArchitectureDecision",
         "topic_tags": ["DistributedSystems"],
         "summary": "Architecture summary",
+        "reason": "Dense architectural reasoning",
+        "knowledge_density": 86,
+        "implementation_specificity": 78,
+        "logical_structure": 82,
+        "evidence_richness": 74,
+        "actionability": 80,
+        "strategic_value": 76,
+        "freshness": 68,
+        "uniqueness": 71,
+        "target_path": str(output_root / "HQ" / "Architecture" / "architecture.md"),
         "fingerprint": {"size_bytes": 14, "mtime_ns": 1},
     }
     (state_dir / "decisions.jsonl").write_text(
@@ -55,7 +65,17 @@ def test_reading_tracker_marks_read_without_moving_files(tmp_path: Path) -> None
     assert rows[0]["status"] == "read"
     assert rows[0]["quality"] == 91
     assert rows[0]["display_name"] == "architecture.md"
+    assert rows[0]["target_path"] == ""
     assert rows[0]["summary"] == "Architecture summary"
+    assert rows[0]["reason"] == "Dense architectural reasoning"
+    assert rows[0]["knowledge_density"] == 86
+    assert rows[0]["implementation_specificity"] == 78
+    assert rows[0]["logical_structure"] == 82
+    assert rows[0]["evidence_richness"] == 74
+    assert rows[0]["actionability"] == 80
+    assert rows[0]["strategic_value"] == 76
+    assert rows[0]["freshness"] == 68
+    assert rows[0]["uniqueness"] == 71
     assert rows[0]["topic_tags"] == ["DistributedSystems"]
 
 

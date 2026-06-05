@@ -47,6 +47,7 @@ class SemanticScore(BaseModel):
     category: CategoryName = "LowQuality"
     document_kind: str = "Unknown"
     topic_tags: list[str] = Field(default_factory=list)
+    summary: str = ""
     knowledge_density: int = Field(default=0, ge=0, le=100)
     implementation_specificity: int = Field(default=0, ge=0, le=100)
     logical_structure: int = Field(default=0, ge=0, le=100)
@@ -68,6 +69,11 @@ class SemanticScore(BaseModel):
     @classmethod
     def _validate_topic_tags(cls, value: Any) -> list[str]:
         return _normalize_topic_tags(value)
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _validate_summary(cls, value: Any) -> str:
+        return _normalize_summary(value)
 
 
 class LLMClient:
@@ -327,8 +333,13 @@ class SemanticScoring:
         clean_markdown: str,
         profile: DocumentProfile,
         manifest: ManifestResult,
+        output_language: str | None = None,
     ) -> SemanticScore:
         path = Path(file_path).expanduser().resolve()
+        language_policy = build_output_language_policy(
+            output_language or self.llm_client.settings.OUTPUT_LANGUAGE,
+            clean_markdown,
+        )
         prompt_body = json.dumps(
             {
                 "document_name": path.name,
@@ -343,6 +354,7 @@ class SemanticScoring:
                 "manifest_hints": manifest.model_dump(),
                 "meta_features": profile.to_llm_payload(),
                 "local_signals": self._infer_local_signals(path.name, clean_markdown),
+                "output_language": language_policy,
                 "samples": self._build_samples(clean_markdown),
                 "classification_schema": {
                     "document_kind_options": [
@@ -394,11 +406,21 @@ class SemanticScoring:
                     "Sensitivity Risk",
                     "Public Writing Suitability",
                 ],
+                "summary_requirements": [
+                    "Write summary and reason in output_language.resolved_language.",
+                    "Use 3-6 compact sentences; keep a comparable length to 180-450 Chinese characters.",
+                    "Keep category, document_kind, and topic_tags as stable schema/canonical values rather than translating enum names.",
+                    "Capture the domain/problem, concrete approach or mechanism, key evidence/result, and reusable takeaway.",
+                    "Do not copy navigation chrome, page markers, author/date/view-count text, copyright boilerplate, or table-of-contents fragments.",
+                    "Avoid generic praise such as 'this document is valuable'; summarize the actual knowledge.",
+                    "When public reuse is risky, abstract company/customer/system names while keeping the transferable pattern.",
+                ],
                 "response_schema": {
                     "quality": "0-100 integer",
                     "category": "Architecture|Design|Implementation|Operations|CaseStudy|Research|Business|Thinking|Series|LowQuality",
                     "document_kind": "one of classification_schema.document_kind_options",
                     "topic_tags": "0-8 short canonical tags; prefer topic_tag_examples where applicable",
+                    "summary": "high-signal 3-6 sentence knowledge summary following summary_requirements",
                     "knowledge_density": "0-100 integer",
                     "implementation_specificity": "0-100 integer",
                     "logical_structure": "0-100 integer",
@@ -474,6 +496,7 @@ class SemanticScoring:
                     payload.get("document_kind", "Unknown")
                 ),
                 "topic_tags": _normalize_topic_tags(payload.get("topic_tags")),
+                "summary": _normalize_summary(payload.get("summary")),
                 "knowledge_density": _coerce_score(payload.get("knowledge_density", 0)),
                 "implementation_specificity": _coerce_score(
                     payload.get("implementation_specificity", 0)
@@ -493,6 +516,74 @@ class SemanticScoring:
             return SemanticScore.model_validate(normalized)
 
 
+LANGUAGE_LABELS = {
+    "zh-CN": "Simplified Chinese",
+    "en": "English",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "de": "German",
+    "fr": "French",
+    "es": "Spanish",
+}
+
+
+def build_output_language_policy(
+    requested_language: str | None, clean_markdown: str
+) -> dict[str, str]:
+    requested = str(requested_language or "auto").strip() or "auto"
+    detected = infer_primary_language(clean_markdown)
+    resolved = detected if requested == "auto" else requested
+    return {
+        "requested": requested,
+        "detected_primary_language": detected,
+        "resolved_language": resolved,
+        "resolved_language_name": LANGUAGE_LABELS.get(resolved, resolved),
+        "instruction": (
+            "Infer from the document body and use the detected primary language."
+            if requested == "auto"
+            else f"Use {LANGUAGE_LABELS.get(resolved, resolved)} regardless of input language."
+        ),
+    }
+
+
+def infer_primary_language(text: str) -> str:
+    sample = _strip_invalid_surrogates(text[:8000])
+    counts = {
+        "zh-CN": len(re.findall(r"[\u4e00-\u9fff]", sample)),
+        "ja": len(re.findall(r"[\u3040-\u30ff]", sample)),
+        "ko": len(re.findall(r"[\uac00-\ud7af]", sample)),
+    }
+    latin_words = re.findall(r"[A-Za-zÀ-ÿ]+", sample)
+    latin_count = sum(len(word) for word in latin_words)
+    total_signal = latin_count + sum(counts.values())
+    if total_signal == 0:
+        return "en"
+    if counts["ja"] >= 20 and counts["ja"] >= counts["zh-CN"] * 0.15:
+        return "ja"
+    if counts["ko"] >= 20:
+        return "ko"
+    if counts["zh-CN"] >= 20 and counts["zh-CN"] >= latin_count * 0.25:
+        return "zh-CN"
+    if latin_count > 0:
+        return infer_latin_language(" ".join(latin_words[:1200]))
+    return max(counts, key=counts.get)
+
+
+def infer_latin_language(text: str) -> str:
+    lowered = f" {text.lower()} "
+    hints = {
+        "de": (" der ", " die ", " und ", " nicht ", " mit ", " für ", " das ", " ist "),
+        "fr": (" le ", " la ", " les ", " des ", " une ", " pour ", " avec ", " dans "),
+        "es": (" el ", " la ", " los ", " una ", " para ", " con ", " que ", " del "),
+    }
+    scores = {
+        language: sum(lowered.count(token) for token in tokens)
+        for language, tokens in hints.items()
+    }
+    best_language = max(scores, key=scores.get)
+    return best_language if scores[best_language] >= 4 else "en"
+
+
 def _coerce_string_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -501,6 +592,20 @@ def _coerce_string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value if item is not None]
     return []
+
+
+def _normalize_summary(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        text = " ".join(str(item) for item in value if item is not None)
+    else:
+        text = str(value)
+    text = _strip_invalid_surrogates(text)
+    text = re.sub(r"<!--.*?-->", " ", text)
+    text = re.sub(r"[\ue000-\uf8ff]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:800].rstrip()
 
 
 def _coerce_score(value: Any) -> int:

@@ -48,6 +48,18 @@ DEFAULT_SUPPORTED_EXTENSIONS = (
 )
 
 
+SUPPORTED_OUTPUT_LANGUAGES = {
+    "auto",
+    "zh-CN",
+    "en",
+    "ja",
+    "ko",
+    "de",
+    "fr",
+    "es",
+}
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -69,7 +81,8 @@ class Settings(BaseSettings):
     MANIFEST_MAX_FILES: int = Field(default=250, ge=20, le=5000)
     SKIP_MANIFEST_ANALYSIS: bool = Field(default=True)
     DOCUMENT_SUMMARY_ENABLED: bool = Field(default=False)
-    DOCUMENT_SUMMARY_MAX_CHARS: int = Field(default=240, ge=40, le=2000)
+    DOCUMENT_SUMMARY_MAX_CHARS: int = Field(default=600, ge=40, le=2000)
+    OUTPUT_LANGUAGE: str = Field(default="auto")
     QUALITY_THRESHOLD: int = Field(default=75, ge=0, le=100)
     MAX_FILES: int | None = Field(default=None, ge=1)
     MAX_FILE_SIZE_MB: float | None = Field(default=None, gt=0)
@@ -84,7 +97,7 @@ class Settings(BaseSettings):
     CHANGE_DETECTION_USE_CONTENT_HASH: bool = Field(default=False)
     FORCE_REPROCESS: bool = Field(default=False)
     RETRY_FAILED: bool = Field(default=True)
-    PIPELINE_VERSION: str = Field(default="0.2.0")
+    PIPELINE_VERSION: str = Field(default="0.1.0")
     PROGRESS_ENABLED: bool = Field(default=True)
     PROGRESS_LOG_INTERVAL_SECONDS: float = Field(default=30.0, ge=1.0, le=3600.0)
     RELATIONSHIP_MINING_ENABLED: bool = Field(default=False)
@@ -92,6 +105,7 @@ class Settings(BaseSettings):
     RELATIONSHIP_USE_TEXT_CITATIONS: bool = Field(default=False)
     RELATIONSHIP_WORKERS: int | None = Field(default=None, ge=1, le=64)
     RELATIONSHIP_MIN_SCORE: float = Field(default=0.72, ge=0.0, le=1.0)
+    RELATIONSHIP_CLUSTER_MIN_SCORE: float = Field(default=0.88, ge=0.0, le=1.0)
     RELATIONSHIP_MAX_RECORDS: int | None = Field(default=None, ge=1)
     RELATIONSHIP_MAX_CANDIDATES_PER_FILE: int = Field(default=12, ge=1, le=200)
     RELATIONSHIP_FILENAME_WINDOW: int = Field(default=8, ge=1, le=200)
@@ -119,6 +133,37 @@ class Settings(BaseSettings):
     @classmethod
     def _normalize_paths(cls, value: str | Path) -> Path:
         return Path(value).expanduser().resolve()
+
+    @field_validator("OUTPUT_LANGUAGE", mode="before")
+    @classmethod
+    def _normalize_output_language(cls, value: str | None) -> str:
+        text = str(value or "auto").strip()
+        aliases = {
+            "": "auto",
+            "automatic": "auto",
+            "detect": "auto",
+            "zh": "zh-CN",
+            "zh_cn": "zh-CN",
+            "zh-cn": "zh-CN",
+            "cn": "zh-CN",
+            "chinese": "zh-CN",
+            "zh-hans": "zh-CN",
+            "en-us": "en",
+            "en_us": "en",
+            "english": "en",
+            "jp": "ja",
+            "japanese": "ja",
+            "kr": "ko",
+            "korean": "ko",
+            "german": "de",
+            "french": "fr",
+            "spanish": "es",
+        }
+        normalized = aliases.get(text.lower(), text)
+        if normalized not in SUPPORTED_OUTPUT_LANGUAGES:
+            supported = ", ".join(sorted(SUPPORTED_OUTPUT_LANGUAGES))
+            raise ValueError(f"Unsupported OUTPUT_LANGUAGE: {value}. Use one of: {supported}")
+        return normalized
 
     @property
     def archive_dir(self) -> Path:
