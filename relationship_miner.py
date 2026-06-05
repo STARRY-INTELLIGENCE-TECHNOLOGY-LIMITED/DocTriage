@@ -816,7 +816,7 @@ def redacted_record(record: RelationshipRecord) -> dict[str, Any]:
 def normalize_name(value: str) -> str:
     value = value.lower()
     value = re.sub(r"\[[^\]]+\]|\([^)]*\)|【[^】]+】", " ", value)
-    value = re.sub(r"(?i)\b(sample|ppt|pdf|docx|final|copy|副本)\b", " ", value)
+    value = re.sub(r"(?i)\b(ppt|pdf|docx|final|copy|副本)\b", " ", value)
     value = re.sub(r"[_\-—–:：|]+", " ", value)
     value = re.sub(r"\s+", " ", value)
     return value.strip()

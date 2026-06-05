@@ -9,7 +9,7 @@ DocTriage 会扫描源目录、提取正文、调用本地 LLM 给每个文档�
 源目录只读。所有状态、日志、关系结果以及可选的复制产物都会写入 `OUTPUT_ROOT`。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/triage.jpg" alt="DocTriage 总览" width="900">
+  <img src="https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/triage.jpg?raw=true" alt="DocTriage 总览" width="900">
 </p>
 
 DocTriage 围绕一个实用闭环设计：先进行本地分析，再在阅读台复核和标记文档，最后在需要关联学习或下游导出时生成关系簇。
@@ -40,19 +40,19 @@ DocTriage 围绕一个实用闭环设计：先进行本地分析，再在阅读�
 
 **分析执行**
 
-![分析执行](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/analysis_chi.png)
+![分析执行](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/analysis_chi.png?raw=true)
 
 在同一界面配置源目录、输出目录、本地模型、plan-only、续跑策略、进度、日志和失败状态。
 
 **阅读台**
 
-![阅读台](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/reading_chi.png)
+![阅读台](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/reading_chi.png?raw=true)
 
 既可以复核已评分文档，也可以按源目录顺序浏览全部文件，并直接打开、定位、标记、筛选和导出当前工作集。
 
 **关系图谱**
 
-![关系图谱](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/graph_chi.png)
+![关系图谱](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/graph_chi.png?raw=true)
 
 关系簇用于近重复识别、系列发现、关联学习、知识图谱导出和 bundle 生成。
 

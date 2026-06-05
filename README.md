@@ -9,7 +9,7 @@ DocTriage scans a source folder, extracts text, asks a local LLM to score and ex
 Your source folder stays read-only. DocTriage writes state, logs, relationship results, and optional routed copies under `OUTPUT_ROOT`.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/triage.jpg" alt="DocTriage overview" width="900">
+  <img src="https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/triage.jpg?raw=true" alt="DocTriage overview" width="900">
 </p>
 
 DocTriage is built around a practical loop: run local analysis, review and mark documents in the reading console, then use relationship clusters when you need connected learning or downstream exports.
@@ -40,19 +40,19 @@ DocTriage is built around a practical loop: run local analysis, review and mark 
 
 **Analysis Execution**
 
-![Analysis execution](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/analysis_eng.png)
+![Analysis execution](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/analysis_eng.png?raw=true)
 
 Configure source/output folders, local model settings, plan-only runs, resume behavior, progress, logs, and failure status from one place.
 
 **Reading Console**
 
-![Reading console](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/reading_eng.png)
+![Reading console](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/reading_eng.png?raw=true)
 
 Review scored documents or browse all source files in folder order, then open, reveal, mark, filter, and export the current working set.
 
 **Relationship Graph**
 
-![Relationship graph](https://raw.githubusercontent.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/refs/heads/main/sample_pictures/graph_eng.png)
+![Relationship graph](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/graph_eng.png?raw=true)
 
 Mine relationship clusters for duplicate detection, series discovery, connected learning, knowledge graph export, and bundle generation.
 

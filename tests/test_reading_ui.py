@@ -1600,7 +1600,7 @@ def test_read_text_tail_decodes_legacy_gbk_log_lines(tmp_path: Path) -> None:
     log_path = tmp_path / "doctriage.log"
     gbk_line = (
         "2026-06-05 16:35:54,609 [INFO] doctriage - "
-        "Skipping resumed item already materialized: E:\\Lin\\示例资料\\业务中台 - Sample.pdf [processed]\n"
+        "Skipping resumed item already materialized: E:\\Docs\\示例资料\\业务中台 - Sample.pdf [processed]\n"
     )
     utf8_line = (
         "2026-06-05 16:36:19,944 [INFO] doctriage - "
