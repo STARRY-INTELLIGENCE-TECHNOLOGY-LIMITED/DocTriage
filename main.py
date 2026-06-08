@@ -17,7 +17,6 @@ import uuid
 import webbrowser
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from urllib.parse import urlparse
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
 from pathlib import Path
 from typing import Any
@@ -28,8 +27,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from cleaner import DocumentWashError, DocumentWasher
 from config import Settings, get_settings
-from meta_profiler import MetadataProfiler
+from meta_profiler import DocumentProfile, MetadataProfiler
 from ranker_engine import LLMClient, ManifestAnalysis, ManifestResult, SemanticScore, SemanticScoring
+from runtime_encoding import configure_utf8_runtime, decode_process_output
 
 LOGGER = logging.getLogger("doctriage")
 DEFAULT_UI_HOST = "127.0.0.1"
@@ -47,6 +47,25 @@ class PendingScoreContext:
     previous_target_path: Path | None = None
     summary: str = ""
     retry_of_failed: bool = False
+
+
+@dataclass(slots=True)
+class PrepareDocumentContext:
+    source_path: Path
+    resolved_source_path: Path
+    relative_path: Path
+    manifest: ManifestResult
+    fingerprint: dict[str, Any]
+    settings_signature: str
+    reprocess_reason: str
+    previous_target_path: Path | None
+
+
+@dataclass(slots=True)
+class PreparedDocument:
+    clean_markdown: str
+    profile: DocumentProfile
+    summary: str
 
 
 @dataclass(slots=True)
@@ -655,6 +674,59 @@ def collect_retry_failed_path(
         retry_failed_paths.append(source_path.resolve())
 
 
+def prepare_document_for_scoring(
+    source_path: Path, settings: Settings
+) -> PreparedDocument:
+    washer = DocumentWasher(settings=settings)
+    profiler = MetadataProfiler(settings=settings)
+    washed = washer.wash(source_path)
+    profile = profiler.profile_document(source_path, washed.clean_markdown)
+    summary = (
+        build_local_summary(
+            washed.clean_markdown,
+            max_chars=settings.DOCUMENT_SUMMARY_MAX_CHARS,
+        )
+        if settings.DOCUMENT_SUMMARY_ENABLED
+        else ""
+    )
+    return PreparedDocument(
+        clean_markdown=washed.clean_markdown,
+        profile=profile,
+        summary=summary,
+    )
+
+
+def handle_prepare_failure(
+    *,
+    context: PrepareDocumentContext,
+    exc: BaseException,
+    journal: ResumeJournal,
+    stats: RunStats,
+    progress: ProgressReporter,
+    retry_failed_paths: list[Path] | None,
+) -> None:
+    if isinstance(exc, DocumentWashError):
+        LOGGER.warning("Document washing failed for %s: %s", context.source_path, exc)
+        stage = "wash"
+    elif isinstance(exc, OSError):
+        LOGGER.warning("File access failed for %s: %s", context.source_path, exc)
+        stage = "read"
+    else:
+        LOGGER.exception("Unexpected preparation failure for %s", context.source_path)
+        stage = "prepare"
+
+    stats.record_failure_attempt()
+    journal.record_failure(
+        context.resolved_source_path,
+        stage,
+        str(exc),
+        fingerprint=context.fingerprint,
+        settings_signature=context.settings_signature,
+    )
+    collect_retry_failed_path(retry_failed_paths, context.source_path)
+    progress.report()
+
+
 def find_existing_target(settings: Settings, relative_path: Path) -> Path | None:
     all_candidate_paths = [
         settings.archive_dir / relative_path,
@@ -835,14 +907,6 @@ def validate_safe_paths(settings: Settings) -> None:
             "OUTPUT_ROOT must not be inside SOURCE_DIR; this would mix generated files into the source scan."
         )
 
-    if settings.REQUIRE_LOCAL_LLM:
-        parsed = urlparse(settings.LLM_ENDPOINT)
-        if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError(
-                f"REQUIRE_LOCAL_LLM is enabled but LLM endpoint is not local: {settings.LLM_ENDPOINT}"
-            )
-
-
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
         path.relative_to(parent)
@@ -945,13 +1009,14 @@ def is_process_alive(pid: int) -> bool:
             result = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                 capture_output=True,
-                text=True,
+                text=False,
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 timeout=5,
             )
         except (OSError, subprocess.SubprocessError):
             return True
-        return str(pid) in result.stdout
+        output = decode_process_output(result.stdout)
+        return str(pid) in output
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -987,9 +1052,33 @@ def _run_pipeline_locked(current_settings: Settings) -> None:
 
     washer = DocumentWasher(settings=current_settings)
     profiler = MetadataProfiler(settings=current_settings)
-    llm_client = LLMClient(settings=current_settings)
-    manifest_analysis = ManifestAnalysis(llm_client=llm_client)
-    semantic_scoring = SemanticScoring(llm_client=llm_client)
+    with LLMClient(settings=current_settings) as llm_client:
+        manifest_analysis = ManifestAnalysis(llm_client=llm_client)
+        semantic_scoring = SemanticScoring(llm_client=llm_client)
+
+        _run_pipeline_with_llm(
+            current_settings=current_settings,
+            journal=journal,
+            stats=stats,
+            settings_signature=settings_signature,
+            washer=washer,
+            profiler=profiler,
+            manifest_analysis=manifest_analysis,
+            semantic_scoring=semantic_scoring,
+        )
+
+
+def _run_pipeline_with_llm(
+    *,
+    current_settings: Settings,
+    journal: ResumeJournal,
+    stats: RunStats,
+    settings_signature: str,
+    washer: DocumentWasher,
+    profiler: MetadataProfiler,
+    manifest_analysis: ManifestAnalysis,
+    semantic_scoring: SemanticScoring,
+) -> None:
 
     full_directory_map, skipped_too_large, scan_stat_failures = scan_candidate_files(
         current_settings
@@ -1024,13 +1113,16 @@ def _run_pipeline_locked(current_settings: Settings) -> None:
     with ThreadPoolExecutor(
         max_workers=current_settings.CONCURRENCY_LIMIT,
         thread_name_prefix="doctriage-llm",
-    ) as executor:
+    ) as score_executor, ThreadPoolExecutor(
+        max_workers=current_settings.CONCURRENCY_LIMIT,
+        thread_name_prefix="doctriage-prepare",
+    ) as prepare_executor:
         if current_settings.SKIP_MANIFEST_ANALYSIS:
             LOGGER.info("Skipping manifest analysis by configuration")
             manifests = {directory: ManifestResult() for directory in directory_map}
         else:
             manifest_futures = {
-                executor.submit(
+                score_executor.submit(
                     manifest_analysis.analyze_directory,
                     directory,
                     files,
@@ -1051,7 +1143,67 @@ def _run_pipeline_locked(current_settings: Settings) -> None:
                     manifests[directory] = ManifestResult()
 
         pending_scores: dict[Future[SemanticScore], PendingScoreContext] = {}
+        pending_prepares: dict[Future[PreparedDocument], PrepareDocumentContext] = {}
         max_pending_scores = max(1, current_settings.CONCURRENCY_LIMIT * 2)
+        max_pending_prepares = max(1, current_settings.CONCURRENCY_LIMIT * 2)
+        selected_for_processing = 0
+
+        def drain_prepared_documents(*, block: bool) -> None:
+            if not pending_prepares:
+                return
+
+            done, _ = wait(
+                pending_prepares.keys(),
+                timeout=None if block else 0.0,
+                return_when=FIRST_COMPLETED,
+            )
+            if not done and block:
+                return
+
+            for future in done:
+                context = pending_prepares.pop(future)
+                try:
+                    prepared = future.result()
+                except Exception as exc:
+                    handle_prepare_failure(
+                        context=context,
+                        exc=exc,
+                        journal=journal,
+                        stats=stats,
+                        progress=progress,
+                        retry_failed_paths=retry_failed_paths,
+                    )
+                    continue
+
+                score_future = score_executor.submit(
+                    semantic_scoring.score_document,
+                    context.source_path,
+                    prepared.clean_markdown,
+                    prepared.profile,
+                    context.manifest,
+                )
+                pending_scores[score_future] = PendingScoreContext(
+                    source_path=context.resolved_source_path,
+                    relative_path=context.relative_path,
+                    manifest=context.manifest,
+                    fingerprint=context.fingerprint,
+                    settings_signature=context.settings_signature,
+                    reprocess_reason=context.reprocess_reason,
+                    previous_target_path=context.previous_target_path,
+                    summary=prepared.summary,
+                )
+                stats.submitted += 1
+
+                if len(pending_scores) >= max_pending_scores:
+                    _drain_completed_scores(
+                        pending_scores=pending_scores,
+                        journal=journal,
+                        settings=current_settings,
+                        stats=stats,
+                        progress=progress,
+                        retry_failed_paths=retry_failed_paths,
+                        block=True,
+                    )
 
         for directory, files in directory_map.items():
             manifest = manifests.get(directory, ManifestResult())
@@ -1139,79 +1291,24 @@ def _run_pipeline_locked(current_settings: Settings) -> None:
                 if not retrying_prior_failure:
                     progress.start_rate_window()
 
-                try:
-                    washed = washer.wash(source_path)
-                    profile = profiler.profile_document(
-                        source_path, washed.clean_markdown
-                    )
-                    summary = (
-                        build_local_summary(
-                            washed.clean_markdown,
-                            max_chars=current_settings.DOCUMENT_SUMMARY_MAX_CHARS,
-                        )
-                        if current_settings.DOCUMENT_SUMMARY_ENABLED
-                        else ""
-                    )
-                except DocumentWashError as exc:
-                    LOGGER.warning("Document washing failed for %s: %s", source_path, exc)
-                    stats.record_failure_attempt()
-                    journal.record_failure(
-                        source_path.resolve(),
-                        "wash",
-                        str(exc),
-                        fingerprint=fingerprint,
-                        settings_signature=settings_signature,
-                    )
-                    collect_retry_failed_path(retry_failed_paths, source_path)
-                    progress.report()
-                    continue
-                except OSError as exc:
-                    LOGGER.warning("File access failed for %s: %s", source_path, exc)
-                    stats.record_failure_attempt()
-                    journal.record_failure(
-                        source_path.resolve(),
-                        "read",
-                        str(exc),
-                        fingerprint=fingerprint,
-                        settings_signature=settings_signature,
-                    )
-                    collect_retry_failed_path(retry_failed_paths, source_path)
-                    progress.report()
-                    continue
-                except Exception as exc:
-                    LOGGER.exception(
-                        "Unexpected preparation failure for %s", source_path
-                    )
-                    stats.record_failure_attempt()
-                    journal.record_failure(
-                        source_path.resolve(),
-                        "prepare",
-                        str(exc),
-                        fingerprint=fingerprint,
-                        settings_signature=settings_signature,
-                    )
-                    collect_retry_failed_path(retry_failed_paths, source_path)
-                    progress.report()
-                    continue
-
-                future = executor.submit(
-                    semantic_scoring.score_document,
+                prepare_future = prepare_executor.submit(
+                    prepare_document_for_scoring,
                     source_path,
-                    washed.clean_markdown,
-                    profile,
-                    manifest,
+                    current_settings,
                 )
-                pending_scores[future] = PendingScoreContext(
-                    source_path=resolved_source_path,
+                pending_prepares[prepare_future] = PrepareDocumentContext(
+                    source_path=source_path,
+                    resolved_source_path=resolved_source_path,
                     relative_path=relative_path,
                     manifest=manifest,
                     fingerprint=fingerprint,
                     settings_signature=settings_signature,
                     reprocess_reason=skip_reason,
                     previous_target_path=journal.previous_target_path(resolved_source_path),
-                    summary=summary,
                 )
-                stats.submitted += 1
+                selected_for_processing += 1
+                if len(pending_prepares) >= max_pending_prepares:
+                    drain_prepared_documents(block=True)
 
                 if len(pending_scores) >= max_pending_scores:
                     _drain_completed_scores(
@@ -1224,12 +1321,15 @@ def _run_pipeline_locked(current_settings: Settings) -> None:
                         block=True,
                     )
 
-                if current_settings.MAX_FILES and stats.submitted >= current_settings.MAX_FILES:
+                if current_settings.MAX_FILES and selected_for_processing >= current_settings.MAX_FILES:
                     LOGGER.info("Reached MAX_FILES=%s; draining submitted work", current_settings.MAX_FILES)
                     break
 
-            if current_settings.MAX_FILES and stats.submitted >= current_settings.MAX_FILES:
+            if current_settings.MAX_FILES and selected_for_processing >= current_settings.MAX_FILES:
                 break
+
+        while pending_prepares:
+            drain_prepared_documents(block=True)
 
         while pending_scores:
             _drain_completed_scores(
@@ -1245,7 +1345,7 @@ def _run_pipeline_locked(current_settings: Settings) -> None:
         if retry_failed_paths:
             _retry_failed_documents_once(
                 retry_failed_paths=retry_failed_paths,
-                executor=executor,
+                executor=score_executor,
                 journal=journal,
                 settings=current_settings,
                 settings_signature=settings_signature,
@@ -1713,11 +1813,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not refresh an existing copied target when the source/settings changed.",
     )
     parser.add_argument(
-        "--require-local-llm",
-        action="store_true",
-        help="Fail early unless the configured LLM endpoint is local.",
-    )
-    parser.add_argument(
         "--no-progress",
         action="store_true",
         help="Disable periodic progress logs and progress.json writes.",
@@ -1813,8 +1908,6 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["DOCUMENT_SUMMARY_ENABLED"] = True
     if args.no_overwrite_changed_target:
         overrides["OVERWRITE_CHANGED_TARGET"] = False
-    if args.require_local_llm:
-        overrides["REQUIRE_LOCAL_LLM"] = True
     if args.no_progress:
         overrides["PROGRESS_ENABLED"] = False
     if args.no_change_detection:
@@ -1844,6 +1937,7 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
 
 
 def main(argv: list[str] | None = None) -> None:
+    configure_utf8_runtime()
     effective_argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
     if not effective_argv:

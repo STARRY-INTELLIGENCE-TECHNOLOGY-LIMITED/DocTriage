@@ -11,6 +11,7 @@ from pathlib import Path
 from pypdf import PdfReader
 
 from config import Settings, get_settings
+from runtime_encoding import decode_process_output, utf8_subprocess_env
 
 LOGGER = logging.getLogger(__name__)
 
@@ -253,11 +254,16 @@ class DocumentWasher:
                     check=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True,
+                    text=False,
+                    env=utf8_subprocess_env(),
                 )
             except subprocess.CalledProcessError as exc:
+                stderr = decode_process_output(exc.stderr).strip()
+                stdout = decode_process_output(
+                    getattr(exc, "stdout", None) or getattr(exc, "output", None)
+                ).strip()
                 raise DocumentWashError(
-                    f"LibreOffice conversion failed for {file_path.name}: {exc.stderr.strip() or exc.stdout.strip()}"
+                    f"LibreOffice conversion failed for {file_path.name}: {stderr or stdout}"
                 ) from exc
 
             converted_path = temp_dir_path / f"{file_path.stem}.pptx"

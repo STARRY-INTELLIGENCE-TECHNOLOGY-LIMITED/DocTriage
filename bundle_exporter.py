@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import Settings, get_settings
+from runtime_encoding import configure_utf8_runtime
 
 SCHEMA_VERSION = "doctriage_bundle.v1"
 TERMINAL_DECISION_STATUSES = {
@@ -408,6 +409,7 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
 
 
 def main(argv: list[str] | None = None) -> None:
+    configure_utf8_runtime()
     args = build_parser().parse_args(argv)
     selection = BundleSelection(
         min_quality=args.min_quality,

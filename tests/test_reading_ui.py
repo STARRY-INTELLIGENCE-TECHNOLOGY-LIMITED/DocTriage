@@ -33,6 +33,11 @@ from reading_ui import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clear_source_file_scan_cache() -> None:
+    reading_ui.clear_source_file_scan_cache()
+
+
 def test_reading_ui_builds_filtered_state_payload(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"
@@ -189,6 +194,37 @@ def test_reading_ui_source_scope_sorts_by_modified_time(tmp_path: Path) -> None:
     )
 
     assert [row["relative_path"] for row in payload["rows"]] == ["newer.md", "older.md"]
+
+
+def test_supported_source_file_scan_uses_short_cache(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    first = source_dir / "first.md"
+    first.write_text("first", encoding="utf-8")
+    calls = 0
+    original_rglob = Path.rglob
+
+    def counting_rglob(path, pattern):
+        nonlocal calls
+        calls += 1
+        return original_rglob(path, pattern)
+
+    monkeypatch.setattr(reading_ui, "SOURCE_FILE_SCAN_CACHE_TTL_SECONDS", 60.0)
+    monkeypatch.setattr(Path, "rglob", counting_rglob)
+
+    first_scan = reading_ui.iter_supported_source_files(source_dir)
+    second = source_dir / "second.md"
+    second.write_text("second", encoding="utf-8")
+    cached_scan = reading_ui.iter_supported_source_files(source_dir)
+    reading_ui.clear_source_file_scan_cache(source_dir)
+    refreshed_scan = reading_ui.iter_supported_source_files(source_dir)
+
+    assert calls == 2
+    assert [path.name for path in first_scan] == ["first.md"]
+    assert [path.name for path in cached_scan] == ["first.md"]
+    assert sorted(path.name for path in refreshed_scan) == ["first.md", "second.md"]
 
 
 def test_reading_ui_source_scope_excludes_missing_legacy_decisions(
@@ -466,13 +502,12 @@ def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
             "llm_model": "local-model",
             "output_language": "en",
             "embedding_model": "nomic-embed-text",
-            "concurrency": "1",
+            "concurrency": "3",
             "limit": "10",
             "plan_only": True,
             "no_ocr": True,
             "skip_manifest_analysis": True,
             "document_summary": True,
-            "require_local_llm": True,
             "mine_relationships": True,
             "relationship_use_text_citations": True,
             "relationship_use_embeddings": True,
@@ -489,12 +524,13 @@ def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
     assert "en" in command
     assert "--embedding-model" in command
     assert "nomic-embed-text" in command
+    assert "--concurrency" in command
+    assert "3" in command
     assert "--limit" in command
     assert "--plan-only" in command
     assert "--no-ocr" in command
     assert "--skip-manifest-analysis" in command
     assert "--document-summary" in command
-    assert "--require-local-llm" in command
     assert "--mine-relationships" in command
     assert "--relationship-use-text-citations" in command
     assert "--relationship-use-embeddings" in command
@@ -512,6 +548,7 @@ def test_relationship_task_command_includes_embedding_options(tmp_path: Path) ->
             "llm_endpoint": "http://localhost:11434/api/generate",
             "llm_model": "local-model",
             "embedding_model": "nomic-embed-text",
+            "concurrency": "3",
             "relationship_use_embeddings": True,
             "relationship_use_text_citations": True,
         },
@@ -521,6 +558,8 @@ def test_relationship_task_command_includes_embedding_options(tmp_path: Path) ->
     assert "--use-embeddings" in command
     assert "--embedding-model" in command
     assert "nomic-embed-text" in command
+    assert "--concurrency" in command
+    assert "3" in command
     assert "--use-text-citations" in command
 
 
@@ -553,6 +592,7 @@ def test_start_analysis_redirects_child_output_to_application_log(
             "source_dir": str(source_dir),
             "output_root": str(output_root),
             "llm_endpoint": "http://localhost:11434/api/generate",
+            "concurrency": "3",
         },
     )
 
@@ -564,6 +604,8 @@ def test_start_analysis_redirects_child_output_to_application_log(
     assert isinstance(env, dict)
     assert env["PYTHONUTF8"] == "1"
     assert env["PYTHONIOENCODING"] == "utf-8"
+    history = load_run_history(output_root, limit=1)
+    assert history[0]["concurrency"] == "3"
 
 
 def test_start_relationship_task_uses_graph_output_without_mutating_active_paths(
@@ -678,6 +720,75 @@ def test_analysis_status_reports_running_from_run_lock(tmp_path: Path, monkeypat
     assert payload["running"] is True
     assert payload["pid"] == 24680
     assert payload["command"] == ["python", "main.py"]
+
+
+def test_ui_process_probe_handles_non_utf8_tasklist_output(monkeypatch) -> None:
+    class FakeCompletedProcess:
+        stdout = b"\xd0\xce\xcf\xb5,999999\r\n"
+
+    monkeypatch.setattr(reading_ui.os, "name", "nt")
+    monkeypatch.setattr(
+        reading_ui.subprocess,
+        "run",
+        lambda *args, **kwargs: FakeCompletedProcess(),
+    )
+
+    assert reading_ui.is_process_alive(24680) is False
+
+
+def test_ui_process_probe_handles_missing_stdout(monkeypatch) -> None:
+    class FakeCompletedProcess:
+        stdout = None
+
+    monkeypatch.setattr(reading_ui.os, "name", "nt")
+    monkeypatch.setattr(
+        reading_ui.subprocess,
+        "run",
+        lambda *args, **kwargs: FakeCompletedProcess(),
+    )
+
+    assert reading_ui.is_process_alive(24680) is False
+
+
+def test_stop_analysis_waits_for_ui_child_process_to_exit(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+
+    class FakeProcess:
+        pid = 97531
+
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return 0 if self.terminated else None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            self.terminated = True
+            return 0
+
+    process = FakeProcess()
+    payload = stop_analysis(
+        AppState(
+            paths=ReadingPaths(source_dir=source_dir, output_root=output_root),
+            process=process,
+            process_command=[
+                "python",
+                "main.py",
+                "--source-dir",
+                str(source_dir.resolve()),
+                "--output-root",
+                str(output_root.resolve()),
+            ],
+        )
+    )
+
+    assert process.terminated is True
+    assert payload == {"stopped": True, "running": False, "pid": 97531}
 
 
 def test_stop_analysis_terminates_external_locked_run(tmp_path: Path, monkeypatch) -> None:
@@ -1076,7 +1187,6 @@ def test_analysis_run_form_persists_previous_values() -> None:
         "run_plan_only",
         "run_no_ocr",
         "run_skip_manifest",
-        "run_require_local_llm",
         "run_force_reprocess",
         "run_content_hash",
         "run_mine_relationships",
@@ -1089,6 +1199,12 @@ def test_analysis_run_form_persists_previous_values() -> None:
     assert 'if (targetId.startsWith("run_")) saveRunFormState();' in html
     assert 'if (id === "run_relationship_embeddings") syncEmbeddingModelVisibility();' in html
     assert 'saveRunFormState();\n      const response = await fetch("/api/analysis/start"' in html
+    template_start = html.index("function applyTemplate()")
+    template_end = html.index("async function startAnalysis()", template_start)
+    template_body = html[template_start:template_end]
+    assert '$("run_concurrency").value = "1";' not in template_body
+    assert 'concurrency_pill: "并发"' in html
+    assert 'concurrency_pill: "Concurrency"' in html
 
 
 def test_reading_table_uses_name_column_with_summary_tooltip() -> None:
@@ -1688,6 +1804,29 @@ def test_analysis_status_redacts_plan_only_target_paths(tmp_path: Path) -> None:
         "doc.md [quality=80 category=Design]"
     )
     assert str(target_path) not in payload["activity"]["latest_activity"]["line"]
+
+
+def test_analysis_status_reports_effective_concurrency(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    state_dir = output_root / "_state"
+    log_dir = output_root / "_logs"
+    source_dir.mkdir()
+    state_dir.mkdir(parents=True)
+    log_dir.mkdir(parents=True)
+    append_run_history(
+        output_root,
+        {
+            "pid": 1,
+            "command": ["python", "main.py", "--concurrency", "4"],
+        },
+    )
+
+    payload = analysis_status(
+        AppState(paths=ReadingPaths(source_dir=source_dir, output_root=output_root))
+    )
+
+    assert payload["effective_concurrency"] == "4"
 
 
 def test_analysis_status_infers_plan_only_from_progress(tmp_path: Path) -> None:

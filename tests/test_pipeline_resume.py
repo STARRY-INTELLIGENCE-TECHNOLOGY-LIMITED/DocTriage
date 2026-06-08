@@ -1,10 +1,13 @@
 import json
+import threading
+import time
 from pathlib import Path
 
 import main
 import relationship_miner
 from config import Settings
 from ranker_engine import SemanticScore
+from meta_profiler import DocumentProfile
 
 
 def test_pipeline_resume_then_reprocess_changed_file(
@@ -99,6 +102,75 @@ def test_previous_failures_are_scored_first(tmp_path: Path, monkeypatch) -> None
     main.run_pipeline(settings)
 
     assert order[0] == "z.md"
+
+
+def test_prepare_stage_runs_concurrently(tmp_path: Path, monkeypatch) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    for index in range(4):
+        (source_dir / f"doc{index}.md").write_text("# Title\n\nbody", encoding="utf-8")
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_prepare_document_for_scoring(source_path, settings):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return main.PreparedDocument(
+            clean_markdown="body",
+            profile=DocumentProfile(
+                file_name=Path(source_path).name,
+                file_suffix=".md",
+                file_size_bytes=1,
+                created_at="2026-01-01T00:00:00+00:00",
+                modified_at="2026-01-01T00:00:00+00:00",
+                ctime_mtime_span_seconds=0,
+                header_density=0,
+                header_count=0,
+                non_empty_lines=1,
+                code_to_text_ratio=0,
+                code_block_count=0,
+            ),
+            summary="",
+        )
+
+    monkeypatch.setattr(
+        main,
+        "prepare_document_for_scoring",
+        fake_prepare_document_for_scoring,
+    )
+    monkeypatch.setattr(
+        main.SemanticScoring,
+        "score_document",
+        lambda self, file_path, clean_markdown, profile, manifest: SemanticScore(
+            quality=80,
+            category="Design",
+            knowledge_density=80,
+            implementation_specificity=40,
+            logical_structure=80,
+            reason="test",
+        ),
+    )
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        COPY_FILES=False,
+        CONCURRENCY_LIMIT=3,
+        SKIP_MANIFEST_ANALYSIS=True,
+    )
+
+    main.run_pipeline(settings)
+
+    assert max_active == 3
 
 
 def test_pipeline_writes_llm_summary_when_enabled(

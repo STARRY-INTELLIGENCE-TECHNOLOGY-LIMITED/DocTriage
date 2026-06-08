@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import uuid
 import webbrowser
@@ -22,6 +23,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import DEFAULT_SUPPORTED_EXTENSIONS
+from runtime_encoding import (
+    configure_utf8_runtime,
+    decode_process_output,
+    utf8_subprocess_env,
+)
 from reading_tracker import (
     MARKABLE_STATUSES,
     ReadingPaths,
@@ -44,6 +50,11 @@ class AppState:
     relationship_process_kind: str | None = None
     relationship_process_command: list[str] | None = None
     lock: threading.Lock = field(default_factory=threading.Lock)
+
+
+SOURCE_FILE_SCAN_CACHE_TTL_SECONDS = 2.0
+_SOURCE_FILE_SCAN_CACHE: dict[Path, tuple[float, list[Path]]] = {}
+_SOURCE_FILE_SCAN_CACHE_LOCK = threading.Lock()
 
 
 HTML_PAGE = r"""<!doctype html>
@@ -186,7 +197,6 @@ HTML_PAGE = r"""<!doctype html>
           <label class="advanced-run"><span class="label-row">Plan only <span class="help" tabindex="0" data-i18n-tip="tip_plan_only" data-tip="只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。">?</span></span><input id="run_plan_only" type="checkbox" checked /></label>
           <label class="advanced-run"><span class="label-row">No OCR <span class="help" tabindex="0" data-i18n-tip="tip_no_ocr" data-tip="关闭 OCR。对有文本层的 PDF 和 Office 文档更快；纯图片或扫描版 PDF 可能提取不到正文。建议首轮勾选，后续对扫描件分批取消。">?</span></span><input id="run_no_ocr" type="checkbox" checked /></label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="skip_manifest">跳过 Manifest</span> <span class="help" tabindex="0" data-i18n-tip="tip_skip_manifest" data-tip="跳过目录级系列/集合分析，直接进入文件级评分。大目录首跑通常建议开启，先拿到全局评分结果。">?</span></span><input id="run_skip_manifest" type="checkbox" checked /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="local_llm">本地 LLM</span> <span class="help" tabindex="0" data-i18n-tip="tip_local_llm" data-tip="要求评分模型端点必须是本机地址。适合你只想用本地 Ollama，不接受误连远端服务的场景。">?</span></span><input id="run_require_local_llm" type="checkbox" checked /></label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="force_reprocess">强制重跑</span> <span class="help" tabindex="0" data-i18n-tip="tip_force_reprocess" data-tip="忽略已处理记录，按当前参数重新处理匹配文件。适合你调整模型、阈值或提示词后重算。">?</span></span><input id="run_force_reprocess" type="checkbox" /></label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="content_hash">内容 Hash</span> <span class="help" tabindex="0" data-i18n-tip="tip_content_hash" data-tip="变更检测除了时间和大小，还计算文件内容哈希。更准，但大目录和大文件会更慢。">?</span></span><input id="run_content_hash" type="checkbox" /></label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="mine_relationships">挖掘关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_mine_relationships" data-tip="在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。">?</span></span><input id="run_mine_relationships" type="checkbox" /></label>
@@ -422,7 +432,6 @@ HTML_PAGE = r"""<!doctype html>
         timeout_seconds: "超时秒",
         summary: "摘要",
         skip_manifest: "跳过 Manifest",
-        local_llm: "本地 LLM",
         force_reprocess: "强制重跑",
         content_hash: "内容 Hash",
         mine_relationships: "挖掘关系",
@@ -518,6 +527,7 @@ HTML_PAGE = r"""<!doctype html>
         not_running_pill: "未运行",
         progress_pill: "进度",
         completed_pill: "完成",
+        concurrency_pill: "并发",
         eta_waiting_pill: "ETA 等待连续规划",
         speed_pill: "速度",
         speed_waiting_pill: "速度等待连续规划",
@@ -574,7 +584,6 @@ HTML_PAGE = r"""<!doctype html>
         tip_plan_only: "只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。",
         tip_no_ocr: "关闭 OCR。对有文本层的 PDF 和 Office 文档更快；纯图片或扫描版 PDF 可能提取不到正文。建议首轮勾选，后续对扫描件分批取消。",
         tip_skip_manifest: "跳过目录级系列/集合分析，直接进入文件级评分。大目录首跑通常建议开启，先拿到全局评分结果。",
-        tip_local_llm: "要求评分模型端点必须是本机地址。适合你只想用本地 Ollama，不接受误连远端服务的场景。",
         tip_force_reprocess: "忽略已处理记录，按当前参数重新处理匹配文件。适合你调整模型、阈值或提示词后重算。",
         tip_content_hash: "变更检测除了时间和大小，还计算文件内容哈希。更准，但大目录和大文件会更慢。",
         tip_mine_relationships: "在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。",
@@ -679,7 +688,6 @@ HTML_PAGE = r"""<!doctype html>
         timeout_seconds: "Timeout seconds",
         summary: "Summary",
         skip_manifest: "Skip manifest",
-        local_llm: "Local LLM",
         force_reprocess: "Force reprocess",
         content_hash: "Content hash",
         mine_relationships: "Mine relationships",
@@ -775,6 +783,7 @@ HTML_PAGE = r"""<!doctype html>
         not_running_pill: "Not running",
         progress_pill: "Progress",
         completed_pill: "Completed",
+        concurrency_pill: "Concurrency",
         eta_waiting_pill: "ETA waiting for steady planning",
         speed_pill: "Speed",
         speed_waiting_pill: "Speed waiting for steady planning",
@@ -831,7 +840,6 @@ HTML_PAGE = r"""<!doctype html>
         tip_plan_only: "Record scoring, categories, progress, and decisions without copying source files.",
         tip_no_ocr: "Disable OCR. Faster for PDFs with text layers; scanned documents may extract little or no text.",
         tip_skip_manifest: "Skip directory-level series analysis and start file-level scoring directly.",
-        tip_local_llm: "Require the scoring endpoint to be local.",
         tip_force_reprocess: "Ignore processed records and rerun matching files with current settings.",
         tip_content_hash: "Use content hashes in addition to timestamps and sizes. More accurate, slower on large folders.",
         tip_mine_relationships: "Generate document relations and clusters after scoring.",
@@ -890,7 +898,6 @@ HTML_PAGE = r"""<!doctype html>
       "run_plan_only",
       "run_no_ocr",
       "run_skip_manifest",
-      "run_require_local_llm",
       "run_force_reprocess",
       "run_content_hash",
       "run_mine_relationships",
@@ -1347,7 +1354,6 @@ HTML_PAGE = r"""<!doctype html>
         plan_only: $("run_plan_only").checked,
         no_ocr: $("run_no_ocr").checked,
         skip_manifest_analysis: $("run_skip_manifest").checked,
-        require_local_llm: $("run_require_local_llm").checked,
         force_reprocess: $("run_force_reprocess").checked,
         content_hash: $("run_content_hash").checked,
         mine_relationships: $("run_mine_relationships").checked,
@@ -1412,7 +1418,6 @@ HTML_PAGE = r"""<!doctype html>
     function applyTemplate() {
       const name = $("run_template").value;
       if (!name) return;
-      $("run_concurrency").value = "1";
       $("run_limit").value = "";
       $("run_max_file_size_mb").value = "80";
       $("run_quality_threshold").value = "75";
@@ -1421,7 +1426,6 @@ HTML_PAGE = r"""<!doctype html>
       $("run_plan_only").checked = true;
       $("run_no_ocr").checked = true;
       $("run_skip_manifest").checked = true;
-      $("run_require_local_llm").checked = true;
       $("run_force_reprocess").checked = false;
       $("run_content_hash").checked = false;
       $("run_mine_relationships").checked = false;
@@ -1546,6 +1550,7 @@ HTML_PAGE = r"""<!doctype html>
         payload.plan_only ? tr("plan_only_pill") : "",
         payload.running ? tr("running_pill") : tr("not_running_pill"),
         payload.pid ? "PID " + payload.pid : "",
+        payload.effective_concurrency ? `${tr("concurrency_pill")} ${payload.effective_concurrency}` : "",
         progress.percent !== undefined ? `${tr("progress_pill")} ${progress.percent}%` : "",
         progress.completed !== undefined ? `${tr("completed_pill")} ${progress.completed}/${progress.total || 0}` : "",
         rateReady && progress.eta_human && progress.eta_human !== "unknown" ? `ETA ${progress.eta_human}` : (payload.running ? tr("eta_waiting_pill") : ""),
@@ -1563,7 +1568,7 @@ HTML_PAGE = r"""<!doctype html>
       $("reset_analysis_btn").disabled = !!payload.running;
       const history = payload.run_history || [];
       $("runHistory").innerHTML = history.slice(-6).reverse().map(item =>
-        `<span class="pill">${escapeHtml((item.started_at || '').replace('T',' ').slice(0,19))} PID ${escapeHtml(item.pid || '')} ${escapeHtml(item.template || '')}</span>`
+        `<span class="pill">${escapeHtml((item.started_at || '').replace('T',' ').slice(0,19))} PID ${escapeHtml(item.pid || '')} ${escapeHtml(item.template || '')} ${item.concurrency ? escapeHtml(tr("concurrency_pill") + " " + item.concurrency) : ""}</span>`
       ).join("");
     }
 
@@ -2789,12 +2794,24 @@ def build_source_file_rows(
 
 
 def iter_supported_source_files(source_dir: Path) -> list[Path]:
-    if not source_dir.exists():
+    try:
+        cache_key = source_dir.expanduser().resolve()
+    except OSError:
         return []
+    now = time.monotonic()
+    with _SOURCE_FILE_SCAN_CACHE_LOCK:
+        cached = _SOURCE_FILE_SCAN_CACHE.get(cache_key)
+        if cached is not None:
+            cached_at, cached_files = cached
+            if now - cached_at <= SOURCE_FILE_SCAN_CACHE_TTL_SECONDS:
+                return list(cached_files)
+
     extensions = {suffix.lower() for suffix in DEFAULT_SUPPORTED_EXTENSIONS}
     files: list[Path] = []
     try:
-        iterator = source_dir.rglob("*")
+        if not cache_key.exists():
+            return []
+        iterator = cache_key.rglob("*")
         for path in iterator:
             try:
                 if path.is_file() and path.suffix.lower() in extensions:
@@ -2803,7 +2820,21 @@ def iter_supported_source_files(source_dir: Path) -> list[Path]:
                 continue
     except OSError:
         return files
+    with _SOURCE_FILE_SCAN_CACHE_LOCK:
+        _SOURCE_FILE_SCAN_CACHE[cache_key] = (now, list(files))
     return files
+
+
+def clear_source_file_scan_cache(source_dir: Path | None = None) -> None:
+    with _SOURCE_FILE_SCAN_CACHE_LOCK:
+        if source_dir is None:
+            _SOURCE_FILE_SCAN_CACHE.clear()
+            return
+        try:
+            cache_key = source_dir.expanduser().resolve()
+        except OSError:
+            cache_key = source_dir
+        _SOURCE_FILE_SCAN_CACHE.pop(cache_key, None)
 
 
 def build_source_only_row(
@@ -3418,8 +3449,9 @@ def relationship_task_command(
     if llm_model:
         command.extend(["--llm-model", llm_model])
     if task_name == "mine":
-        if bool(payload.get("require_local_llm")):
-            command.append("--require-local-llm")
+        concurrency = str(payload.get("concurrency") or "").strip()
+        if concurrency:
+            command.extend(["--concurrency", concurrency])
         if bool(payload.get("relationship_use_text_citations", True)):
             command.append("--use-text-citations")
         if bool(payload.get("relationship_use_embeddings")):
@@ -3612,6 +3644,7 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
             raise RuntimeError(f"Analysis is already running with PID {process.pid}")
 
         source_dir, output_root = resolve_payload_paths(payload)
+        clear_source_file_scan_cache(source_dir)
         app_state.paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
         active_pid = find_active_run_pid(app_state.paths)
         if active_pid is not None:
@@ -3644,6 +3677,7 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
                 "output_root": str(output_root),
                 "command": command,
                 "plan_only": is_plan_only_command(command),
+                "concurrency": command_option_value(command, "--concurrency") or "",
             },
         )
         return {
@@ -3663,6 +3697,7 @@ def set_active_paths(app_state: AppState, payload: dict[str, Any]) -> dict[str, 
         process = app_state.process
         if process is not None and process.poll() is None:
             raise RuntimeError("Cannot change active paths while analysis is running.")
+        clear_source_file_scan_cache(source_dir)
         app_state.paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
     return {"source_dir": str(source_dir), "output_root": str(output_root)}
 
@@ -3675,6 +3710,7 @@ def set_reading_output(app_state: AppState, payload: dict[str, Any]) -> dict[str
     if not output_root.exists():
         raise FileNotFoundError(f"Output directory does not exist: {output_root}")
     source_dir = infer_source_dir_for_output(app_state, output_root)
+    clear_source_file_scan_cache(source_dir)
     return {"source_dir": str(source_dir), "output_root": str(output_root)}
 
 
@@ -3798,13 +3834,18 @@ def paths_match_command(command: list[str] | None, paths: ReadingPaths) -> bool:
 
 
 def command_option_path(command: list[str], option: str) -> Path | None:
+    value = command_option_value(command, option)
+    return Path(value).expanduser() if value else None
+
+
+def command_option_value(command: list[str], option: str) -> str | None:
     try:
         index = command.index(option)
     except ValueError:
         return None
     if index + 1 >= len(command):
         return None
-    return Path(command[index + 1]).expanduser()
+    return command[index + 1]
 
 
 def build_analysis_command(
@@ -3847,7 +3888,6 @@ def build_analysis_command(
         "no_ocr": "--no-ocr",
         "skip_manifest_analysis": "--skip-manifest-analysis",
         "document_summary": "--document-summary",
-        "require_local_llm": "--require-local-llm",
         "force_reprocess": "--force-reprocess",
         "content_hash": "--content-hash",
         "mine_relationships": "--mine-relationships",
@@ -3893,13 +3933,14 @@ def is_process_alive(pid: int) -> bool:
             result = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                 capture_output=True,
-                text=True,
+                text=False,
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 timeout=5,
             )
         except (OSError, subprocess.SubprocessError):
             return True
-        return str(pid) in result.stdout
+        output = decode_process_output(result.stdout)
+        return str(pid) in output
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -3953,7 +3994,7 @@ def terminate_process_id(pid: int) -> bool:
             result = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
                 capture_output=True,
-                text=True,
+                text=False,
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 timeout=10,
             )
@@ -4007,6 +4048,7 @@ def reset_analysis_output(app_state: AppState, payload: dict[str, Any]) -> dict[
     source_dir, output_root = resolve_payload_paths(payload)
     validate_reset_output_root(source_dir, output_root)
     paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
+    clear_source_file_scan_cache(source_dir)
 
     with app_state.lock:
         process = app_state.process
@@ -4038,13 +4080,22 @@ def stop_analysis(app_state: AppState, payload: dict[str, Any] | None = None) ->
     with app_state.lock:
         process = app_state.process
         paths = requested_paths or app_state.paths
+        if paths is not None:
+            clear_source_file_scan_cache(paths.source_dir)
         process_matches_paths = (
             requested_paths is None
             or paths_match_command(app_state.process_command, requested_paths)
         )
         if process is not None and process.poll() is None and process_matches_paths:
             process.terminate()
-            return {"stopped": True, "running": True, "pid": process.pid}
+            stopped = wait_for_process_exit(process, timeout_seconds=5.0)
+            if not stopped:
+                stopped = kill_process(process)
+            return {
+                "stopped": stopped,
+                "running": process.poll() is None,
+                "pid": process.pid,
+            }
         if paths is None:
             return {"stopped": False, "running": False}
         pid = find_active_run_pid(paths)
@@ -4052,6 +4103,23 @@ def stop_analysis(app_state: AppState, payload: dict[str, Any] | None = None) ->
             return {"stopped": False, "running": False}
         stopped = terminate_process_id(pid)
         return {"stopped": stopped, "running": is_process_alive(pid), "pid": pid}
+
+
+def wait_for_process_exit(process: subprocess.Popen, timeout_seconds: float) -> bool:
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
+
+
+def kill_process(process: subprocess.Popen) -> bool:
+    try:
+        process.kill()
+        process.wait(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return process.poll() is not None
 
 
 def infer_analysis_phase(
@@ -4149,6 +4217,7 @@ def analysis_status(
         return_code = None
     if command is None:
         command = find_command_for_pid(run_history, pid)
+    effective_concurrency = infer_effective_concurrency(command, run_history)
     progress = read_json_file(paths.progress_path)
     run_summary = read_json_file(paths.output_root / "_state" / "run_summary.json")
     log_tail = read_text_tail(paths.application_log_path, max_lines=80)
@@ -4173,6 +4242,7 @@ def analysis_status(
         "pid": pid,
         "return_code": return_code,
         "command": command,
+        "effective_concurrency": effective_concurrency,
         "source_dir": str(paths.source_dir),
         "output_root": str(paths.output_root),
         "progress": progress,
@@ -4239,6 +4309,27 @@ def infer_plan_only_mode(
     return False
 
 
+def infer_effective_concurrency(
+    command: list[str] | None, run_history: list[dict[str, Any]]
+) -> str:
+    if command:
+        value = command_option_value(command, "--concurrency")
+        if value:
+            return value
+    for record in reversed(run_history):
+        value = str(record.get("concurrency") or "").strip()
+        if value:
+            return value
+        record_command = record.get("command")
+        if isinstance(record_command, list) and all(
+            isinstance(item, str) for item in record_command
+        ):
+            value = command_option_value(record_command, "--concurrency")
+            if value:
+                return value
+    return ""
+
+
 def require_paths(app_state: AppState) -> ReadingPaths:
     paths = app_state.paths
     if paths is None:
@@ -4294,15 +4385,17 @@ def pick_folder_windows() -> str:
         result = subprocess.run(
             [command, "-NoProfile", "-STA", "-Command", script],
             capture_output=True,
-            text=True,
+            text=False,
             timeout=None,
         )
     except OSError as exc:
         raise RuntimeError(f"Windows folder picker failed to start: {exc}") from exc
+    stdout = decode_process_output(result.stdout)
+    stderr = decode_process_output(result.stderr)
     if result.returncode != 0:
-        error = (result.stderr or result.stdout or "").strip()
+        error = (stderr or stdout).strip()
         raise RuntimeError(f"Windows folder picker failed: {error}")
-    return result.stdout.strip()
+    return stdout.strip()
 
 
 def read_json_file(path: Path) -> dict[str, Any]:
@@ -4335,19 +4428,7 @@ def read_tail_bytes(path: Path, max_bytes: int = 1024 * 1024) -> bytes:
 
 
 def decode_log_line(line: bytes) -> str:
-    for encoding in ("utf-8", "gbk", "cp936"):
-        try:
-            return line.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return line.decode("utf-8", errors="replace")
-
-
-def utf8_subprocess_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env["PYTHONUTF8"] = "1"
-    env["PYTHONIOENCODING"] = "utf-8"
-    return env
+    return decode_process_output(line)
 
 
 def file_activity(path: Path) -> dict[str, Any]:
@@ -5018,6 +5099,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    configure_utf8_runtime()
     args = build_parser().parse_args(argv)
     paths = None
     if args.source_dir is not None or args.output_root is not None:

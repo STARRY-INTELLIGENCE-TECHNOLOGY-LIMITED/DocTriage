@@ -75,6 +75,34 @@ def test_stale_run_lock_is_ignored_when_process_is_gone(tmp_path: Path) -> None:
         assert settings.state_dir.joinpath("run.lock").exists()
 
 
+def test_is_process_alive_handles_non_utf8_tasklist_output(monkeypatch) -> None:
+    class FakeCompletedProcess:
+        stdout = b"\xd0\xce\xcf\xb5,999999\r\n"
+
+    monkeypatch.setattr(main.os, "name", "nt")
+    monkeypatch.setattr(
+        main.subprocess,
+        "run",
+        lambda *args, **kwargs: FakeCompletedProcess(),
+    )
+
+    assert main.is_process_alive(12345) is False
+
+
+def test_is_process_alive_handles_missing_stdout(monkeypatch) -> None:
+    class FakeCompletedProcess:
+        stdout = None
+
+    monkeypatch.setattr(main.os, "name", "nt")
+    monkeypatch.setattr(
+        main.subprocess,
+        "run",
+        lambda *args, **kwargs: FakeCompletedProcess(),
+    )
+
+    assert main.is_process_alive(12345) is False
+
+
 def test_build_local_summary_removes_page_and_ui_chrome() -> None:
     summary = main.build_local_summary(
         "<!-- page 1 --> · \ue6fd 文 架构文章 创作中心 朗读文章 "

@@ -23,6 +23,7 @@ from config import Settings
 from main import build_file_fingerprint, build_local_summary, summary_for_decision
 from meta_profiler import MetadataProfiler
 from ranker_engine import LLMClient, ManifestResult, SemanticScore, SemanticScoring
+from runtime_encoding import configure_utf8_runtime
 
 ANALYSIS_SCHEMA_VERSION = "doctriage_file_analysis.v1"
 DSampleSET_SCHEMA_VERSION = "doctriage_dataset_record.v1"
@@ -390,7 +391,6 @@ def build_settings_for_analyze(args: argparse.Namespace, paths: list[Path]) -> S
         "DOCUMENT_SUMMARY_ENABLED": True,
         "OCR_ENABLED": not args.no_ocr,
         "PDF_METADSample_ENABLED": args.pdf_metadata,
-        "REQUIRE_LOCAL_LLM": args.require_local_llm,
     }
     if args.llm_endpoint is not None:
         overrides["LLM_ENDPOINT"] = args.llm_endpoint
@@ -458,7 +458,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze.add_argument("--no-ocr", action="store_true")
     analyze.add_argument("--pdf-metadata", action="store_true")
-    analyze.add_argument("--require-local-llm", action="store_true")
     analyze.add_argument("--include-clean-preview", action="store_true")
     analyze.add_argument("--clean-preview-chars", type=int, default=1200)
     analyze.add_argument("--jsonl", action="store_true")
@@ -497,6 +496,7 @@ def add_policy_args(parser: argparse.ArgumentParser) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    configure_utf8_runtime()
     args = build_parser().parse_args(argv)
     if args.command == "capabilities":
         write_payload(build_capabilities_payload(), output=None, jsonl=False)

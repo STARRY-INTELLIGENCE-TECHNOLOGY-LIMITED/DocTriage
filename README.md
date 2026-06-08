@@ -95,7 +95,6 @@ doctriage `
   --plan-only `
   --no-ocr `
   --skip-manifest-analysis `
-  --require-local-llm `
   --timeout-seconds 240
 ```
 

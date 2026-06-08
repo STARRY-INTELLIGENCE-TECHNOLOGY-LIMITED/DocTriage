@@ -79,6 +79,16 @@ class SemanticScore(BaseModel):
 class LLMClient:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
+        self._client = httpx.Client()
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "LLMClient":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
 
     def complete_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         endpoint = self.settings.LLM_ENDPOINT.rstrip("/")
@@ -90,7 +100,7 @@ class LLMClient:
         last_error: Exception | None = None
         for attempt in range(self.settings.LLM_RETRY_COUNT + 1):
             try:
-                response = httpx.post(
+                response = self._client.post(
                     endpoint,
                     headers=headers,
                     json=payload,
@@ -228,20 +238,25 @@ class ManifestAnalysis:
         source_root_path = Path(source_root).expanduser().resolve()
 
         manifest_rows: list[dict[str, Any]] = []
-        sorted_files = sorted(
-            [Path(file_path).expanduser().resolve() for file_path in files],
-            key=lambda item: (item.stat().st_mtime, item.name.lower()),
+        file_stats = []
+        for file_path in files:
+            path = Path(file_path).expanduser().resolve()
+            file_stats.append((path, path.stat()))
+        sorted_file_stats = sorted(
+            file_stats,
+            key=lambda item: (item[1].st_mtime, item[0].name.lower()),
         )
-        if len(sorted_files) > self.llm_client.settings.MANIFEST_MAX_FILES:
-            selected_files = [
-                *sorted_files[: self.llm_client.settings.MANIFEST_MAX_FILES // 2],
-                *sorted_files[-(self.llm_client.settings.MANIFEST_MAX_FILES // 2) :],
+        if len(sorted_file_stats) > self.llm_client.settings.MANIFEST_MAX_FILES:
+            selected_file_stats = [
+                *sorted_file_stats[: self.llm_client.settings.MANIFEST_MAX_FILES // 2],
+                *sorted_file_stats[
+                    -(self.llm_client.settings.MANIFEST_MAX_FILES // 2) :
+                ],
             ]
         else:
-            selected_files = sorted_files
+            selected_file_stats = sorted_file_stats
 
-        for path in selected_files:
-            stat = path.stat()
+        for path, stat in selected_file_stats:
             manifest_rows.append(
                 {
                     "name": path.name,
@@ -254,8 +269,8 @@ class ManifestAnalysis:
         user_prompt = json.dumps(
             {
                 "directory": str(directory_path.relative_to(source_root_path)),
-                "total_file_count": len(sorted_files),
-                "manifest_file_count": len(selected_files),
+                "total_file_count": len(sorted_file_stats),
+                "manifest_file_count": len(selected_file_stats),
                 "manifest": sorted(
                     manifest_rows,
                     key=lambda item: (item["modified_epoch"], item["name"]),

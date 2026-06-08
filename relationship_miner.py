@@ -7,14 +7,12 @@ import math
 import os
 import re
 import sys
-import time
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable, Sequence, TypeVar
-from urllib.parse import urlparse
 
 import httpx
 
@@ -24,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from config import Settings, get_settings
 from ollama_runtime import release_scoring_model_before_embedding_relationships
+from runtime_encoding import configure_utf8_runtime
 from relationship_strategies import (
     DEFAULT_PAIR_COLLECTORS,
     collect_citation_pairs,
@@ -109,10 +108,25 @@ class OllamaEmbeddingClient:
         self.model = settings.EMBEDDING_MODEL or settings.LLM_MODEL
         if not self.model:
             raise ValueError("EMBEDDING_MODEL or LLM_MODEL must be configured for embeddings.")
+        self._client = httpx.Client()
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "OllamaEmbeddingClient":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
 
     def embed(self, text: str) -> list[float]:
-        payload = self._build_payload(text)
-        response = httpx.post(
+        return self.embed_many([text])[0]
+
+    def embed_many(self, texts: Sequence[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        payload = self._build_payload(texts)
+        response = self._client.post(
             self.endpoint,
             json=payload,
             timeout=self.settings.EMBEDDING_TIMEOUT_SECONDS,
@@ -120,23 +134,40 @@ class OllamaEmbeddingClient:
         response.raise_for_status()
         response_json = response.json()
 
-        vector = response_json.get("embedding")
-        if vector is None and isinstance(response_json.get("embeddings"), list):
-            embeddings = response_json["embeddings"]
-            vector = embeddings[0] if embeddings else None
-        if not isinstance(vector, list):
-            raise ValueError("Embedding response did not contain a vector.")
-        return [float(value) for value in vector]
+        vectors = self._extract_vectors(response_json, len(texts))
+        return [[float(value) for value in vector] for vector in vectors]
 
-    def _build_payload(self, text: str) -> dict[str, Any]:
+    def _build_payload(self, texts: Sequence[str]) -> dict[str, Any]:
+        input_value: str | list[str] = texts[0] if len(texts) == 1 else list(texts)
         if self.endpoint.lower().endswith("/api/embed"):
-            return {"model": self.model, "input": text}
-        return {"model": self.model, "prompt": text}
+            return {"model": self.model, "input": input_value}
+        return {"model": self.model, "prompt": texts[0]}
+
+    def _extract_vectors(
+        self, response_json: dict[str, Any], expected_count: int
+    ) -> list[list[Any]]:
+        vector = response_json.get("embedding")
+        if isinstance(vector, list) and vector and not isinstance(vector[0], list):
+            return [vector]
+
+        embeddings = response_json.get("embeddings")
+        if isinstance(embeddings, list) and embeddings:
+            if isinstance(embeddings[0], dict):
+                vectors = [item.get("embedding") for item in embeddings]
+            else:
+                vectors = embeddings
+            if all(isinstance(item, list) for item in vectors):
+                if expected_count > 1 and len(vectors) != expected_count:
+                    raise ValueError(
+                        f"Embedding response returned {len(vectors)} vectors for {expected_count} inputs."
+                    )
+                return list(vectors)
+
+        raise ValueError("Embedding response did not contain a vector.")
 
 
 def mine_relationships(settings: Settings | None = None) -> None:
     current_settings = settings or get_settings()
-    validate_relationship_settings(current_settings)
 
     decisions_path = current_settings.processed_log_path.parent / "decisions.jsonl"
     records = load_records(decisions_path, current_settings)
@@ -160,19 +191,6 @@ def mine_relationships(settings: Settings | None = None) -> None:
         current_settings.relationship_clusters_path,
         cluster_min_score=current_settings.RELATIONSHIP_CLUSTER_MIN_SCORE,
     )
-
-
-def validate_relationship_settings(settings: Settings) -> None:
-    if not settings.RELATIONSHIP_USE_EMBEDDINGS:
-        return
-
-    if settings.REQUIRE_LOCAL_LLM:
-        parsed = urlparse(settings.EMBEDDING_ENDPOINT)
-        if parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError(
-                f"REQUIRE_LOCAL_LLM is enabled but embedding endpoint is not local: {settings.EMBEDDING_ENDPOINT}"
-            )
-
 
 def load_records(path: Path, settings: Settings) -> list[RelationshipRecord]:
     if not path.exists():
@@ -254,22 +272,107 @@ def build_embedding_text(record: RelationshipRecord, settings: Settings) -> str:
 def load_or_build_embeddings(
     records: list[RelationshipRecord], settings: Settings
 ) -> dict[int, list[float]]:
-    cache = load_embedding_cache(settings.embedding_cache_path)
-    client = OllamaEmbeddingClient(settings)
+    cache = (
+        load_embedding_cache(settings.embedding_cache_path)
+        if settings.EMBEDDING_CACHE_ENABLED
+        else {}
+    )
     embeddings: dict[int, list[float]] = {}
+    missing: list[tuple[int, RelationshipRecord, str]] = []
 
     for index, record in enumerate(records):
         cache_key = embedding_cache_key(record)
         vector = cache.get(cache_key)
-        if vector is None:
-            vector = client.embed(record.embedding_text)
-            cache[cache_key] = vector
+        if vector is not None:
+            embeddings[index] = vector
+        else:
+            missing.append((index, record, cache_key))
+
+    if not missing:
+        return embeddings
+
+    worker_count = resolve_embedding_workers(settings, len(missing))
+    if worker_count == 1:
+        cache_writes: list[tuple[str, list[float]]] = []
+        with OllamaEmbeddingClient(settings) as client:
+            for index, cache_key, vector in embed_records_with_client(client, missing):
+                cache[cache_key] = vector
+                embeddings[index] = vector
+                cache_writes.append((cache_key, vector))
+        if settings.EMBEDDING_CACHE_ENABLED:
+            append_embedding_cache_entries(settings.embedding_cache_path, cache_writes)
+        return embeddings
+
+    chunks = split_worker_chunks(missing, worker_count)
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="doctriage-embedding",
+    ) as executor:
+        futures = {
+            executor.submit(embed_records_chunk, settings, chunk): chunk for chunk in chunks
+        }
+        for future in as_completed(futures):
+            results = future.result()
+            cache_writes = []
+            for index, cache_key, vector in results:
+                cache[cache_key] = vector
+                embeddings[index] = vector
+                cache_writes.append((cache_key, vector))
             if settings.EMBEDDING_CACHE_ENABLED:
-                append_embedding_cache(settings.embedding_cache_path, cache_key, vector)
-            time.sleep(0.01)
-        embeddings[index] = vector
+                append_embedding_cache_entries(settings.embedding_cache_path, cache_writes)
 
     return embeddings
+
+
+def split_worker_chunks(
+    items: Sequence[T], worker_count: int
+) -> list[Sequence[T]]:
+    worker_count = max(1, worker_count)
+    base_size, remainder = divmod(len(items), worker_count)
+    chunks: list[Sequence[T]] = []
+    start = 0
+    for worker_index in range(worker_count):
+        size = base_size + (1 if worker_index < remainder else 0)
+        if size <= 0:
+            continue
+        end = start + size
+        chunks.append(items[start:end])
+        start = end
+    return chunks
+
+
+def resolve_embedding_workers(settings: Settings, missing_count: int) -> int:
+    if missing_count <= 1:
+        return 1
+    return max(1, min(settings.CONCURRENCY_LIMIT, missing_count))
+
+
+def embed_records_chunk(
+    settings: Settings,
+    work_items: Sequence[tuple[int, RelationshipRecord, str]],
+) -> list[tuple[int, str, list[float]]]:
+    with OllamaEmbeddingClient(settings) as client:
+        return embed_records_with_client(client, work_items)
+
+def embed_records_with_client(
+    client: OllamaEmbeddingClient,
+    work_items: Sequence[tuple[int, RelationshipRecord, str]],
+) -> list[tuple[int, str, list[float]]]:
+    results: list[tuple[int, str, list[float]]] = []
+    if client.endpoint.lower().endswith("/api/embed"):
+        vectors = client.embed_many([record.embedding_text for _, record, _ in work_items])
+        for (index, _, cache_key), vector in zip(work_items, vectors, strict=True):
+            results.append((index, cache_key, vector))
+        return results
+
+    for index, record, cache_key in work_items:
+        results.append((index, cache_key, client.embed(record.embedding_text)))
+    return results
+
+
+def embed_record_text(settings: Settings, text: str) -> list[float]:
+    with OllamaEmbeddingClient(settings) as client:
+        return client.embed(text)
 
 
 def load_embedding_cache(path: Path) -> dict[str, list[float]]:
@@ -294,10 +397,20 @@ def load_embedding_cache(path: Path) -> dict[str, list[float]]:
 
 
 def append_embedding_cache(path: Path, key: str, vector: list[float]) -> None:
+    append_embedding_cache_entries(path, [(key, vector)])
+
+
+def append_embedding_cache_entries(
+    path: Path, entries: Iterable[tuple[str, list[float]]]
+) -> None:
+    entries = list(entries)
+    if not entries:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"key": key, "embedding": vector}
     with path.open("a", encoding="utf-8", errors="ignore") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        for key, vector in entries:
+            payload = {"key": key, "embedding": vector}
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def embedding_cache_key(record: RelationshipRecord) -> str:
@@ -869,6 +982,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--llm-endpoint")
     parser.add_argument("--llm-model")
+    parser.add_argument("--concurrency", type=int)
     parser.add_argument("--embedding-endpoint")
     parser.add_argument("--embedding-model")
     parser.add_argument("--relationship-min-score", type=float)
@@ -878,7 +992,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--embedding-text-max-chars", type=int)
     parser.add_argument("--use-embeddings", action="store_true")
     parser.add_argument("--use-text-citations", action="store_true")
-    parser.add_argument("--require-local-llm", action="store_true")
     return parser
 
 
@@ -892,6 +1005,8 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["LLM_ENDPOINT"] = args.llm_endpoint
     if args.llm_model is not None:
         overrides["LLM_MODEL"] = args.llm_model
+    if args.concurrency is not None:
+        overrides["CONCURRENCY_LIMIT"] = args.concurrency
     if args.embedding_endpoint is not None:
         overrides["EMBEDDING_ENDPOINT"] = args.embedding_endpoint
     if args.embedding_model is not None:
@@ -910,15 +1025,13 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["RELATIONSHIP_USE_EMBEDDINGS"] = True
     if args.use_text_citations:
         overrides["RELATIONSHIP_USE_TEXT_CITATIONS"] = True
-    if args.require_local_llm:
-        overrides["REQUIRE_LOCAL_LLM"] = True
-
     if overrides:
         return Settings(**overrides)
     return get_settings()
 
 
 def main(argv: list[str] | None = None) -> None:
+    configure_utf8_runtime()
     args = build_parser().parse_args(argv)
     mine_relationships(build_settings_from_args(args))
 

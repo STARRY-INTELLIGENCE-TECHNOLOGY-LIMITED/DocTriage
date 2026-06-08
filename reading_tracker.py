@@ -13,6 +13,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from runtime_encoding import configure_utf8_runtime
+
 StatusName = Literal[
     "unread",
     "reading",
@@ -386,6 +388,7 @@ def build_paths(args: argparse.Namespace) -> ReadingPaths:
 
 
 def main(argv: list[str] | None = None) -> None:
+    configure_utf8_runtime()
     args = build_parser().parse_args(argv)
     paths = build_paths(args)
 

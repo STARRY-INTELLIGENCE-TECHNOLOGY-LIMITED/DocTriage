@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 from pathlib import Path
 
 from config import Settings
@@ -7,11 +9,14 @@ from relationship_miner import (
     build_candidate_relations,
     collect_candidate_pairs,
     collect_citation_pairs,
+    load_or_build_embeddings,
     load_records,
     mine_relationships,
+    resolve_embedding_workers,
     resolve_relationship_workers,
     write_clusters,
 )
+from relationship_strategies.embedding import EmbeddingPairCollector
 
 
 def test_mine_relationships_without_embeddings(tmp_path: Path) -> None:
@@ -133,6 +138,321 @@ def test_mine_relationships_with_embeddings_releases_scoring_model_first(
     mine_relationships(settings)
 
     assert events == ["release", "embeddings"]
+
+
+def test_embedding_generation_uses_configured_concurrency(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    records = []
+    for index in range(4):
+        path = source_dir / f"doc{index}.md"
+        path.write_text("placeholder", encoding="utf-8")
+        record = relationship_miner.RelationshipRecord(
+            source_path=path,
+            relative_path=path.name,
+            target_path="",
+            quality=90,
+            category="Design",
+            document_kind="Unknown",
+            topic_tags=[],
+            reason="",
+            summary=f"summary {index}",
+            modified_epoch=float(index),
+            normalized_name=relationship_miner.normalize_name(path.stem),
+        )
+        record.embedding_text = relationship_miner.build_embedding_text(
+            record,
+            Settings(
+                LLM_ENDPOINT="http://localhost:11434/api/generate",
+                LLM_MODEL="gemma4:e4b",
+                SOURCE_DIR=source_dir,
+                OUTPUT_ROOT=output_root,
+            ),
+        )
+        records.append(record)
+
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def fake_embed_records_chunk(settings, work_items):
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+        return [
+            (index, cache_key, [float(len(record.embedding_text))])
+            for index, record, cache_key in work_items
+        ]
+
+    monkeypatch.setattr(
+        relationship_miner,
+        "embed_records_chunk",
+        fake_embed_records_chunk,
+    )
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        CONCURRENCY_LIMIT=3,
+        EMBEDDING_CACHE_ENABLED=False,
+    )
+
+    embeddings = load_or_build_embeddings(records, settings)
+
+    assert sorted(embeddings) == [0, 1, 2, 3]
+    assert max_active == 3
+    assert resolve_embedding_workers(settings, 4) == 3
+
+
+def test_embedding_client_reuses_http_client(monkeypatch, tmp_path: Path) -> None:
+    created_clients: list[object] = []
+    posts: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return
+
+        def json(self):
+            return {"embedding": [1, 2, 3]}
+
+    class FakeHttpClient:
+        def __init__(self):
+            self.closed = False
+            created_clients.append(self)
+
+        def post(self, endpoint, *, json, timeout):
+            posts.append({"endpoint": endpoint, "json": json, "timeout": timeout})
+            return FakeResponse()
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(relationship_miner.httpx, "Client", FakeHttpClient)
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+        EMBEDDING_MODEL="nomic-embed-text",
+    )
+
+    with relationship_miner.OllamaEmbeddingClient(settings) as client:
+        assert client.embed("first") == [1.0, 2.0, 3.0]
+        assert client.embed("second") == [1.0, 2.0, 3.0]
+
+    assert len(created_clients) == 1
+    assert len(posts) == 2
+    assert created_clients[0].closed is True
+
+
+def test_api_embed_batches_inputs_per_worker(monkeypatch, tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    records = []
+    for index in range(4):
+        path = source_dir / f"doc{index}.md"
+        path.write_text("placeholder", encoding="utf-8")
+        record = relationship_miner.RelationshipRecord(
+            source_path=path,
+            relative_path=path.name,
+            target_path="",
+            quality=90,
+            category="Design",
+            document_kind="Unknown",
+            topic_tags=[],
+            reason="",
+            summary=f"summary {index}",
+            modified_epoch=float(index),
+            normalized_name=relationship_miner.normalize_name(path.stem),
+        )
+        record.embedding_text = f"embedding text {index}"
+        records.append(record)
+
+    posts: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return
+
+        def json(self):
+            inputs = self.payload["input"]
+            assert isinstance(inputs, list)
+            return {"embeddings": [[float(len(text))] for text in inputs]}
+
+    class FakeHttpClient:
+        def post(self, endpoint, *, json, timeout):
+            posts.append({"endpoint": endpoint, "json": json, "timeout": timeout})
+            return FakeResponse(json)
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(relationship_miner.httpx, "Client", FakeHttpClient)
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        EMBEDDING_ENDPOINT="http://localhost:11434/api/embed",
+        EMBEDDING_MODEL="nomic-embed-text",
+        CONCURRENCY_LIMIT=2,
+        EMBEDDING_CACHE_ENABLED=False,
+    )
+
+    embeddings = load_or_build_embeddings(records, settings)
+
+    assert sorted(embeddings) == [0, 1, 2, 3]
+    assert len(posts) == 2
+    assert sorted(len(post["json"]["input"]) for post in posts) == [2, 2]
+
+
+def test_api_embed_batches_inputs_with_single_worker(monkeypatch, tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    records = []
+    for index in range(3):
+        path = source_dir / f"doc{index}.md"
+        path.write_text("placeholder", encoding="utf-8")
+        record = relationship_miner.RelationshipRecord(
+            source_path=path,
+            relative_path=path.name,
+            target_path="",
+            quality=90,
+            category="Design",
+            document_kind="Unknown",
+            topic_tags=[],
+            reason="",
+            summary=f"summary {index}",
+            modified_epoch=float(index),
+            normalized_name=relationship_miner.normalize_name(path.stem),
+        )
+        record.embedding_text = f"embedding text {index}"
+        records.append(record)
+
+    posts: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return
+
+        def json(self):
+            inputs = self.payload["input"]
+            assert isinstance(inputs, list)
+            return {"embeddings": [[float(len(text))] for text in inputs]}
+
+    class FakeHttpClient:
+        def post(self, endpoint, *, json, timeout):
+            posts.append({"endpoint": endpoint, "json": json, "timeout": timeout})
+            return FakeResponse(json)
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(relationship_miner.httpx, "Client", FakeHttpClient)
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        EMBEDDING_ENDPOINT="http://localhost:11434/api/embed",
+        EMBEDDING_MODEL="nomic-embed-text",
+        CONCURRENCY_LIMIT=1,
+        EMBEDDING_CACHE_ENABLED=False,
+    )
+
+    embeddings = load_or_build_embeddings(records, settings)
+
+    assert sorted(embeddings) == [0, 1, 2]
+    assert len(posts) == 1
+    assert len(posts[0]["json"]["input"]) == 3
+
+
+def test_embedding_cache_disabled_skips_cache_read(tmp_path: Path, monkeypatch) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    path = source_dir / "doc.md"
+    path.write_text("placeholder", encoding="utf-8")
+    record = relationship_miner.RelationshipRecord(
+        source_path=path,
+        relative_path=path.name,
+        target_path="",
+        quality=90,
+        category="Design",
+        document_kind="Unknown",
+        topic_tags=[],
+        reason="",
+        summary="summary",
+        normalized_name=relationship_miner.normalize_name(path.stem),
+    )
+    record.embedding_text = "fresh embedding text"
+
+    def fail_cache_read(path):
+        raise AssertionError("cache should not be read when disabled")
+
+    class FakeEmbeddingClient:
+        def __init__(self, settings):
+            self.endpoint = "http://localhost:11434/api/embeddings"
+            return
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return
+
+        def embed(self, text):
+            return [float(len(text))]
+
+    monkeypatch.setattr(relationship_miner, "load_embedding_cache", fail_cache_read)
+    monkeypatch.setattr(relationship_miner, "OllamaEmbeddingClient", FakeEmbeddingClient)
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        EMBEDDING_CACHE_ENABLED=False,
+    )
+
+    embeddings = load_or_build_embeddings([record], settings)
+
+    assert embeddings == {0: [20.0]}
+
+
+def test_embedding_pair_collector_keeps_only_top_k_neighbors(tmp_path: Path) -> None:
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+        RELATIONSHIP_EMBEDDING_TOP_K=1,
+    )
+    embeddings = {
+        0: [1.0, 0.0],
+        1: [0.9, 0.1],
+        2: [0.0, 1.0],
+        3: [0.1, 0.9],
+    }
+
+    pairs = EmbeddingPairCollector().collect([], embeddings, settings)
+
+    assert pairs == {(0, 1), (2, 3)}
 
 
 def test_clusters_ignore_weak_time_path_chain_edges(tmp_path: Path) -> None:
@@ -484,3 +804,28 @@ def test_relationship_workers_keep_small_runs_serial(tmp_path: Path) -> None:
     )
 
     assert resolve_relationship_workers(settings, 999) == 1
+
+
+def test_relationship_cli_concurrency_sets_embedding_worker_limit(
+    tmp_path: Path,
+) -> None:
+    args = relationship_miner.build_parser().parse_args(
+        [
+            "--source-dir",
+            str(tmp_path / "source"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--llm-endpoint",
+            "http://localhost:11434/api/generate",
+            "--llm-model",
+            "gemma4:e4b",
+            "--concurrency",
+            "4",
+            "--use-embeddings",
+        ]
+    )
+
+    settings = relationship_miner.build_settings_from_args(args)
+
+    assert settings.CONCURRENCY_LIMIT == 4
+    assert settings.RELATIONSHIP_USE_EMBEDDINGS is True

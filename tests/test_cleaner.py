@@ -1,7 +1,9 @@
 import re
+import subprocess
 
 import pytest
 
+import cleaner
 from cleaner import DocumentWashError, DocumentWasher
 from config import DEFAULT_NOISE_PATTERNS
 
@@ -70,3 +72,24 @@ def test_wash_rejects_empty_file_before_docling(tmp_path, monkeypatch) -> None:
 
     with pytest.raises(DocumentWashError, match="Input document is empty"):
         washer.wash(empty_docx)
+
+
+def test_legacy_ppt_conversion_decodes_non_utf8_error(tmp_path, monkeypatch) -> None:
+    ppt = tmp_path / "deck.ppt"
+    ppt.write_bytes(b"ppt")
+    washer = DocumentWasher.__new__(DocumentWasher)
+
+    monkeypatch.setattr(cleaner.shutil, "which", lambda command: "soffice")
+
+    def fake_run(*args, **kwargs):
+        raise subprocess.CalledProcessError(
+            returncode=1,
+            cmd=args[0],
+            stderr="转换失败".encode("gbk"),
+            output=b"",
+        )
+
+    monkeypatch.setattr(cleaner.subprocess, "run", fake_run)
+
+    with pytest.raises(DocumentWashError, match="转换失败"):
+        washer._convert_legacy_ppt(ppt)

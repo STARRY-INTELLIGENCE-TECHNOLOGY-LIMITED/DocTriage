@@ -11,8 +11,7 @@
   --plan-only `
   --no-ocr `
   --skip-manifest-analysis `
-  --document-summary `
-  --require-local-llm
+  --document-summary
 ```
 
 导出 RAG 候选 JSONL：
@@ -29,4 +28,3 @@
 
 - 降低 `--rag-min-quality` 可扩大召回。
 - 降低 `--internal-max-sensitivity-risk` 可减少敏感资料进入后续索引。
-

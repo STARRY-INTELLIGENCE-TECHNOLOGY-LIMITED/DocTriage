@@ -92,7 +92,6 @@ class Settings(BaseSettings):
     PDF_TEXT_FALLBACK_MAX_PAGES: int | None = Field(default=300, ge=1)
     COPY_FILES: bool = Field(default=True)
     OVERWRITE_CHANGED_TARGET: bool = Field(default=True)
-    REQUIRE_LOCAL_LLM: bool = Field(default=False)
     CHANGE_DETECTION_ENABLED: bool = Field(default=True)
     CHANGE_DETECTION_USE_CONTENT_HASH: bool = Field(default=False)
     FORCE_REPROCESS: bool = Field(default=False)

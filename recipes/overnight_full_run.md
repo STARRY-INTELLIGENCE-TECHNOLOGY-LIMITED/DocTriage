@@ -13,7 +13,6 @@
   --no-ocr `
   --skip-manifest-analysis `
   --document-summary `
-  --require-local-llm `
   --timeout-seconds 240
 ```
 
@@ -25,4 +24,3 @@ Get-Content ".\data\overnight_run\_logs\doctriage.log" -Tail 40 -Wait
 ```
 
 中断后重新执行同一命令即可续跑。想彻底重置，换一个新的 `--output-root`。
-
