@@ -81,6 +81,60 @@ def test_mine_relationships_without_embeddings(tmp_path: Path) -> None:
     assert clusters["clusters"]
 
 
+def test_mine_relationships_with_embeddings_releases_scoring_model_first(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    state_dir = output_root / "_state"
+    source_dir.mkdir()
+    state_dir.mkdir(parents=True)
+    file_path = source_dir / "doc.md"
+    file_path.write_text("placeholder", encoding="utf-8")
+    (state_dir / "decisions.jsonl").write_text(
+        json.dumps(
+            {
+                "source_path": str(file_path),
+                "relative_path": file_path.name,
+                "quality": 90,
+                "category": "Design",
+                "summary": "design notes",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        relationship_miner,
+        "release_scoring_model_before_embedding_relationships",
+        lambda settings: events.append("release"),
+    )
+
+    def fake_load_or_build_embeddings(records, settings):
+        events.append("embeddings")
+        return {}
+
+    monkeypatch.setattr(
+        relationship_miner,
+        "load_or_build_embeddings",
+        fake_load_or_build_embeddings,
+    )
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        RELATIONSHIP_USE_EMBEDDINGS=True,
+    )
+
+    mine_relationships(settings)
+
+    assert events == ["release", "embeddings"]
+
+
 def test_clusters_ignore_weak_time_path_chain_edges(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"

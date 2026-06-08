@@ -16,9 +16,9 @@ import urllib.request
 import uuid
 import webbrowser
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from urllib.parse import urlparse
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 

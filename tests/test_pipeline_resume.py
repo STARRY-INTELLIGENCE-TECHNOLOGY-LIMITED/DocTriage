@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import main
+import relationship_miner
 from config import Settings
 from ranker_engine import SemanticScore
 
@@ -361,3 +362,90 @@ def test_run_pipeline_removes_stale_output_lock(tmp_path: Path, monkeypatch) -> 
     main.run_pipeline(settings)
 
     assert not (state_dir / "run.lock").exists()
+
+
+def test_embedding_relationships_are_mined_after_analysis_when_selected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    (source_dir / "doc.md").write_text("# Title\n\nbody", encoding="utf-8")
+    relationship_settings: list[Settings] = []
+
+    monkeypatch.setattr(
+        main.SemanticScoring,
+        "score_document",
+        lambda self, file_path, clean_markdown, profile, manifest: SemanticScore(
+            quality=80,
+            category="Design",
+            knowledge_density=80,
+            implementation_specificity=40,
+            logical_structure=80,
+            reason="test",
+        ),
+    )
+    monkeypatch.setattr(
+        relationship_miner,
+        "mine_relationships",
+        lambda settings: relationship_settings.append(settings),
+    )
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        COPY_FILES=False,
+        CONCURRENCY_LIMIT=1,
+        SKIP_MANIFEST_ANALYSIS=True,
+        RELATIONSHIP_MINING_ENABLED=True,
+        RELATIONSHIP_USE_EMBEDDINGS=True,
+    )
+
+    main.run_pipeline(settings)
+
+    assert len(relationship_settings) == 1
+    assert relationship_settings[0].RELATIONSHIP_USE_EMBEDDINGS is True
+
+
+def test_plain_relationship_mining_does_not_release_scoring_model(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    (source_dir / "doc.md").write_text("# Title\n\nbody", encoding="utf-8")
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        main.SemanticScoring,
+        "score_document",
+        lambda self, file_path, clean_markdown, profile, manifest: SemanticScore(
+            quality=80,
+            category="Design",
+            knowledge_density=80,
+            implementation_specificity=40,
+            logical_structure=80,
+            reason="test",
+        ),
+    )
+    monkeypatch.setattr(
+        relationship_miner,
+        "mine_relationships",
+        lambda settings: events.append("mine"),
+    )
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        COPY_FILES=False,
+        CONCURRENCY_LIMIT=1,
+        SKIP_MANIFEST_ANALYSIS=True,
+        RELATIONSHIP_MINING_ENABLED=True,
+        RELATIONSHIP_USE_EMBEDDINGS=False,
+    )
+
+    main.run_pipeline(settings)
+
+    assert events == ["mine"]

@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import Settings, get_settings
+from ollama_runtime import release_scoring_model_before_embedding_relationships
 from relationship_strategies import (
     DEFAULT_PAIR_COLLECTORS,
     collect_citation_pairs,
@@ -143,6 +144,8 @@ def mine_relationships(settings: Settings | None = None) -> None:
         records = records[: current_settings.RELATIONSHIP_MAX_RECORDS]
 
     current_settings.relationship_dir.mkdir(parents=True, exist_ok=True)
+    if current_settings.RELATIONSHIP_USE_EMBEDDINGS:
+        release_scoring_model_before_embedding_relationships(current_settings)
     embeddings = (
         load_or_build_embeddings(records, current_settings)
         if current_settings.RELATIONSHIP_USE_EMBEDDINGS

@@ -21,6 +21,7 @@ from reading_ui import (
     open_failure_document,
     reading_paths_from_payload,
     reset_analysis_output,
+    relationship_task_command,
     run_lock_path,
     row_matches_query,
     set_reading_output,
@@ -474,6 +475,7 @@ def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
             "require_local_llm": True,
             "mine_relationships": True,
             "relationship_use_text_citations": True,
+            "relationship_use_embeddings": True,
         },
         tmp_path / "source",
         tmp_path / "output",
@@ -495,6 +497,31 @@ def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
     assert "--require-local-llm" in command
     assert "--mine-relationships" in command
     assert "--relationship-use-text-citations" in command
+    assert "--relationship-use-embeddings" in command
+
+
+def test_relationship_task_command_includes_embedding_options(tmp_path: Path) -> None:
+    paths = ReadingPaths(
+        source_dir=tmp_path / "source",
+        output_root=tmp_path / "output",
+    )
+
+    command = relationship_task_command(
+        "mine",
+        {
+            "llm_endpoint": "http://localhost:11434/api/generate",
+            "llm_model": "local-model",
+            "embedding_model": "nomic-embed-text",
+            "relationship_use_embeddings": True,
+            "relationship_use_text_citations": True,
+        },
+        paths,
+    )
+
+    assert "--use-embeddings" in command
+    assert "--embedding-model" in command
+    assert "nomic-embed-text" in command
+    assert "--use-text-citations" in command
 
 
 def test_start_analysis_redirects_child_output_to_application_log(

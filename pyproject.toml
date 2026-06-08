@@ -26,5 +26,5 @@ doctriage-reading-ui = "reading_ui:main"
 doctriage-workflow = "workflow_adapter:main"
 
 [tool.setuptools]
-py-modules = ["bundle_exporter", "cleaner", "config", "knowledge_graph", "main", "meta_profiler", "ranker_engine", "reading_tracker", "reading_ui", "relationship_miner", "workflow_adapter"]
+py-modules = ["bundle_exporter", "cleaner", "config", "knowledge_graph", "main", "meta_profiler", "ollama_runtime", "ranker_engine", "reading_tracker", "reading_ui", "relationship_miner", "workflow_adapter"]
 packages = ["relationship_strategies"]

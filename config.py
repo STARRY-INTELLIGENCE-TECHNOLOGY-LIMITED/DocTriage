@@ -113,6 +113,8 @@ class Settings(BaseSettings):
     RELATIONSHIP_TIME_DECAY_DAYS: float = Field(default=30.0, gt=0.0, le=3650.0)
     RELATIONSHIP_EMBEDDING_TOP_K: int = Field(default=5, ge=1, le=100)
     RELATIONSHIP_EMBEDDING_EXHAUSTIVE_LIMIT: int = Field(default=1000, ge=2, le=20000)
+    RELATIONSHIP_EMBEDDING_LLM_UNLOAD_TIMEOUT_SECONDS: float = Field(default=60.0, ge=0.0, le=3600.0)
+    RELATIONSHIP_EMBEDDING_LLM_UNLOAD_POLL_SECONDS: float = Field(default=1.0, ge=0.1, le=60.0)
     EMBEDDING_ENDPOINT: str = Field(default="http://localhost:11434/api/embeddings")
     EMBEDDING_MODEL: str | None = Field(default=None)
     EMBEDDING_TIMEOUT_SECONDS: int = Field(default=120, ge=5, le=1800)

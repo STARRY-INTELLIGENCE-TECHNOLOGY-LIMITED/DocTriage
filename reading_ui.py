@@ -191,7 +191,7 @@ HTML_PAGE = r"""<!doctype html>
           <label class="advanced-run"><span class="label-row"><span data-i18n="content_hash">内容 Hash</span> <span class="help" tabindex="0" data-i18n-tip="tip_content_hash" data-tip="变更检测除了时间和大小，还计算文件内容哈希。更准，但大目录和大文件会更慢。">?</span></span><input id="run_content_hash" type="checkbox" /></label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="mine_relationships">挖掘关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_mine_relationships" data-tip="在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。">?</span></span><input id="run_mine_relationships" type="checkbox" /></label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="title_citations">标题引用</span> <span class="help" tabindex="0" data-i18n-tip="tip_title_citations" data-tip="启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。">?</span></span><input id="run_relationship_text" type="checkbox" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="embedding_relationships">Embedding 关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_embedding_relationships" data-tip="给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。">?</span></span><div class="toggle-inline"><input id="run_relationship_embeddings" type="checkbox" onchange="syncEmbeddingModelVisibility()" /><input id="run_embedding_model" type="text" placeholder="EMBEDDING_MODEL，可留空沿用主模型" data-i18n-placeholder="ph_embedding_model" style="display:none;" disabled /></div></label>
+          <label class="advanced-run"><span class="label-row"><span data-i18n="embedding_relationships">Embedding 关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_embedding_relationships" data-tip="给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。">?</span></span><div class="toggle-inline"><input id="run_relationship_embeddings" type="checkbox" onchange="syncEmbeddingModelVisibility()" /><input id="run_embedding_model" type="text" placeholder="向量模型可留空沿用主模型" data-i18n-placeholder="ph_embedding_model" style="display:none;" disabled /></div></label>
         </div>
         <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
           <select id="run_template">
@@ -587,7 +587,7 @@ HTML_PAGE = r"""<!doctype html>
         ph_text_search: "名称/路径/备注",
         ph_graph_search: "路径/分类/标签",
         ph_limit: "空为全量",
-        ph_embedding_model: "EMBEDDING_MODEL，可留空沿用主模型"
+        ph_embedding_model: "向量模型可留空沿用主模型"
       },
       en: {
         app_title: "DocTriage Console",
@@ -844,7 +844,7 @@ HTML_PAGE = r"""<!doctype html>
         ph_text_search: "Name/path/note",
         ph_graph_search: "Path/category/tag",
         ph_limit: "empty means all",
-        ph_embedding_model: "EMBEDDING_MODEL, empty reuses main model"
+        ph_embedding_model: "empty reuses main model"
       }
     };
     let uiLanguage = localStorage.getItem("doctriage_ui_language") || "zh-CN";
