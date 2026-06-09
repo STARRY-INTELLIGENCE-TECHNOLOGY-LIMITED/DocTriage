@@ -10,7 +10,6 @@ import sys
 import threading
 import time
 import urllib.parse
-import uuid
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -98,6 +97,7 @@ HTML_PAGE = r"""<!doctype html>
     section.active { display: block; }
     .panel { background: #fff; border: 1px solid var(--line); padding: 12px; margin-bottom: 12px; }
     .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .stats .pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
     .summary-bar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
     .summary-bar .stats { margin-bottom: 0; }
     .graph-layout { display: grid; grid-template-columns: minmax(260px, 320px) minmax(460px, 1.6fr) minmax(280px, 0.9fr); gap: 12px; align-items: start; }
@@ -135,6 +135,7 @@ HTML_PAGE = r"""<!doctype html>
     td.name { max-width: 420px; word-break: break-word; }
     .doc-name { display: inline; font-weight: 600; color: var(--text); }
     .doc-name.has-summary { cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
+    .doc-path { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; user-select: text; }
     .muted { color: var(--muted); }
     .actions { display: flex; gap: 4px; flex-wrap: wrap; min-width: 300px; }
     .actions button { height: 28px; font-size: 12px; padding: 0 6px; }
@@ -224,7 +225,6 @@ HTML_PAGE = r"""<!doctype html>
         <div id="analysisStats" class="stats"></div>
         <div class="progress"><div id="analysisBar"></div></div>
         <pre id="analysisLog"></pre>
-        <div id="runHistory" class="stats"></div>
       </div>
     </section>
     <section id="section-reading">
@@ -1566,22 +1566,13 @@ HTML_PAGE = r"""<!doctype html>
       $("start_analysis_btn").disabled = !!payload.running;
       $("stop_analysis_btn").disabled = !payload.running;
       $("reset_analysis_btn").disabled = !!payload.running;
-      const history = payload.run_history || [];
-      $("runHistory").innerHTML = history.slice(-6).reverse().map(item =>
-        `<span class="pill">${escapeHtml((item.started_at || '').replace('T',' ').slice(0,19))} PID ${escapeHtml(item.pid || '')} ${escapeHtml(item.template || '')} ${item.concurrency ? escapeHtml(tr("concurrency_pill") + " " + item.concurrency) : ""}</span>`
-      ).join("");
-    }
-
-    function shortText(value, maxLength) {
-      const text = String(value || "");
-      return text.length <= maxLength ? text : text.slice(0, maxLength - 1) + "…";
     }
 
     function activityPillText(latest) {
       if (!latest || !latest.label) return "";
       const label = localizedActivityLabel(latest.label);
       const detail = localizedActivityDetail(latest.detail || "").trim();
-      return detail ? `${label}: ${shortText(detail, 72)}` : label;
+      return detail ? `${label}: ${detail}` : label;
     }
 
     function localizedPhase(phase) {
@@ -2262,13 +2253,13 @@ HTML_PAGE = r"""<!doctype html>
       const sorted = [...rows];
       const text = value => String(value || "").toLowerCase();
       const num = value => Number(value || 0);
-      const sourcePath = row => text(row.relative_path || row.source_path);
+      const sourcePath = row => text(row.source_path || row.relative_path);
       const sourceMtime = row => Number(row.source_mtime_epoch || 0);
       const comparators = {
         quality_desc: (a, b) => num(b.quality) - num(a.quality) || text(a.relative_path).localeCompare(text(b.relative_path)),
         quality_asc: (a, b) => num(a.quality) - num(b.quality) || text(a.relative_path).localeCompare(text(b.relative_path)),
-        path_asc: (a, b) => text(a.relative_path).localeCompare(text(b.relative_path)),
-        path_desc: (a, b) => text(b.relative_path).localeCompare(text(a.relative_path)),
+        path_asc: (a, b) => sourcePath(a).localeCompare(sourcePath(b)),
+        path_desc: (a, b) => sourcePath(b).localeCompare(sourcePath(a)),
         source_path_asc: (a, b) => sourcePath(a).localeCompare(sourcePath(b)),
         source_path_desc: (a, b) => sourcePath(b).localeCompare(sourcePath(a)),
         source_mtime_desc: (a, b) => sourceMtime(b) - sourceMtime(a) || sourcePath(a).localeCompare(sourcePath(b)),
@@ -2376,6 +2367,7 @@ HTML_PAGE = r"""<!doctype html>
           <td>${formatSensitivityPublic(row)}</td>
           <td class="name">
             <span class="doc-name ${explanation ? "has-summary" : ""}" tabindex="${explanation ? "0" : "-1"}" data-tip="${escapeAttrValue(explanation)}">${escapeHtml(row.relative_path || "")}</span>
+            ${row.source_path ? `<span class="doc-path">${escapeHtml(row.source_path)}</span>` : ""}
             ${row.note ? `<br><span class="muted">${escapeHtml(row.note)}</span>` : ""}
           </td>
           <td>${escapeHtml(row.source_mtime_label || "")}${row.source_size_label ? `<br><span class="muted">${escapeHtml(row.source_size_label)}</span>` : ""}</td>
@@ -3529,8 +3521,8 @@ def sort_rows(rows: list[dict[str, Any]], sort_key: str) -> list[dict[str, Any]]
     key_map = {
         "quality_desc": lambda row: (-int(row.get("quality") or 0), row.get("relative_path") or ""),
         "quality_asc": lambda row: (int(row.get("quality") or 0), row.get("relative_path") or ""),
-        "path_asc": lambda row: (str(row.get("relative_path") or ""),),
-        "path_desc": lambda row: (str(row.get("relative_path") or ""),),
+        "path_asc": lambda row: (source_sort_path(row),),
+        "path_desc": lambda row: (source_sort_path(row),),
         "source_path_asc": lambda row: (source_sort_path(row),),
         "source_path_desc": lambda row: (source_sort_path(row),),
         "source_mtime_desc": lambda row: (-source_mtime_sort_value(row), source_sort_path(row)),
@@ -3561,7 +3553,7 @@ def sort_rows(rows: list[dict[str, Any]], sort_key: str) -> list[dict[str, Any]]
 
 
 def source_sort_path(row: dict[str, Any]) -> str:
-    return str(row.get("relative_path") or row.get("source_path") or "").lower()
+    return str(row.get("source_path") or row.get("relative_path") or "").lower()
 
 
 def source_mtime_sort_value(row: dict[str, Any]) -> float:
@@ -3666,24 +3658,9 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
             )
         app_state.process = process
         app_state.process_command = command
-        run_record = append_run_history(
-            output_root,
-            {
-                "run_id": uuid.uuid4().hex,
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "pid": process.pid,
-                "template": str(payload.get("template") or ""),
-                "source_dir": str(source_dir),
-                "output_root": str(output_root),
-                "command": command,
-                "plan_only": is_plan_only_command(command),
-                "concurrency": command_option_value(command, "--concurrency") or "",
-            },
-        )
         return {
             "started": True,
             "pid": process.pid,
-            "run_id": run_record["run_id"],
             "command": command,
             "plan_only": is_plan_only_command(command),
             "source_dir": str(source_dir),
@@ -3722,10 +3699,6 @@ def infer_source_dir_for_output(app_state: AppState, output_root: Path) -> Path:
     if active_paths is not None and active_paths.output_root.resolve() == output_root:
         return active_paths.source_dir
 
-    history_source = infer_source_dir_from_run_history(output_root)
-    if history_source is not None:
-        return history_source
-
     decision_source = infer_source_dir_from_decisions(output_root)
     if decision_source is not None:
         return decision_source
@@ -3733,14 +3706,6 @@ def infer_source_dir_for_output(app_state: AppState, output_root: Path) -> Path:
     if running and active_paths is not None:
         return active_paths.source_dir
     return output_root
-
-
-def infer_source_dir_from_run_history(output_root: Path) -> Path | None:
-    for record in reversed(load_run_history(output_root, limit=20)):
-        value = str(record.get("source_dir") or "").strip()
-        if value:
-            return Path(value).expanduser().resolve()
-    return None
 
 
 def infer_source_dir_from_decisions(output_root: Path) -> Path | None:
@@ -3973,19 +3938,6 @@ def run_lock_status(paths: ReadingPaths) -> dict[str, Any]:
     }
 
 
-def find_command_for_pid(records: list[dict[str, Any]], pid: int | None) -> list[str] | None:
-    for record in reversed(records):
-        record_pid = coerce_pid(record.get("pid"))
-        if pid is not None and record_pid != pid:
-            continue
-        command = record.get("command")
-        if isinstance(command, list) and all(isinstance(item, str) for item in command):
-            return command
-    if pid is not None:
-        return find_command_for_pid(records, None)
-    return None
-
-
 def terminate_process_id(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -4206,24 +4158,18 @@ def analysis_status(
                 "latest_activity": {"label": "", "detail": "", "line": ""},
             },
             "run_summary": {},
-            "run_history": [],
         }
 
-    run_history = load_run_history(paths.output_root, limit=20)
     active_pid = find_active_run_pid(paths)
     running = local_running or active_pid is not None
     pid = local_pid if local_running else active_pid
     if running and not local_running:
         return_code = None
-    if command is None:
-        command = find_command_for_pid(run_history, pid)
-    effective_concurrency = infer_effective_concurrency(command, run_history)
+    effective_concurrency = infer_effective_concurrency(command)
     progress = read_json_file(paths.progress_path)
     run_summary = read_json_file(paths.output_root / "_state" / "run_summary.json")
     log_tail = read_text_tail(paths.application_log_path, max_lines=80)
-    plan_only = infer_plan_only_mode(command, run_history, progress, run_summary)
-    if plan_only:
-        log_tail = redact_plan_only_log_tail(log_tail)
+    plan_only = infer_plan_only_mode(command, progress, run_summary)
     decisions_exists = paths.decisions_path.exists()
     lock_status = run_lock_status(paths)
 
@@ -4249,46 +4195,13 @@ def analysis_status(
         "log_tail": log_tail,
         "decisions_exists": decisions_exists,
         "run_lock": lock_status,
-        "activity": build_analysis_activity(paths, log_tail, plan_only=plan_only),
+        "activity": build_analysis_activity(paths, log_tail),
         "run_summary": run_summary,
-        "run_history": run_history,
     }
-
-
-def run_history_path(output_root: Path) -> Path:
-    return output_root / "_state" / "ui_runs.jsonl"
-
-
-def append_run_history(output_root: Path, record: dict[str, Any]) -> dict[str, Any]:
-    path = run_history_path(output_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8", errors="ignore") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    return record
-
-
-def load_run_history(output_root: Path, limit: int) -> list[dict[str, Any]]:
-    path = run_history_path(output_root)
-    if not path.exists():
-        return []
-    records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8", errors="ignore") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(payload, dict):
-                records.append(payload)
-    return records[-limit:]
 
 
 def infer_plan_only_mode(
     command: list[str] | None,
-    run_history: list[dict[str, Any]],
     progress: dict[str, Any] | None = None,
     run_summary: dict[str, Any] | None = None,
 ) -> bool:
@@ -4297,36 +4210,14 @@ def infer_plan_only_mode(
     for payload in (progress, run_summary):
         if isinstance(payload, dict) and isinstance(payload.get("plan_only"), bool):
             return bool(payload["plan_only"])
-    for record in reversed(run_history):
-        value = record.get("plan_only")
-        if isinstance(value, bool):
-            return value
-        record_command = record.get("command")
-        if isinstance(record_command, list) and all(
-            isinstance(item, str) for item in record_command
-        ):
-            return is_plan_only_command(record_command)
     return False
 
 
-def infer_effective_concurrency(
-    command: list[str] | None, run_history: list[dict[str, Any]]
-) -> str:
+def infer_effective_concurrency(command: list[str] | None) -> str:
     if command:
         value = command_option_value(command, "--concurrency")
         if value:
             return value
-    for record in reversed(run_history):
-        value = str(record.get("concurrency") or "").strip()
-        if value:
-            return value
-        record_command = record.get("command")
-        if isinstance(record_command, list) and all(
-            isinstance(item, str) for item in record_command
-        ):
-            value = command_option_value(record_command, "--concurrency")
-            if value:
-                return value
     return ""
 
 
@@ -4458,7 +4349,7 @@ def count_nonempty_lines(path: Path) -> int:
         return 0
 
 
-def latest_log_activity(log_tail: str, *, plan_only: bool = False) -> dict[str, str]:
+def latest_log_activity(log_tail: str) -> dict[str, str]:
     lines = [line.strip() for line in log_tail.splitlines() if line.strip()]
     if not lines:
         return {"label": "", "detail": "", "line": ""}
@@ -4480,16 +4371,10 @@ def latest_log_activity(log_tail: str, *, plan_only: bool = False) -> dict[str, 
         }
     if message.startswith("Planned "):
         detail = message.removeprefix("Planned ").strip()
-        if plan_only:
-            detail = plan_only_activity_detail(detail)
-        line = selected
-        if plan_only:
-            line_prefix = selected.split("Planned ", 1)[0] if "Planned " in selected else ""
-            line = f"{line_prefix}Planned {detail}" if line_prefix else detail
         return {
             "label": "已规划",
             "detail": detail,
-            "line": line,
+            "line": selected,
         }
     if message.startswith("Progress "):
         return {"label": "进度写入", "detail": "", "line": selected}
@@ -4500,31 +4385,7 @@ def latest_log_activity(log_tail: str, *, plan_only: bool = False) -> dict[str, 
     return {"label": "最近日志", "detail": message, "line": selected}
 
 
-def plan_only_activity_detail(detail: str) -> str:
-    if " -> " not in detail:
-        return detail
-    source, suffix = detail.split(" -> ", 1)
-    metadata_start = suffix.find(" [")
-    metadata = suffix[metadata_start:] if metadata_start >= 0 else ""
-    return f"{source}{metadata}".strip()
-
-
-def redact_plan_only_log_tail(log_tail: str) -> str:
-    redacted_lines: list[str] = []
-    for line in log_tail.splitlines():
-        marker = " - Planned "
-        if marker not in line or " -> " not in line:
-            redacted_lines.append(line)
-            continue
-        prefix, detail = line.split(marker, 1)
-        redacted_lines.append(f"{prefix}{marker}{plan_only_activity_detail(detail)}")
-    trailing_newline = "\n" if log_tail.endswith("\n") and redacted_lines else ""
-    return "\n".join(redacted_lines) + trailing_newline
-
-
-def build_analysis_activity(
-    paths: ReadingPaths, log_tail: str, *, plan_only: bool = False
-) -> dict[str, Any]:
+def build_analysis_activity(paths: ReadingPaths, log_tail: str) -> dict[str, Any]:
     return {
         "state_counts": {
             "decisions": count_nonempty_lines(paths.decisions_path),
@@ -4538,7 +4399,7 @@ def build_analysis_activity(
             "progress": file_activity(paths.progress_path),
             "log": file_activity(paths.application_log_path),
         },
-        "latest_activity": latest_log_activity(log_tail, plan_only=plan_only),
+        "latest_activity": latest_log_activity(log_tail),
     }
 
 

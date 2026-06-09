@@ -1592,9 +1592,8 @@ def _drain_completed_scores(
                 if context.retry_of_failed:
                     stats.record_retry_success()
                 LOGGER.info(
-                    "Planned %s -> %s [quality=%s category=%s]",
-                    context.source_path.name,
-                    target_path,
+                    "Planned %s [quality=%s category=%s]",
+                    context.source_path,
                     score.quality,
                     score.category,
                 )

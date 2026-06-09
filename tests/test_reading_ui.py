@@ -8,14 +8,12 @@ from reading_tracker import ReadingPaths
 from reading_ui import (
     AppState,
     analysis_status,
-    append_run_history,
     build_analysis_command,
     build_failure_rows,
     build_relationship_payload,
     build_state_payload,
     config_payload,
     infer_source_dir_from_decisions,
-    load_run_history,
     mark_document,
     mark_documents,
     open_failure_document,
@@ -486,13 +484,24 @@ def test_reading_ui_sort_rows_by_public_suitability() -> None:
 
 def test_reading_ui_sort_rows_by_path_desc() -> None:
     rows = [
-        {"relative_path": "a.md", "quality": 90},
-        {"relative_path": "b.md", "quality": 80},
+        {"relative_path": "z.md", "source_path": "C:/Docs/AuthorA/z.md", "quality": 90},
+        {"relative_path": "a.md", "source_path": "C:/Docs/AuthorB/a.md", "quality": 80},
     ]
 
     sorted_rows = sort_rows(rows, "path_desc")
 
-    assert [row["relative_path"] for row in sorted_rows] == ["b.md", "a.md"]
+    assert [row["relative_path"] for row in sorted_rows] == ["a.md", "z.md"]
+
+
+def test_reading_ui_source_path_sort_prefers_full_source_path() -> None:
+    rows = [
+        {"relative_path": "z.md", "source_path": "C:/Docs/AuthorB/z.md"},
+        {"relative_path": "a.md", "source_path": "C:/Docs/AuthorA/a.md"},
+    ]
+
+    sorted_rows = sort_rows(rows, "source_path_asc")
+
+    assert [row["relative_path"] for row in sorted_rows] == ["a.md", "z.md"]
 
 
 def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
@@ -604,8 +613,7 @@ def test_start_analysis_redirects_child_output_to_application_log(
     assert isinstance(env, dict)
     assert env["PYTHONUTF8"] == "1"
     assert env["PYTHONIOENCODING"] == "utf-8"
-    history = load_run_history(output_root, limit=1)
-    assert history[0]["concurrency"] == "3"
+    assert not (output_root / "_state" / "ui_runs.jsonl").exists()
 
 
 def test_start_relationship_task_uses_graph_output_without_mutating_active_paths(
@@ -707,10 +715,6 @@ def test_analysis_status_reports_running_from_run_lock(tmp_path: Path, monkeypat
         json.dumps({"pid": 24680}, ensure_ascii=False),
         encoding="utf-8",
     )
-    append_run_history(
-        output_root,
-        {"run_id": "1", "pid": 24680, "command": ["python", "main.py"]},
-    )
     monkeypatch.setattr(reading_ui, "is_process_alive", lambda pid: pid == 24680)
 
     payload = analysis_status(
@@ -719,7 +723,7 @@ def test_analysis_status_reports_running_from_run_lock(tmp_path: Path, monkeypat
 
     assert payload["running"] is True
     assert payload["pid"] == 24680
-    assert payload["command"] == ["python", "main.py"]
+    assert payload["command"] is None
 
 
 def test_ui_process_probe_handles_non_utf8_tasklist_output(monkeypatch) -> None:
@@ -914,16 +918,6 @@ def test_mark_documents_appends_multiple_events(tmp_path: Path) -> None:
 
     assert result["count"] == 2
     assert (state_dir / "reading_status.jsonl").read_text(encoding="utf-8").count("\n") == 2
-
-
-def test_run_history_round_trip(tmp_path: Path) -> None:
-    output_root = tmp_path / "output"
-    append_run_history(output_root, {"run_id": "1", "pid": 1})
-    append_run_history(output_root, {"run_id": "2", "pid": 2})
-
-    history = load_run_history(output_root, limit=1)
-
-    assert history == [{"run_id": "2", "pid": 2}]
 
 
 def test_set_reading_output_infers_source_from_decisions(tmp_path: Path) -> None:
@@ -1213,11 +1207,14 @@ def test_reading_table_uses_name_column_with_summary_tooltip() -> None:
     assert 'setSort(\'path\')"><span data-i18n="table_name">名称' in html
     assert "doc-name" in html
     assert '${escapeHtml(row.relative_path || "")}</span>' in html
+    assert "doc-path" in html
+    assert '${row.source_path ? `<span class="doc-path">${escapeHtml(row.source_path)}</span>` : ""}' in html
     assert "function rowExplanation(row)" in html
     assert 'data-tip="${escapeAttrValue(explanation)}"' in html
     assert 'tr("explain_reason")' in html
     assert "EXPLANATION_DIMENSIONS" in html
     assert "bindSummaryTooltips();" in html
+    assert "path: sortKey === \"source_path_asc\" || sortKey === \"path_asc\" ? \"source_path_desc\" : \"source_path_asc\"" in html
 
 
 def test_reading_table_exports_filtered_rows_with_explainability_fields() -> None:
@@ -1245,7 +1242,7 @@ def test_analysis_status_pills_use_i18n_labels() -> None:
     html = reading_ui.HTML_PAGE
 
     render_start = html.index("function renderAnalysis(payload)")
-    render_end = html.index("function shortText", render_start)
+    render_end = html.index("function activityPillText", render_start)
     render_body = html[render_start:render_end]
 
     assert 'tr("plan_only_pill")' in render_body
@@ -1272,7 +1269,7 @@ def test_activity_pill_omits_empty_detail_suffix() -> None:
     function_body = html[function_start:function_end]
 
     assert "localizedActivityLabel(latest.label)" in function_body
-    assert "return detail ? `${label}: ${shortText(detail, 72)}` : label;" in function_body
+    assert "return detail ? `${label}: ${detail}` : label;" in function_body
     assert 'localizedActivityDetail(latest.detail || "").trim()' in function_body
 
 
@@ -1758,7 +1755,7 @@ def test_read_text_tail_decodes_legacy_gbk_log_lines(tmp_path: Path) -> None:
     assert "服务框架源码学习一@Provider" in text
 
 
-def test_analysis_status_redacts_plan_only_target_paths(tmp_path: Path) -> None:
+def test_analysis_status_shows_plan_only_source_paths(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"
     state_dir = output_root / "_state"
@@ -1784,12 +1781,12 @@ def test_analysis_status_redacts_plan_only_target_paths(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-    append_run_history(
-        output_root,
-        {"pid": 1, "command": ["python", "main.py", "--plan-only"]},
+    (state_dir / "progress.json").write_text(
+        json.dumps({"plan_only": True, "completed": 1, "total": 1}, ensure_ascii=False),
+        encoding="utf-8",
     )
     (log_dir / "doctriage.log").write_text(
-        f"2026-06-02 19:23:29,991 [INFO] doctriage - Planned doc.md -> {target_path} [quality=80 category=Design]\n",
+        f"2026-06-02 19:23:29,991 [INFO] doctriage - Planned {document} [quality=80 category=Design]\n",
         encoding="utf-8",
     )
 
@@ -1798,11 +1795,13 @@ def test_analysis_status_redacts_plan_only_target_paths(tmp_path: Path) -> None:
     )
 
     assert payload["plan_only"] is True
+    assert str(document) in payload["log_tail"]
     assert "HQ" not in payload["log_tail"]
     assert str(target_path) not in payload["log_tail"]
     assert payload["activity"]["latest_activity"]["detail"] == (
-        "doc.md [quality=80 category=Design]"
+        f"{document} [quality=80 category=Design]"
     )
+    assert str(document) in payload["activity"]["latest_activity"]["line"]
     assert str(target_path) not in payload["activity"]["latest_activity"]["line"]
 
 
@@ -1814,16 +1813,26 @@ def test_analysis_status_reports_effective_concurrency(tmp_path: Path) -> None:
     source_dir.mkdir()
     state_dir.mkdir(parents=True)
     log_dir.mkdir(parents=True)
-    append_run_history(
-        output_root,
-        {
-            "pid": 1,
-            "command": ["python", "main.py", "--concurrency", "4"],
-        },
+    command = [
+        "python",
+        "main.py",
+        "--output-root",
+        str(output_root.resolve()),
+        "--concurrency",
+        "4",
+    ]
+    process = type(
+        "FakeProcess",
+        (),
+        {"pid": 1, "poll": lambda self: None},
     )
 
     payload = analysis_status(
-        AppState(paths=ReadingPaths(source_dir=source_dir, output_root=output_root))
+        AppState(
+            paths=ReadingPaths(source_dir=source_dir, output_root=output_root),
+            process=process(),
+            process_command=command,
+        )
     )
 
     assert payload["effective_concurrency"] == "4"
@@ -1853,7 +1862,7 @@ def test_analysis_status_infers_plan_only_from_progress(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (log_dir / "doctriage.log").write_text(
-        f"2026-06-02 19:23:29,991 [INFO] doctriage - Planned doc.md -> {target_path} [quality=80 category=Design]\n",
+        f"2026-06-02 19:23:29,991 [INFO] doctriage - Planned {document} [quality=80 category=Design]\n",
         encoding="utf-8",
     )
 
@@ -1862,6 +1871,7 @@ def test_analysis_status_infers_plan_only_from_progress(tmp_path: Path) -> None:
     )
 
     assert payload["plan_only"] is True
+    assert str(document) in payload["log_tail"]
     assert str(target_path) not in payload["log_tail"]
 
 
