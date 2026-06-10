@@ -25,8 +25,10 @@ from reading_ui import (
     set_reading_output,
     sort_rows,
     start_analysis,
+    start_early_relationships,
     start_relationship_task,
     stop_analysis,
+    stop_relationship_task,
     latest_log_activity,
 )
 
@@ -514,8 +516,8 @@ def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
             "concurrency": "3",
             "limit": "10",
             "plan_only": True,
-            "no_ocr": True,
-            "skip_manifest_analysis": True,
+            "ocr_enabled": True,
+            "manifest_analysis": True,
             "document_summary": True,
             "mine_relationships": True,
             "relationship_use_text_citations": True,
@@ -537,12 +539,24 @@ def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
     assert "3" in command
     assert "--limit" in command
     assert "--plan-only" in command
-    assert "--no-ocr" in command
-    assert "--skip-manifest-analysis" in command
+    assert "--ocr" in command
+    assert "--no-ocr" not in command
+    assert "--manifest-analysis" in command
+    assert "--skip-manifest-analysis" not in command
     assert "--document-summary" in command
     assert "--mine-relationships" in command
     assert "--relationship-use-text-citations" in command
     assert "--relationship-use-embeddings" in command
+
+    disabled_command = build_analysis_command(
+        {"ocr_enabled": False, "manifest_analysis": False},
+        tmp_path / "source",
+        tmp_path / "output",
+    )
+    assert "--no-ocr" in disabled_command
+    assert "--skip-manifest-analysis" in disabled_command
+    assert "--ocr" not in disabled_command
+    assert "--manifest-analysis" not in disabled_command
 
 
 def test_relationship_task_command_includes_embedding_options(tmp_path: Path) -> None:
@@ -570,6 +584,40 @@ def test_relationship_task_command_includes_embedding_options(tmp_path: Path) ->
     assert "--concurrency" in command
     assert "3" in command
     assert "--use-text-citations" in command
+
+
+def test_relationship_task_command_requires_embedding_model(tmp_path: Path) -> None:
+    paths = ReadingPaths(
+        source_dir=tmp_path / "source",
+        output_root=tmp_path / "output",
+    )
+
+    with pytest.raises(ValueError, match="Embedding model is required"):
+        relationship_task_command(
+            "mine",
+            {
+                "llm_endpoint": "http://localhost:11434/api/generate",
+                "llm_model": "local-model",
+                "relationship_use_embeddings": True,
+            },
+            paths,
+        )
+
+
+def test_build_analysis_command_requires_embedding_model_for_embedding_relationships(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="Embedding model is required"):
+        build_analysis_command(
+            {
+                "llm_endpoint": "http://localhost:11434/api/generate",
+                "llm_model": "local-model",
+                "mine_relationships": True,
+                "relationship_use_embeddings": True,
+            },
+            tmp_path / "source",
+            tmp_path / "output",
+        )
 
 
 def test_start_analysis_redirects_child_output_to_application_log(
@@ -676,6 +724,90 @@ def test_start_relationship_task_uses_graph_output_without_mutating_active_paths
     assert app_state.paths is not None
     assert app_state.paths.source_dir == analysis_source
     assert app_state.paths.output_root == analysis_output
+
+
+def test_start_analysis_preempts_running_relationship_task_when_requested(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    relationship_output = tmp_path / "relationship-output"
+    source_dir.mkdir()
+    output_root.mkdir()
+    relationship_output.mkdir()
+
+    class FakeRelationshipProcess:
+        pid = 24680
+
+        def __init__(self):
+            self.running = True
+            self.terminated = False
+
+        def poll(self):
+            return None if self.running else 0
+
+        def terminate(self):
+            self.terminated = True
+            self.running = False
+
+        def wait(self, timeout=None):
+            self.running = False
+            return 0
+
+    class FakeAnalysisProcess:
+        pid = 24681
+
+        def poll(self):
+            return None
+
+    popen_call: dict[str, object] = {}
+
+    def fake_popen(command, **kwargs):
+        popen_call["command"] = command
+        popen_call["stdout_name"] = kwargs["stdout"].name
+        return FakeAnalysisProcess()
+
+    relationship_process = FakeRelationshipProcess()
+    app_state = AppState(
+        paths=ReadingPaths(source_dir=source_dir, output_root=output_root),
+        relationship_process=relationship_process,
+        relationship_process_kind="mine",
+        relationship_process_command=[
+            "python",
+            "relationship_miner.py",
+            "--source-dir",
+            str(source_dir.resolve()),
+            "--output-root",
+            str(relationship_output.resolve()),
+            "--embedding-model",
+            "nomic-embed-text",
+        ],
+    )
+    monkeypatch.setattr(reading_ui.subprocess, "Popen", fake_popen)
+
+    result = start_analysis(
+        app_state,
+        {
+            "source_dir": str(source_dir),
+            "output_root": str(output_root),
+            "llm_endpoint": "http://localhost:11434/api/generate",
+            "llm_model": "local-model",
+            "preempt_relationships": True,
+        },
+    )
+
+    command = popen_call["command"]
+    assert relationship_process.terminated is True
+    assert result["started"] is True
+    assert result["pid"] == 24681
+    assert result["relationship_stop"] == {
+        "stopped": True,
+        "running": False,
+        "pid": 24680,
+        "kind": "mine",
+    }
+    assert command[command.index("--embedding-model") + 1] == "nomic-embed-text"
+    assert popen_call["stdout_name"] == str(output_root / "_logs" / "doctriage.log")
 
 
 def test_start_analysis_rejects_existing_locked_run(tmp_path: Path, monkeypatch) -> None:
@@ -793,6 +925,301 @@ def test_stop_analysis_waits_for_ui_child_process_to_exit(tmp_path: Path) -> Non
 
     assert process.terminated is True
     assert payload == {"stopped": True, "running": False, "pid": 97531}
+
+
+def test_start_early_relationships_stops_analysis_and_starts_title_relationship_mining(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    document = source_dir / "doc.md"
+    source_dir.mkdir()
+    document.write_text("doc", encoding="utf-8")
+    (output_root / "_state").mkdir(parents=True)
+    (output_root / "_state" / "decisions.jsonl").write_text(
+        json.dumps(
+            {
+                "source_path": str(document),
+                "relative_path": "doc.md",
+                "status": "planned",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeAnalysisProcess:
+        pid = 13524
+
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return 0 if self.terminated else None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            self.terminated = True
+            return 0
+
+    class FakeRelationshipProcess:
+        def __init__(self, pid: int):
+            self.pid = pid
+            self.running = True
+
+        def poll(self):
+            return None if self.running else 0
+
+    popen_calls: list[dict[str, object]] = []
+
+    def fake_popen(command, **kwargs):
+        process = FakeRelationshipProcess(24679 + len(popen_calls) + 1)
+        popen_calls.append(
+            {
+                "command": command,
+                "stdout_name": kwargs["stdout"].name,
+                "process": process,
+            }
+        )
+        return process
+
+    monkeypatch.setattr(reading_ui.subprocess, "Popen", fake_popen)
+
+    analysis_process = FakeAnalysisProcess()
+    app_state = AppState(
+        paths=ReadingPaths(source_dir=source_dir, output_root=output_root),
+        process=analysis_process,
+        process_command=[
+            "python",
+            "main.py",
+            "--source-dir",
+            str(source_dir.resolve()),
+            "--output-root",
+            str(output_root.resolve()),
+        ],
+    )
+
+    result = start_early_relationships(
+        app_state,
+        {
+            "source_dir": str(source_dir),
+            "output_root": str(output_root),
+            "llm_endpoint": "http://localhost:11434/api/generate",
+            "llm_model": "local-model",
+            "mine_relationships": False,
+            "relationship_use_text_citations": False,
+            "relationship_use_embeddings": False,
+        },
+    )
+
+    relationship_call = popen_calls[0]
+    command = relationship_call["command"]
+    assert analysis_process.terminated is True
+    assert result["started"] is True
+    assert result["stop"] == {"stopped": True, "running": False, "pid": 13524}
+    assert result["relationship"]["pid"] == 24680
+    assert app_state.relationship_process_kind == "mine"
+    assert any(str(part).endswith("relationship_miner.py") for part in command)
+    assert "--use-text-citations" in command
+    assert "--use-embeddings" not in command
+    assert command[command.index("--llm-model") + 1] == "local-model"
+    assert relationship_call["stdout_name"] == str(output_root / "_logs" / "doctriage.log")
+
+    with pytest.raises(RuntimeError, match="relationship task"):
+        start_analysis(
+            app_state,
+            {
+                "source_dir": str(source_dir),
+                "output_root": str(output_root),
+                "llm_endpoint": "http://localhost:11434/api/generate",
+            },
+        )
+
+    relationship_call["process"].running = False
+    resume_result = start_analysis(
+        app_state,
+        {
+            "source_dir": str(source_dir),
+            "output_root": str(output_root),
+            "llm_endpoint": "http://localhost:11434/api/generate",
+        },
+    )
+    resume_command = popen_calls[1]["command"]
+
+    assert resume_result["started"] is True
+    assert resume_result["pid"] == 24681
+    assert "--force-reprocess" not in resume_command
+    assert (output_root / "_state" / "decisions.jsonl").exists()
+
+
+def test_start_early_relationships_uses_embedding_when_selected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    document = source_dir / "doc.md"
+    source_dir.mkdir()
+    document.write_text("doc", encoding="utf-8")
+    (output_root / "_state").mkdir(parents=True)
+    (output_root / "_state" / "decisions.jsonl").write_text(
+        json.dumps(
+            {
+                "source_path": str(document),
+                "relative_path": "doc.md",
+                "status": "planned",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeRelationshipProcess:
+        pid = 24680
+
+        def poll(self):
+            return None
+
+    popen_call: dict[str, object] = {}
+
+    def fake_popen(command, **kwargs):
+        popen_call["command"] = command
+        popen_call["stdout_name"] = kwargs["stdout"].name
+        return FakeRelationshipProcess()
+
+    monkeypatch.setattr(reading_ui.subprocess, "Popen", fake_popen)
+
+    result = start_early_relationships(
+        AppState(paths=ReadingPaths(source_dir=source_dir, output_root=output_root)),
+        {
+            "source_dir": str(source_dir),
+            "output_root": str(output_root),
+            "llm_endpoint": "http://localhost:11434/api/generate",
+            "llm_model": "local-model",
+            "embedding_model": "nomic-embed-text",
+            "relationship_use_embeddings": True,
+            "relationship_use_text_citations": False,
+        },
+    )
+
+    command = popen_call["command"]
+    assert result["started"] is True
+    assert "--use-text-citations" in command
+    assert "--use-embeddings" in command
+    assert command[command.index("--embedding-model") + 1] == "nomic-embed-text"
+
+
+def test_start_early_relationships_validates_embedding_model_before_stopping_analysis(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    document = source_dir / "doc.md"
+    source_dir.mkdir()
+    document.write_text("doc", encoding="utf-8")
+    (output_root / "_state").mkdir(parents=True)
+    (output_root / "_state" / "decisions.jsonl").write_text(
+        json.dumps({"source_path": str(document), "relative_path": "doc.md"}),
+        encoding="utf-8",
+    )
+
+    class FakeAnalysisProcess:
+        pid = 13524
+
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+    process = FakeAnalysisProcess()
+    app_state = AppState(
+        paths=ReadingPaths(source_dir=source_dir, output_root=output_root),
+        process=process,
+        process_command=[
+            "python",
+            "main.py",
+            "--source-dir",
+            str(source_dir.resolve()),
+            "--output-root",
+            str(output_root.resolve()),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Embedding model is required"):
+        start_early_relationships(
+            app_state,
+            {
+                "source_dir": str(source_dir),
+                "output_root": str(output_root),
+                "llm_endpoint": "http://localhost:11434/api/generate",
+                "llm_model": "local-model",
+                "relationship_use_embeddings": True,
+            },
+        )
+
+    assert process.terminated is False
+
+
+def test_stop_relationship_task_preserves_embedding_resume_outputs(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    relationship_dir = output_root / "_relationships"
+    source_dir.mkdir()
+    relationship_dir.mkdir(parents=True)
+    cache_path = relationship_dir / "embedding_cache.jsonl"
+    progress_path = relationship_dir / "embedding_progress.json"
+    cache_path.write_text('{"key":"cached","embedding":[1.0]}\n', encoding="utf-8")
+    progress_path.write_text(
+        json.dumps({"enabled": True, "phase": "embedding", "generated": 1}),
+        encoding="utf-8",
+    )
+
+    class FakeRelationshipProcess:
+        pid = 86420
+
+        def __init__(self):
+            self.terminated = False
+
+        def poll(self):
+            return 0 if self.terminated else None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            self.terminated = True
+            return 0
+
+    process = FakeRelationshipProcess()
+    payload = stop_relationship_task(
+        AppState(
+            paths=ReadingPaths(source_dir=source_dir, output_root=output_root),
+            relationship_process=process,
+            relationship_process_kind="mine",
+            relationship_process_command=[
+                "python",
+                "relationship_miner.py",
+                "--source-dir",
+                str(source_dir.resolve()),
+                "--output-root",
+                str(output_root.resolve()),
+                "--use-embeddings",
+            ],
+        ),
+        {"source_dir": str(source_dir), "output_root": str(output_root)},
+    )
+
+    assert process.terminated is True
+    assert payload == {"stopped": True, "running": False, "pid": 86420, "kind": "mine"}
+    assert cache_path.exists()
+    assert progress_path.exists()
 
 
 def test_stop_analysis_terminates_external_locked_run(tmp_path: Path, monkeypatch) -> None:
@@ -1057,11 +1484,52 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert "内容检测除了时间和大小，还计算文件内容哈希" not in html
     assert "变更检测除了时间和大小，还计算文件内容哈希" in html
     assert 'id="run_embedding_model"' in html
-    assert 'id="toggle_advanced_btn"' in html
+    assert 'id="toggle_advanced_btn"' not in html
+    assert "选择模板" not in html
+    assert "应用模板" not in html
+    assert "隐藏高级参数" not in html
+    assert "显示高级参数" not in html
+    assert 'data-i18n="apply_paths"' not in html
+    assert "应用路径" not in html
+    assert 'id="early_relationships_btn" class="primary"' in html
+    assert 'id="stop_relationships_btn" class="danger"' in html
+    assert 'id="graph_stop_relationships_btn" class="danger"' in html
+    assert html.index('id="reset_analysis_btn"') < html.index('id="early_relationships_btn"')
+    assert html.index('id="early_relationships_btn"') < html.index('id="stop_relationships_btn"')
+    assert html.index('id="reset_analysis_btn"') < html.index('<div class="relationship-toolbar">')
+    assert 'class="advanced-run relationship-option"><input id="run_document_summary"' in html
+    assert 'class="advanced-run relationship-option"><input id="run_plan_only"' in html
+    assert 'class="advanced-run relationship-option"><input id="run_ocr_enabled"' in html
+    assert 'class="advanced-run relationship-option"><input id="run_manifest_analysis"' in html
+    assert 'class="advanced-run relationship-option"><input id="run_force_reprocess"' in html
+    assert 'class="advanced-run relationship-option"><input id="run_content_hash"' in html
+    assert 'type="checkbox" checked' not in html
+    assert 'data-i18n="limit">数量上限' in html
+    assert 'data-i18n="plan_only">仅评分' in html
+    assert 'data-i18n="ocr_enabled">开启OCR' in html
+    assert 'data-i18n="manifest_analysis">开启目录分析' in html
+    assert 'limit: "数量上限"' in html
+    assert 'plan_only: "仅评分"' in html
+    assert 'ocr_enabled: "开启OCR"' in html
+    assert 'manifest_analysis: "开启目录分析"' in html
+    assert 'limit: "Limit"' in html
+    assert 'plan_only: "Plan only"' in html
+    assert 'ocr_enabled: "Enable OCR"' in html
+    assert 'manifest_analysis: "Enable directory analysis"' in html
+    assert 'class="relationship-embedding-row"' in html
+    assert 'justify-content: flex-start' in html
+    assert html.index('id="run_relationship_embeddings"') < html.index('id="run_embedding_model"')
+    assert html.index('id="run_embedding_model"') < html.index('id="early_relationships_btn"')
+    assert "不会自动沿用这里的模型" in html
+    assert "必须填写向量模型" in html
+    assert 'data-i18n="refresh_status"' not in html
+    assert "刷新状态" not in html
+    assert 'id="embeddingProgressWrap"' in html
     assert "重置分析" in html
     assert "关系图谱" in html
     assert 'id="graphClusters"' in html
-    assert 'visible ? "grid" : "none"' in html
+    assert "function setAdvancedRunOptionsVisible" not in html
+    assert "function toggleAdvancedRunOptions" not in html
     assert (
         'setInterval(() => {\n'
         '      if ($("section-analysis").classList.contains("active")) loadAnalysis();\n'
@@ -1088,7 +1556,7 @@ def test_frontend_status_and_graph_requests_include_current_paths() -> None:
     assert "const query = graphQuery();" in html
     assert 'const response = await fetch("/api/relationships" + (query ? "?" + query : ""));' in html
     assert "const query = new URLSearchParams(graphPathPayload());" in html
-    assert "body: JSON.stringify({...runPayload(), ...graphPathPayload()})" in html
+    assert "const requestPayload = {...runPayload(), ...graphPathPayload()};" in html
     assert 'const response = await fetch("/api/state?" + readingParams());' in html
     assert 'query.set("cluster", String(clusterId));' in html
     assert 'pairs.set("source_dir", paths.source_dir);' in html
@@ -1126,7 +1594,7 @@ def test_graph_output_does_not_backfill_analysis_or_reading_paths() -> None:
     graph_input_end = html.index("function setUiLanguage", graph_input_start)
     graph_input_body = html[graph_input_start:graph_input_end]
     pick_start = html.index("async function pickFolder(targetId)")
-    pick_end = html.index("async function applyPaths()", pick_start)
+    pick_end = html.index("async function applyPaths", pick_start)
     pick_body = html[pick_start:pick_end]
     graph_pick_body = pick_body[
         pick_body.index('if (targetId === "graph_output_root") {') :
@@ -1160,10 +1628,14 @@ def test_analysis_run_form_persists_previous_values() -> None:
     html = reading_ui.HTML_PAGE
 
     assert 'const RUN_FORM_STORAGE_KEY = "doctriage_run_form";' in html
+    assert "const RUN_FORM_STORAGE_VERSION = 2;" in html
     assert "function readStoredRunFormState()" in html
     assert "function applyStoredRunFormState()" in html
     assert "function saveRunFormState()" in html
     assert "function initRunFormPersistence()" in html
+    assert "const state = {_version: RUN_FORM_STORAGE_VERSION};" in html
+    assert "const applyCheckboxState = Number(state._version || 0) === RUN_FORM_STORAGE_VERSION;" in html
+    assert "if (!applyCheckboxState) return;" in html
     for field_id in [
         "run_source_dir",
         "run_output_root",
@@ -1176,11 +1648,10 @@ def test_analysis_run_form_persists_previous_values() -> None:
         "run_max_file_size_mb",
         "run_quality_threshold",
         "run_timeout_seconds",
-        "run_template",
         "run_document_summary",
         "run_plan_only",
-        "run_no_ocr",
-        "run_skip_manifest",
+        "run_ocr_enabled",
+        "run_manifest_analysis",
         "run_force_reprocess",
         "run_content_hash",
         "run_mine_relationships",
@@ -1191,14 +1662,102 @@ def test_analysis_run_form_persists_previous_values() -> None:
     assert html.count("applyStoredRunFormState();") >= 2
     assert "initRunFormPersistence();" in html
     assert 'if (targetId.startsWith("run_")) saveRunFormState();' in html
-    assert 'if (id === "run_relationship_embeddings") syncEmbeddingModelVisibility();' in html
-    assert 'saveRunFormState();\n      const response = await fetch("/api/analysis/start"' in html
-    template_start = html.index("function applyTemplate()")
-    template_end = html.index("async function startAnalysis()", template_start)
-    template_body = html[template_start:template_end]
-    assert '$("run_concurrency").value = "1";' not in template_body
+    assert "syncEmbeddingModelVisibility" not in html
+    assert 'embedding_model: $("run_embedding_model").value.trim(),' in html
+    assert 'embedding_model: $("run_relationship_embeddings").checked ? $("run_embedding_model").value.trim() : ""' not in html
+    assert 'saveRunFormState();\n      const requestPayload = runPayload();' in html
+    assert 'if (!validateEmbeddingModelSelection(requestPayload)) return;' in html
+    assert 'const response = await fetch("/api/analysis/start"' in html
+    assert "function applyTemplate()" not in html
+    assert 'ocr_enabled: $("run_ocr_enabled").checked,' in html
+    assert 'manifest_analysis: $("run_manifest_analysis").checked,' in html
+    assert 'no_ocr: !$("run_ocr_enabled").checked,' in html
+    assert 'skip_manifest_analysis: !$("run_manifest_analysis").checked,' in html
     assert 'concurrency_pill: "并发"' in html
     assert 'concurrency_pill: "Concurrency"' in html
+
+
+def test_analysis_paths_auto_apply_on_blur_without_button() -> None:
+    html = reading_ui.HTML_PAGE
+
+    assert 'if (element) element.addEventListener("blur", () => autoApplyPaths());' in html
+    assert "async function autoApplyPaths()" in html
+    assert "if (!sourceDir || !outputRoot) return;" in html
+    assert "if (key === lastAppliedRunPathKey) return;" in html
+    assert "await applyPaths({showSuccess: false});" in html
+    assert "lastAppliedRunPathKey = runPathKey(sourceDir, outputRoot);" in html
+    assert 'if (targetId === "run_source_dir" || targetId === "run_output_root") autoApplyPaths();' in html
+    assert 'data-i18n="apply_paths"' not in html
+
+
+def test_early_relationship_payload_respects_embedding_checkbox() -> None:
+    html = reading_ui.HTML_PAGE
+
+    payload_start = html.index("function earlyRelationshipPayload()")
+    payload_end = html.index("function pathPayload()", payload_start)
+    payload_body = html[payload_start:payload_end]
+    action_start = html.index("async function startEarlyRelationships()")
+    action_end = html.index("async function stopRelationships()", action_start)
+    action_body = html[action_start:action_end]
+
+    assert "const payload = runPayload();" in payload_body
+    assert 'payload.embedding_model = $("run_embedding_model").value.trim();' in payload_body
+    assert "payload.mine_relationships = true;" in payload_body
+    assert "payload.relationship_use_text_citations = true;" in payload_body
+    assert "payload.relationship_use_embeddings = true;" not in payload_body
+    assert 'run_mine_relationships").checked' not in payload_body
+    assert 'run_relationship_text").checked' not in payload_body
+    assert "const requestPayload = earlyRelationshipPayload();" in action_body
+    assert "if (!validateEmbeddingModelSelection(requestPayload)) return;" in action_body
+    assert "if (!confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(requestPayload)) return;" in action_body
+    assert "body: JSON.stringify(requestPayload)" in action_body
+    assert "body: JSON.stringify(earlyRelationshipPayload())" not in action_body
+    assert "body: JSON.stringify(runPayload())" not in action_body
+
+
+def test_embedding_model_validation_before_embedding_requests() -> None:
+    html = reading_ui.HTML_PAGE
+
+    validate_start = html.index("function validateEmbeddingModelSelection(payload)")
+    validate_end = html.index("function confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(payload)", validate_start)
+    validate_body = html[validate_start:validate_end]
+    confirm_start = html.index("function confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(payload)")
+    confirm_end = html.index("function pathPayload()", confirm_start)
+    confirm_body = html[confirm_start:confirm_end]
+    analysis_start = html.index("async function startAnalysis()")
+    analysis_end = html.index("async function startEarlyRelationships()", analysis_start)
+    analysis_body = html[analysis_start:analysis_end]
+    early_start = html.index("async function startEarlyRelationships()")
+    early_end = html.index("async function stopAnalysis()", early_start)
+    early_body = html[early_start:early_end]
+    graph_start = html.index("async function startGraphTask(taskName)")
+    graph_end = html.index("function renderGraphEmptyState()", graph_start)
+    graph_body = html[graph_start:graph_end]
+
+    assert "if (!payload || !payload.relationship_use_embeddings) return true;" in validate_body
+    assert 'if (String(payload.embedding_model || "").trim()) return true;' in validate_body
+    assert 'showToast(tr("embedding_model_required"));' in validate_body
+    assert "return false;" in validate_body
+    assert "if (!payload || payload.relationship_use_embeddings) return true;" in confirm_body
+    assert 'if (String(payload.embedding_model || "").trim()) return true;' in confirm_body
+    assert 'return window.confirm(tr("early_relationships_without_embedding_confirm"));' in confirm_body
+    assert "已勾选 Embedding 关系，请先填写 Embedding 模型。" in html
+    assert "本次将只生成关系挖掘和标题引用，不生成 Embedding 向量" in html
+    assert "Embedding relationships are selected. Enter an embedding model first." in html
+    assert "without generating embedding vectors" in html
+    assert "const requestPayload = runPayload();" in analysis_body
+    assert "requestPayload.preempt_relationships = true;" in analysis_body
+    assert "if (shouldPreemptRelationshipsForAnalysis()) showToast(tr(\"analysis_preempting_relationships\"));" in analysis_body
+    assert "if (!validateEmbeddingModelSelection(requestPayload)) return;" in analysis_body
+    assert analysis_body.index("validateEmbeddingModelSelection") < analysis_body.index('fetch("/api/analysis/start"')
+    assert "const requestPayload = earlyRelationshipPayload();" in early_body
+    assert "if (!validateEmbeddingModelSelection(requestPayload)) return;" in early_body
+    assert "if (!confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(requestPayload)) return;" in early_body
+    assert early_body.index("validateEmbeddingModelSelection") < early_body.index("confirmEarlyRelationshipsWithoutEmbeddingIfNeeded")
+    assert early_body.index("confirmEarlyRelationshipsWithoutEmbeddingIfNeeded") < early_body.index('fetch("/api/analysis/early-relationships"')
+    assert "const requestPayload = {...runPayload(), ...graphPathPayload()};" in graph_body
+    assert 'if (taskName === "mine" && !validateEmbeddingModelSelection(requestPayload)) return;' in graph_body
+    assert graph_body.index("validateEmbeddingModelSelection") < graph_body.index('fetch(`/api/relationships/${taskName.replace("_", "-")}`')
 
 
 def test_reading_table_uses_name_column_with_summary_tooltip() -> None:
@@ -1261,6 +1820,67 @@ def test_analysis_status_pills_use_i18n_labels() -> None:
     assert 'phase_not_started: "Not started"' in html
 
 
+def test_embedding_progress_bar_is_independent_and_hidden_until_relationship_embedding() -> None:
+    html = reading_ui.HTML_PAGE
+
+    render_start = html.index("function renderEmbeddingProgress(progress, task)")
+    render_end = html.index("function localizedEmbeddingPhase", render_start)
+    render_body = html[render_start:render_end]
+
+    assert 'class="embedding-progress-wrap"' in html
+    assert 'command.includes("--use-embeddings")' in render_body
+    assert "const activeEmbeddingTask = !!(task && task.running && embeddingTask);" in render_body
+    assert "activeEmbeddingTask && (!!(progress && progress.enabled) || !!task.pending)" in render_body
+    assert "const total = Number(progress.total || 0);" in render_body
+    assert 'total > 0 ? `${tr("completed_pill")} ${Number(progress.completed || 0)}/${total}` : ""' in render_body
+    assert '$("embeddingProgressWrap").style.display = visible ? "block" : "none";' in render_body
+    assert '$("embeddingProgressBar").style.width = "0%";' in render_body
+    assert "payload.progress || {}" in html
+    assert "payload.embedding_progress || {}" in html
+
+
+def test_relationship_buttons_use_independent_task_state() -> None:
+    html = reading_ui.HTML_PAGE
+
+    render_start = html.index("function renderAnalysis(payload)")
+    render_end = html.index("function renderEmbeddingProgress", render_start)
+    render_body = html[render_start:render_end]
+
+    assert '$("early_relationships_btn").disabled = decisionCount <= 0 || !!relationshipTask.running || !!relationshipLaunchPending;' in render_body
+    assert '$("stop_relationships_btn").disabled = !relationshipTask.running;' in render_body
+    assert "const effectiveRelationshipTask = relationshipTask.running ? relationshipTask : (pendingRelationshipTask() || relationshipTask);" in render_body
+    assert "relationshipTaskPillText(effectiveRelationshipTask)" in render_body
+    assert '$("start_analysis_btn").disabled = !!payload.running;' in render_body
+    assert '$("graph_stop_relationships_btn").disabled = !task.running;' in html
+    assert 'const response = await fetch("/api/relationships/stop"' in html
+
+
+def test_early_relationship_click_shows_pending_feedback_immediately() -> None:
+    html = reading_ui.HTML_PAGE
+
+    action_start = html.index("async function startEarlyRelationships()")
+    action_end = html.index("async function stopAnalysis()", action_start)
+    action_body = html[action_start:action_end]
+    pending_start = html.index("function showRelationshipLaunchPending(payload)")
+    pending_end = html.index("function clearRelationshipLaunchPending()", pending_start)
+    pending_body = html[pending_start:pending_end]
+
+    assert "let relationshipLaunchPending = null;" in html
+    assert "showRelationshipLaunchPending(requestPayload);" in action_body
+    assert "clearRelationshipLaunchPending();" in action_body
+    assert 'return showToast(responsePayload.error || tr("early_relationships_failed"));' in action_body
+    assert 'analysis_preempting_relationships: "正在停止生成关系并准备开始分析"' in html
+    assert 'analysis_preempting_relationships: "Stopping relationship generation and preparing analysis"' in html
+    assert "relationshipLaunchPending = {" in pending_body
+    assert "useEmbeddings: !!(payload && payload.relationship_use_embeddings)" in pending_body
+    assert "renderAnalysis(lastAnalysisPayload);" in pending_body
+    assert "renderEmbeddingProgress(pendingEmbeddingProgress(), task);" in pending_body
+    assert "function pendingRelationshipTask()" in html
+    assert 'command: relationshipLaunchPending.useEmbeddings ? ["--use-embeddings"] : []' in html
+    assert "function pendingEmbeddingProgress()" in html
+    assert 'phase: "ready"' in html
+
+
 def test_activity_pill_omits_empty_detail_suffix() -> None:
     html = reading_ui.HTML_PAGE
 
@@ -1288,7 +1908,7 @@ def test_graph_and_reading_runtime_messages_use_i18n_labels() -> None:
     assert 'tr("graph_need_analysis_before_graph")' in graph_body
     assert 'trf("graph_task_started"' in graph_body
     assert 'tr("graph_task_start_failed")' in graph_body
-    assert 'localGraphTaskLabel(payload.label, taskName)' in graph_body
+    assert 'localGraphTaskLabel(responsePayload.label, taskName)' in graph_body
     assert 'tr("sort_public_desc")' in reading_body
     assert 'tr("mark_failed")' in reading_body
     assert 'tr("select_documents_first")' in reading_body
@@ -1337,9 +1957,13 @@ def test_path_and_analysis_action_messages_use_i18n_labels() -> None:
     assert 'tr("need_reading_output")' in action_body
     assert 'tr("reading_output_apply_failed")' in action_body
     assert 'tr("reading_output_applied")' in action_body
-    assert 'tr("template_applied")' in action_body
     assert 'tr("analysis_start_failed")' in action_body
     assert 'tr("analysis_started")' in action_body
+    assert 'tr("analysis_preempting_relationships")' in action_body
+    assert 'tr("early_relationships_failed")' in action_body
+    assert 'tr("early_relationships_started")' in action_body
+    assert 'tr("relationship_stop_requested")' in action_body
+    assert 'tr("relationship_stop_failed")' in action_body
     assert 'tr("stop_requested")' in action_body
     assert 'tr("stop_failed")' in action_body
     assert 'tr("need_source_output")' in action_body
@@ -1354,9 +1978,9 @@ def test_path_and_analysis_action_messages_use_i18n_labels() -> None:
         '"请先输入阅读目标输出目录"',
         '"阅读目录应用失败"',
         '"阅读目录已应用"',
-        '"已应用模板"',
         '"启动失败"',
         '"已启动分析"',
+        '"正在停止生成关系并准备开始分析"',
         '"已请求停止"',
         '"停止失败"',
         '"请先应用源目录和输出目录"',
@@ -1587,6 +2211,43 @@ def test_build_relationship_payload_returns_cluster_and_edge_details(tmp_path: P
     assert detail_payload["selected_cluster"]["edges"][0]["signals"] == ["path", "citation"]
 
 
+def test_status_payloads_include_independent_embedding_progress(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    state_dir = output_root / "_state"
+    relationship_dir = output_root / "_relationships"
+    source_dir.mkdir()
+    state_dir.mkdir(parents=True)
+    relationship_dir.mkdir(parents=True)
+    progress = {
+        "enabled": True,
+        "phase": "embedding",
+        "total": 4,
+        "cached": 1,
+        "generated": 2,
+        "completed": 3,
+        "missing": 1,
+        "percent": 75.0,
+    }
+    (state_dir / "progress.json").write_text(
+        json.dumps({"completed": 1, "total": 10}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (relationship_dir / "embedding_progress.json").write_text(
+        json.dumps(progress, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
+    app_state = AppState(paths=paths)
+
+    analysis_payload = analysis_status(app_state, paths=paths)
+    relationship_payload = build_relationship_payload(app_state, paths, {})
+
+    assert analysis_payload["progress"] == {"completed": 1, "total": 10}
+    assert analysis_payload["embedding_progress"] == progress
+    assert relationship_payload["embedding_progress"] == progress
+
+
 def test_analysis_status_reports_resume_phase_from_existing_decisions(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"
@@ -1720,10 +2381,10 @@ def test_analysis_status_reports_activity_when_progress_is_stale(
     }
     assert payload["activity"]["state_counts"]["decisions"] == 1
     assert payload["activity"]["state_counts"]["processed"] == 1
-    assert payload["activity"]["latest_activity"]["label"] == "已规划"
+    assert payload["activity"]["latest_activity"]["label"] == ""
 
 
-def test_latest_log_activity_suppresses_progress_detail() -> None:
+def test_latest_log_activity_omits_progress_pill() -> None:
     log_tail = (
         "2026-06-05 10:00:00,000 [INFO] doctriage - "
         "Progress 5/30174 (0.0%), rate=7.06 files/min, ETA=71h13m, submitted=9, completed=5\n"
@@ -1731,7 +2392,7 @@ def test_latest_log_activity_suppresses_progress_detail() -> None:
 
     payload = latest_log_activity(log_tail)
 
-    assert payload["label"] == "进度写入"
+    assert payload["label"] == ""
     assert payload["detail"] == ""
     assert "Progress 5/30174" in payload["line"]
 
@@ -1798,9 +2459,8 @@ def test_analysis_status_shows_plan_only_source_paths(tmp_path: Path) -> None:
     assert str(document) in payload["log_tail"]
     assert "HQ" not in payload["log_tail"]
     assert str(target_path) not in payload["log_tail"]
-    assert payload["activity"]["latest_activity"]["detail"] == (
-        f"{document} [quality=80 category=Design]"
-    )
+    assert payload["activity"]["latest_activity"]["label"] == ""
+    assert payload["activity"]["latest_activity"]["detail"] == ""
     assert str(document) in payload["activity"]["latest_activity"]["line"]
     assert str(target_path) not in payload["activity"]["latest_activity"]["line"]
 

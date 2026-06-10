@@ -86,7 +86,7 @@ class Settings(BaseSettings):
     QUALITY_THRESHOLD: int = Field(default=75, ge=0, le=100)
     MAX_FILES: int | None = Field(default=None, ge=1)
     MAX_FILE_SIZE_MB: float | None = Field(default=None, gt=0)
-    OCR_ENABLED: bool = Field(default=True)
+    OCR_ENABLED: bool = Field(default=False)
     PDF_METADSample_ENABLED: bool = Field(default=False)
     PDF_TEXT_FALLBACK_ENABLED: bool = Field(default=True)
     PDF_TEXT_FALLBACK_MAX_PAGES: int | None = Field(default=300, ge=1)
@@ -211,7 +211,11 @@ class Settings(BaseSettings):
 
     @property
     def embedding_cache_path(self) -> Path:
-        return self.state_dir / "embedding_cache.jsonl"
+        return self.relationship_dir / "embedding_cache.jsonl"
+
+    @property
+    def embedding_progress_path(self) -> Path:
+        return self.relationship_dir / "embedding_progress.json"
 
 
 @lru_cache(maxsize=1)

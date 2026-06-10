@@ -18,26 +18,105 @@ LOGGER = logging.getLogger("doctriage")
 class OllamaRuntimeEndpoint:
     base_url: str
     generate_url: str
+    embed_url: str
     ps_url: str
 
 
+def prepare_embedding_model_for_relationships(settings: Settings) -> None:
+    source_model = str(settings.LLM_MODEL or "").strip()
+    embedding_model = str(settings.EMBEDDING_MODEL or "").strip()
+    if not embedding_model:
+        LOGGER.info(
+            "Skipping model switch before embedding relationships: embedding model is not configured"
+        )
+        return
+    if source_model and embedding_model and models_are_same(source_model, embedding_model):
+        LOGGER.info(
+            "Skipping model switch before embedding relationships: scoring and embedding model are both %s",
+            embedding_model,
+        )
+        return
+    release_ollama_model_for_settings(
+        settings,
+        model=source_model,
+        model_role="scoring",
+        target_role="embedding relationship mining",
+        endpoint_setting=settings.LLM_ENDPOINT,
+    )
+    preload_ollama_model_for_settings(
+        settings,
+        model=embedding_model,
+        model_role="embedding",
+        target_role="embedding relationship mining",
+        endpoint_setting=settings.EMBEDDING_ENDPOINT,
+        operation="embed",
+    )
+
+
+def prepare_scoring_model_for_analysis(settings: Settings) -> None:
+    embedding_model = str(settings.EMBEDDING_MODEL or "").strip()
+    scoring_model = str(settings.LLM_MODEL or "").strip()
+    if not embedding_model:
+        LOGGER.info(
+            "Skipping model switch before analysis: embedding model is not configured"
+        )
+        return
+    if embedding_model and scoring_model and models_are_same(embedding_model, scoring_model):
+        LOGGER.info(
+            "Skipping model switch before analysis: embedding and scoring model are both %s",
+            scoring_model,
+        )
+        return
+    release_ollama_model_for_settings(
+        settings,
+        model=embedding_model,
+        model_role="embedding",
+        target_role="document analysis",
+        endpoint_setting=settings.EMBEDDING_ENDPOINT,
+    )
+    preload_ollama_model_for_settings(
+        settings,
+        model=scoring_model,
+        model_role="scoring",
+        target_role="document analysis",
+        endpoint_setting=settings.LLM_ENDPOINT,
+        operation="generate",
+    )
+
+
 def release_scoring_model_before_embedding_relationships(settings: Settings) -> None:
-    model = str(settings.LLM_MODEL or "").strip()
+    prepare_embedding_model_for_relationships(settings)
+
+
+def release_ollama_model_for_settings(
+    settings: Settings,
+    *,
+    model: str,
+    model_role: str,
+    target_role: str,
+    endpoint_setting: str,
+) -> None:
     if not model:
         LOGGER.info(
-            "Skipping scoring model release before embedding relationships: LLM_MODEL is not configured"
+            "Skipping %s model release before %s: model is not configured",
+            model_role,
+            target_role,
         )
         return
 
-    endpoint = resolve_ollama_runtime_endpoint(settings.LLM_ENDPOINT)
+    endpoint = resolve_ollama_runtime_endpoint(endpoint_setting)
     if endpoint is None:
         LOGGER.info(
-            "Skipping scoring model release before embedding relationships: LLM_ENDPOINT is not an Ollama /api endpoint"
+            "Skipping %s model release before %s: endpoint is not an Ollama /api endpoint",
+            model_role,
+            target_role,
         )
         return
 
     LOGGER.info(
-        "Requesting scoring model unload before embedding relationship mining: %s",
+        "Requesting %s model unload before %s: %s",
+        model_role,
+        target_role,
         model,
     )
     try:
@@ -48,7 +127,9 @@ def release_scoring_model_before_embedding_relationships(settings: Settings) -> 
         )
     except (OSError, TimeoutError, urllib.error.URLError) as exc:
         LOGGER.warning(
-            "Could not request scoring model unload before embedding relationships: %s",
+            "Could not request %s model unload before %s: %s",
+            model_role,
+            target_role,
             exc,
         )
         return
@@ -65,20 +146,81 @@ def release_scoring_model_before_embedding_relationships(settings: Settings) -> 
         )
     except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError) as exc:
         LOGGER.warning(
-            "Could not verify scoring model release before embedding relationships: %s",
+            "Could not verify %s model release before %s: %s",
+            model_role,
+            target_role,
             exc,
         )
         return
 
     if released:
         LOGGER.info(
-            "Scoring model is no longer listed by Ollama; starting embedding relationship mining"
+            "%s model is no longer listed by Ollama; continuing with %s",
+            model_role.capitalize(),
+            target_role,
         )
     else:
         LOGGER.warning(
-            "Scoring model %s is still listed by Ollama after %.1f seconds; continuing to avoid waiting indefinitely",
+            "%s model %s is still listed by Ollama after %.1f seconds; continuing to avoid waiting indefinitely",
+            model_role.capitalize(),
             model,
             settings.RELATIONSHIP_EMBEDDING_LLM_UNLOAD_TIMEOUT_SECONDS,
+        )
+
+
+def preload_ollama_model_for_settings(
+    settings: Settings,
+    *,
+    model: str,
+    model_role: str,
+    target_role: str,
+    endpoint_setting: str,
+    operation: str,
+) -> None:
+    if not model:
+        LOGGER.info(
+            "Skipping %s model preload before %s: model is not configured",
+            model_role,
+            target_role,
+        )
+        return
+
+    endpoint = resolve_ollama_runtime_endpoint(endpoint_setting)
+    if endpoint is None:
+        LOGGER.info(
+            "Skipping %s model preload before %s: endpoint is not an Ollama /api endpoint",
+            model_role,
+            target_role,
+        )
+        return
+
+    LOGGER.info(
+        "Requesting %s model preload before %s: %s",
+        model_role,
+        target_role,
+        model,
+    )
+    try:
+        if operation == "embed":
+            request_ollama_embedding_model_preload(
+                endpoint.embed_url,
+                model,
+                timeout_seconds=min(
+                    max(float(settings.EMBEDDING_TIMEOUT_SECONDS), 5.0), 30.0
+                ),
+            )
+        else:
+            request_ollama_model_preload(
+                endpoint.generate_url,
+                model,
+                timeout_seconds=min(max(float(settings.LLM_TIMEOUT_SECONDS), 5.0), 30.0),
+            )
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        LOGGER.warning(
+            "Could not request %s model preload before %s: %s",
+            model_role,
+            target_role,
+            exc,
         )
 
 
@@ -94,7 +236,7 @@ def resolve_ollama_runtime_endpoint(llm_endpoint: str) -> OllamaRuntimeEndpoint 
     if marker_index < 0:
         return None
     operation = lower_path[marker_index + len(marker) :]
-    if operation not in {"generate", "chat"}:
+    if operation not in {"generate", "chat", "embeddings", "embed"}:
         return None
 
     api_root_path = path[:marker_index] + "/api"
@@ -104,6 +246,7 @@ def resolve_ollama_runtime_endpoint(llm_endpoint: str) -> OllamaRuntimeEndpoint 
     return OllamaRuntimeEndpoint(
         base_url=base_url,
         generate_url=base_url + "/generate",
+        embed_url=base_url + ("/embeddings" if operation == "embeddings" else "/embed"),
         ps_url=base_url + "/ps",
     )
 
@@ -116,6 +259,41 @@ def request_ollama_model_unload(
     ).encode("utf-8")
     request = urllib.request.Request(
         generate_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        response.read()
+
+
+def request_ollama_model_preload(
+    generate_url: str, model: str, *, timeout_seconds: float
+) -> None:
+    body = json.dumps(
+        {"model": model, "prompt": "", "stream": False}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        generate_url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        response.read()
+
+
+def request_ollama_embedding_model_preload(
+    embed_url: str, model: str, *, timeout_seconds: float
+) -> None:
+    payload = (
+        {"model": model, "input": "doctriage preload"}
+        if embed_url.rstrip("/").lower().endswith("/api/embed")
+        else {"model": model, "prompt": "doctriage preload"}
+    )
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        embed_url,
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -172,3 +350,17 @@ def ollama_model_matches(configured_model: str, running_model: dict[str, Any]) -
 
 def normalize_ollama_model_name(value: str) -> str:
     return value.strip().lower()
+
+
+def models_are_same(left: str, right: str) -> bool:
+    normalized_left = normalize_ollama_model_name(left)
+    normalized_right = normalize_ollama_model_name(right)
+    if not normalized_left or not normalized_right:
+        return False
+    if normalized_left == normalized_right:
+        return True
+    if ":" not in normalized_left and normalized_right == f"{normalized_left}:latest":
+        return True
+    if ":" not in normalized_right and normalized_left == f"{normalized_right}:latest":
+        return True
+    return False

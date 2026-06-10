@@ -7,6 +7,7 @@ import math
 import os
 import re
 import sys
+import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -21,7 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import Settings, get_settings
-from ollama_runtime import release_scoring_model_before_embedding_relationships
+from ollama_runtime import prepare_embedding_model_for_relationships
 from runtime_encoding import configure_utf8_runtime
 from relationship_strategies import (
     DEFAULT_PAIR_COLLECTORS,
@@ -59,6 +60,7 @@ MIN_PARALLEL_RELATION_PAIRS = 5000
 MIN_PARALLEL_CITATION_RECORDS = 1000
 PARALLEL_BATCH_TARGET = 8
 T = TypeVar("T")
+EMBEDDING_PROGRESS_VERSION = "doctriage_embedding_progress.v1"
 
 
 @dataclass(slots=True)
@@ -105,9 +107,9 @@ class OllamaEmbeddingClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.endpoint = settings.EMBEDDING_ENDPOINT.rstrip("/")
-        self.model = settings.EMBEDDING_MODEL or settings.LLM_MODEL
+        self.model = settings.EMBEDDING_MODEL
         if not self.model:
-            raise ValueError("EMBEDDING_MODEL or LLM_MODEL must be configured for embeddings.")
+            raise ValueError("EMBEDDING_MODEL must be configured for embeddings.")
         self._client = httpx.Client()
 
     def close(self) -> None:
@@ -138,9 +140,8 @@ class OllamaEmbeddingClient:
         return [[float(value) for value in vector] for vector in vectors]
 
     def _build_payload(self, texts: Sequence[str]) -> dict[str, Any]:
-        input_value: str | list[str] = texts[0] if len(texts) == 1 else list(texts)
         if self.endpoint.lower().endswith("/api/embed"):
-            return {"model": self.model, "input": input_value}
+            return {"model": self.model, "input": list(texts)}
         return {"model": self.model, "prompt": texts[0]}
 
     def _extract_vectors(
@@ -168,6 +169,13 @@ class OllamaEmbeddingClient:
 
 def mine_relationships(settings: Settings | None = None) -> None:
     current_settings = settings or get_settings()
+    if (
+        current_settings.RELATIONSHIP_USE_EMBEDDINGS
+        and not str(current_settings.EMBEDDING_MODEL or "").strip()
+    ):
+        raise ValueError(
+            "EMBEDDING_MODEL must be configured when RELATIONSHIP_USE_EMBEDDINGS is enabled."
+        )
 
     decisions_path = current_settings.processed_log_path.parent / "decisions.jsonl"
     records = load_records(decisions_path, current_settings)
@@ -176,7 +184,7 @@ def mine_relationships(settings: Settings | None = None) -> None:
 
     current_settings.relationship_dir.mkdir(parents=True, exist_ok=True)
     if current_settings.RELATIONSHIP_USE_EMBEDDINGS:
-        release_scoring_model_before_embedding_relationships(current_settings)
+        prepare_embedding_model_for_relationships(current_settings)
     embeddings = (
         load_or_build_embeddings(records, current_settings)
         if current_settings.RELATIONSHIP_USE_EMBEDDINGS
@@ -272,8 +280,19 @@ def build_embedding_text(record: RelationshipRecord, settings: Settings) -> str:
 def load_or_build_embeddings(
     records: list[RelationshipRecord], settings: Settings
 ) -> dict[int, list[float]]:
+    progress_path = settings.embedding_progress_path
+    write_embedding_progress(
+        progress_path,
+        phase="loading_cache",
+        total=len(records),
+        cached=0,
+        generated=0,
+        missing=0,
+        workers=0,
+        enabled=settings.RELATIONSHIP_USE_EMBEDDINGS,
+    )
     cache = (
-        load_embedding_cache(settings.embedding_cache_path)
+        load_embedding_cache_with_legacy(settings)
         if settings.EMBEDDING_CACHE_ENABLED
         else {}
     )
@@ -288,22 +307,73 @@ def load_or_build_embeddings(
         else:
             missing.append((index, record, cache_key))
 
+    write_embedding_progress(
+        progress_path,
+        phase="ready" if not missing else "embedding",
+        total=len(records),
+        cached=len(embeddings),
+        generated=0,
+        missing=len(missing),
+        workers=0 if not missing else resolve_embedding_workers(settings, len(missing)),
+        enabled=settings.RELATIONSHIP_USE_EMBEDDINGS,
+    )
     if not missing:
+        write_embedding_progress(
+            progress_path,
+            phase="complete",
+            total=len(records),
+            cached=len(embeddings),
+            generated=0,
+            missing=0,
+            workers=0,
+            enabled=settings.RELATIONSHIP_USE_EMBEDDINGS,
+        )
         return embeddings
 
     worker_count = resolve_embedding_workers(settings, len(missing))
     if worker_count == 1:
-        cache_writes: list[tuple[str, list[float]]] = []
         with OllamaEmbeddingClient(settings) as client:
-            for index, cache_key, vector in embed_records_with_client(client, missing):
-                cache[cache_key] = vector
-                embeddings[index] = vector
-                cache_writes.append((cache_key, vector))
-        if settings.EMBEDDING_CACHE_ENABLED:
-            append_embedding_cache_entries(settings.embedding_cache_path, cache_writes)
+            generated = 0
+            for chunk in chunk_sequence(
+                missing,
+                embedding_chunk_size(settings, len(missing), worker_count),
+            ):
+                results = embed_records_with_client(client, chunk)
+                cache_writes = []
+                for index, cache_key, vector in results:
+                    cache[cache_key] = vector
+                    embeddings[index] = vector
+                    cache_writes.append((cache_key, vector))
+                generated += len(cache_writes)
+                if settings.EMBEDDING_CACHE_ENABLED:
+                    append_embedding_cache_entries(settings.embedding_cache_path, cache_writes)
+                write_embedding_progress(
+                    progress_path,
+                    phase="embedding",
+                    total=len(records),
+                    cached=len(records) - len(missing),
+                    generated=generated,
+                    missing=max(0, len(missing) - generated),
+                    workers=worker_count,
+                    enabled=settings.RELATIONSHIP_USE_EMBEDDINGS,
+                )
+        write_embedding_progress(
+            progress_path,
+            phase="complete",
+            total=len(records),
+            cached=len(records) - len(missing),
+            generated=generated,
+            missing=0,
+            workers=worker_count,
+            enabled=settings.RELATIONSHIP_USE_EMBEDDINGS,
+        )
         return embeddings
 
-    chunks = split_worker_chunks(missing, worker_count)
+    chunks = chunk_sequence(
+        missing,
+        embedding_chunk_size(settings, len(missing), worker_count),
+    )
+    generated = 0
     with ThreadPoolExecutor(
         max_workers=worker_count,
         thread_name_prefix="doctriage-embedding",
@@ -318,9 +388,30 @@ def load_or_build_embeddings(
                 cache[cache_key] = vector
                 embeddings[index] = vector
                 cache_writes.append((cache_key, vector))
+            generated += len(cache_writes)
             if settings.EMBEDDING_CACHE_ENABLED:
                 append_embedding_cache_entries(settings.embedding_cache_path, cache_writes)
+            write_embedding_progress(
+                progress_path,
+                phase="embedding",
+                total=len(records),
+                cached=len(records) - len(missing),
+                generated=generated,
+                missing=max(0, len(missing) - generated),
+                workers=worker_count,
+                enabled=settings.RELATIONSHIP_USE_EMBEDDINGS,
+            )
 
+    write_embedding_progress(
+        progress_path,
+        phase="complete",
+        total=len(records),
+        cached=len(records) - len(missing),
+        generated=generated,
+        missing=0,
+        workers=worker_count,
+        enabled=settings.RELATIONSHIP_USE_EMBEDDINGS,
+    )
     return embeddings
 
 
@@ -339,6 +430,42 @@ def split_worker_chunks(
         chunks.append(items[start:end])
         start = end
     return chunks
+
+
+def embedding_chunk_size(settings: Settings, missing_count: int, worker_count: int) -> int:
+    if not settings.EMBEDDING_ENDPOINT.rstrip("/").lower().endswith("/api/embed"):
+        return 1
+    return max(1, min(32, math.ceil(missing_count / max(1, worker_count))))
+
+
+def write_embedding_progress(
+    path: Path,
+    *,
+    phase: str,
+    total: int,
+    cached: int,
+    generated: int,
+    missing: int,
+    workers: int,
+    enabled: bool,
+) -> None:
+    completed = max(0, min(total, cached + generated))
+    payload = {
+        "schema_version": EMBEDDING_PROGRESS_VERSION,
+        "enabled": enabled,
+        "phase": phase,
+        "total": total,
+        "cached": cached,
+        "generated": generated,
+        "completed": completed,
+        "missing": max(0, missing),
+        "workers": workers,
+        "percent": round((completed / total * 100) if total else 0.0, 2),
+        "updated_epoch": time.time(),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", errors="ignore") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
 
 
 def resolve_embedding_workers(settings: Settings, missing_count: int) -> int:
@@ -394,6 +521,16 @@ def load_embedding_cache(path: Path) -> dict[str, list[float]]:
             if isinstance(key, str) and isinstance(vector, list):
                 cache[key] = [float(value) for value in vector]
     return cache
+
+
+def load_embedding_cache_with_legacy(settings: Settings) -> dict[str, list[float]]:
+    current_cache = load_embedding_cache(settings.embedding_cache_path)
+    legacy_path = settings.state_dir / "embedding_cache.jsonl"
+    if legacy_path == settings.embedding_cache_path:
+        return current_cache
+    legacy_cache = load_embedding_cache(legacy_path)
+    legacy_cache.update(current_cache)
+    return legacy_cache
 
 
 def append_embedding_cache(path: Path, key: str, vector: list[float]) -> None:
@@ -1026,8 +1163,12 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
     if args.use_text_citations:
         overrides["RELATIONSHIP_USE_TEXT_CITATIONS"] = True
     if overrides:
-        return Settings(**overrides)
-    return get_settings()
+        settings = Settings(**overrides)
+    else:
+        settings = get_settings()
+    if settings.RELATIONSHIP_USE_EMBEDDINGS and not str(settings.EMBEDDING_MODEL or "").strip():
+        raise ValueError("--embedding-model is required when --use-embeddings is enabled.")
+    return settings
 
 
 def main(argv: list[str] | None = None) -> None:

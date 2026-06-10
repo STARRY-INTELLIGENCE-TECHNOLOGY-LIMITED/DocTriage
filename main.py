@@ -28,6 +28,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from cleaner import DocumentWashError, DocumentWasher
 from config import Settings, get_settings
 from meta_profiler import DocumentProfile, MetadataProfiler
+from ollama_runtime import prepare_scoring_model_for_analysis
 from ranker_engine import LLMClient, ManifestAnalysis, ManifestResult, SemanticScore, SemanticScoring
 from runtime_encoding import configure_utf8_runtime, decode_process_output
 
@@ -1043,6 +1044,7 @@ def run_pipeline(settings: Settings | None = None) -> None:
 
 
 def _run_pipeline_locked(current_settings: Settings) -> None:
+    prepare_scoring_model_for_analysis(current_settings)
     journal = ResumeJournal(
         processed_log_path=current_settings.processed_log_path,
         failure_log_path=current_settings.failure_log_path,
@@ -1781,20 +1783,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Score and record routing decisions without copying source documents.",
     )
-    parser.add_argument(
+    manifest_group = parser.add_mutually_exclusive_group()
+    manifest_group.add_argument(
         "--skip-manifest-analysis",
         action="store_true",
         help="Skip directory-level series detection and start file-level scoring immediately.",
     )
-    parser.add_argument(
+    manifest_group.add_argument(
         "--manifest-analysis",
         action="store_true",
         help="Run directory-level series detection before file-level scoring.",
     )
-    parser.add_argument(
+    ocr_group = parser.add_mutually_exclusive_group()
+    ocr_group.add_argument(
         "--no-ocr",
         action="store_true",
         help="Disable PDF OCR to speed up large first-pass runs.",
+    )
+    ocr_group.add_argument(
+        "--ocr",
+        action="store_true",
+        help="Enable PDF OCR for scanned or image-only documents.",
     )
     parser.add_argument(
         "--pdf-metadata",
@@ -1862,6 +1871,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_settings_from_args(args: argparse.Namespace) -> Settings:
+    if args.skip_manifest_analysis and args.manifest_analysis:
+        raise ValueError(
+            "--manifest-analysis and --skip-manifest-analysis cannot be used together."
+        )
+    if args.no_ocr and args.ocr:
+        raise ValueError("--ocr and --no-ocr cannot be used together.")
+
     overrides: dict[str, Any] = {}
     if args.source_dir is not None:
         overrides["SOURCE_DIR"] = args.source_dir
@@ -1901,6 +1917,8 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["SKIP_MANIFEST_ANALYSIS"] = False
     if args.no_ocr:
         overrides["OCR_ENABLED"] = False
+    if args.ocr:
+        overrides["OCR_ENABLED"] = True
     if args.pdf_metadata:
         overrides["PDF_METADSample_ENABLED"] = True
     if args.document_summary:
@@ -1931,8 +1949,14 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["EMBEDDING_MODEL"] = args.embedding_model
 
     if overrides:
-        return Settings(**overrides)
-    return get_settings()
+        settings = Settings(**overrides)
+    else:
+        settings = get_settings()
+    if settings.RELATIONSHIP_USE_EMBEDDINGS and not str(settings.EMBEDDING_MODEL or "").strip():
+        raise ValueError(
+            "--embedding-model is required when --relationship-use-embeddings is enabled."
+        )
+    return settings
 
 
 def main(argv: list[str] | None = None) -> None:

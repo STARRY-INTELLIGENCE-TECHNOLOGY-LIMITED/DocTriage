@@ -3,6 +3,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from config import Settings
 import relationship_miner
 from relationship_miner import (
@@ -114,8 +116,8 @@ def test_mine_relationships_with_embeddings_releases_scoring_model_first(
 
     monkeypatch.setattr(
         relationship_miner,
-        "release_scoring_model_before_embedding_relationships",
-        lambda settings: events.append("release"),
+        "prepare_embedding_model_for_relationships",
+        lambda settings: events.append("prepare_embedding"),
     )
 
     def fake_load_or_build_embeddings(records, settings):
@@ -133,11 +135,42 @@ def test_mine_relationships_with_embeddings_releases_scoring_model_first(
         SOURCE_DIR=source_dir,
         OUTPUT_ROOT=output_root,
         RELATIONSHIP_USE_EMBEDDINGS=True,
+        EMBEDDING_MODEL="nomic-embed-text",
     )
 
     mine_relationships(settings)
 
-    assert events == ["release", "embeddings"]
+    assert events == ["prepare_embedding", "embeddings"]
+
+
+def test_mine_relationships_requires_embedding_model_when_embeddings_enabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    state_dir = output_root / "_state"
+    source_dir.mkdir()
+    state_dir.mkdir(parents=True)
+    (state_dir / "decisions.jsonl").write_text("", encoding="utf-8")
+    prepared = {"value": False}
+
+    monkeypatch.setattr(
+        relationship_miner,
+        "prepare_embedding_model_for_relationships",
+        lambda settings: prepared.update(value=True),
+    )
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        RELATIONSHIP_USE_EMBEDDINGS=True,
+    )
+
+    with pytest.raises(ValueError, match="EMBEDDING_MODEL must be configured"):
+        mine_relationships(settings)
+
+    assert prepared["value"] is False
 
 
 def test_embedding_generation_uses_configured_concurrency(
@@ -202,6 +235,7 @@ def test_embedding_generation_uses_configured_concurrency(
         SOURCE_DIR=source_dir,
         OUTPUT_ROOT=output_root,
         CONCURRENCY_LIMIT=3,
+        EMBEDDING_MODEL="nomic-embed-text",
         EMBEDDING_CACHE_ENABLED=False,
     )
 
@@ -210,6 +244,83 @@ def test_embedding_generation_uses_configured_concurrency(
     assert sorted(embeddings) == [0, 1, 2, 3]
     assert max_active == 3
     assert resolve_embedding_workers(settings, 4) == 3
+
+
+def test_embedding_progress_and_cache_resume_are_relationship_scoped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    records = []
+    for index in range(3):
+        path = source_dir / f"doc{index}.md"
+        path.write_text("placeholder", encoding="utf-8")
+        record = relationship_miner.RelationshipRecord(
+            source_path=path,
+            relative_path=path.name,
+            target_path="",
+            quality=90,
+            category="Design",
+            document_kind="Unknown",
+            topic_tags=[],
+            reason="",
+            summary=f"summary {index}",
+            modified_epoch=float(index),
+            normalized_name=relationship_miner.normalize_name(path.stem),
+        )
+        record.embedding_text = f"embedding text {index}"
+        records.append(record)
+
+    class FakeEmbeddingClient:
+        def __init__(self, settings):
+            self.endpoint = "http://localhost:11434/api/embeddings"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return
+
+        def embed(self, text):
+            return [float(text.rsplit(" ", 1)[-1])]
+
+    monkeypatch.setattr(relationship_miner, "OllamaEmbeddingClient", FakeEmbeddingClient)
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        CONCURRENCY_LIMIT=1,
+        RELATIONSHIP_USE_EMBEDDINGS=True,
+        EMBEDDING_MODEL="nomic-embed-text",
+    )
+    cache_path = settings.embedding_cache_path
+    progress_path = settings.embedding_progress_path
+    cache_path.parent.mkdir(parents=True)
+    legacy_cache_path = output_root / "_state" / "embedding_cache.jsonl"
+    relationship_miner.append_embedding_cache(
+        legacy_cache_path,
+        relationship_miner.embedding_cache_key(records[0]),
+        [10.0],
+    )
+
+    embeddings = load_or_build_embeddings(records, settings)
+
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert cache_path == output_root / "_relationships" / "embedding_cache.jsonl"
+    assert progress_path == output_root / "_relationships" / "embedding_progress.json"
+    assert embeddings == {0: [10.0], 1: [1.0], 2: [2.0]}
+    assert progress["phase"] == "complete"
+    assert progress["total"] == 3
+    assert progress["cached"] == 1
+    assert progress["generated"] == 2
+    assert progress["missing"] == 0
+    assert progress["percent"] == 100.0
+    new_cache_text = cache_path.read_text(encoding="utf-8")
+    assert "embedding text 1" not in new_cache_text
+    assert len(new_cache_text.strip().splitlines()) == 2
+    assert legacy_cache_path.exists()
 
 
 def test_embedding_client_reuses_http_client(monkeypatch, tmp_path: Path) -> None:
@@ -251,6 +362,18 @@ def test_embedding_client_reuses_http_client(monkeypatch, tmp_path: Path) -> Non
     assert len(created_clients) == 1
     assert len(posts) == 2
     assert created_clients[0].closed is True
+
+
+def test_embedding_client_requires_explicit_embedding_model(tmp_path: Path) -> None:
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+    )
+
+    with pytest.raises(ValueError, match="EMBEDDING_MODEL must be configured"):
+        relationship_miner.OllamaEmbeddingClient(settings)
 
 
 def test_api_embed_batches_inputs_per_worker(monkeypatch, tmp_path: Path) -> None:
@@ -822,6 +945,8 @@ def test_relationship_cli_concurrency_sets_embedding_worker_limit(
             "--concurrency",
             "4",
             "--use-embeddings",
+            "--embedding-model",
+            "nomic-embed-text",
         ]
     )
 
@@ -829,3 +954,25 @@ def test_relationship_cli_concurrency_sets_embedding_worker_limit(
 
     assert settings.CONCURRENCY_LIMIT == 4
     assert settings.RELATIONSHIP_USE_EMBEDDINGS is True
+    assert settings.EMBEDDING_MODEL == "nomic-embed-text"
+
+
+def test_relationship_cli_requires_embedding_model_for_embeddings(
+    tmp_path: Path,
+) -> None:
+    args = relationship_miner.build_parser().parse_args(
+        [
+            "--source-dir",
+            str(tmp_path / "source"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--llm-endpoint",
+            "http://localhost:11434/api/generate",
+            "--llm-model",
+            "gemma4:e4b",
+            "--use-embeddings",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="--embedding-model is required"):
+        relationship_miner.build_settings_from_args(args)

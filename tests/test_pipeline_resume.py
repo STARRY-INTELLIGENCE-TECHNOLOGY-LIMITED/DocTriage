@@ -3,6 +3,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 import main
 import relationship_miner
 from config import Settings
@@ -472,12 +474,170 @@ def test_embedding_relationships_are_mined_after_analysis_when_selected(
         SKIP_MANIFEST_ANALYSIS=True,
         RELATIONSHIP_MINING_ENABLED=True,
         RELATIONSHIP_USE_EMBEDDINGS=True,
+        EMBEDDING_MODEL="nomic-embed-text",
     )
 
     main.run_pipeline(settings)
 
     assert len(relationship_settings) == 1
     assert relationship_settings[0].RELATIONSHIP_USE_EMBEDDINGS is True
+    assert relationship_settings[0].EMBEDDING_MODEL == "nomic-embed-text"
+
+
+def test_run_pipeline_prepares_scoring_model_before_analysis(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    (source_dir / "doc.md").write_text("# Title\n\nbody", encoding="utf-8")
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        main,
+        "prepare_scoring_model_for_analysis",
+        lambda settings: events.append("prepare_scoring"),
+    )
+    monkeypatch.setattr(
+        main.SemanticScoring,
+        "score_document",
+        lambda self, file_path, clean_markdown, profile, manifest: (
+            events.append("score")
+            or SemanticScore(
+                quality=80,
+                category="Design",
+                knowledge_density=80,
+                implementation_specificity=40,
+                logical_structure=80,
+                reason="test",
+            )
+        ),
+    )
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        COPY_FILES=False,
+        CONCURRENCY_LIMIT=1,
+        SKIP_MANIFEST_ANALYSIS=True,
+        EMBEDDING_MODEL="nomic-embed-text",
+    )
+
+    main.run_pipeline(settings)
+
+    assert events[:2] == ["prepare_scoring", "score"]
+
+
+def test_main_cli_requires_embedding_model_for_embedding_relationships(
+    tmp_path: Path,
+) -> None:
+    args = main.build_parser().parse_args(
+        [
+            "--source-dir",
+            str(tmp_path / "source"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--llm-endpoint",
+            "http://localhost:11434/api/generate",
+            "--llm-model",
+            "gemma4:e4b",
+            "--relationship-use-embeddings",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="--embedding-model is required"):
+        main.build_settings_from_args(args)
+
+
+def test_main_cli_explicit_ocr_and_manifest_switches(tmp_path: Path) -> None:
+    parser = main.build_parser()
+    default_args = parser.parse_args(
+        [
+            "--source-dir",
+            str(tmp_path / "source"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--llm-endpoint",
+            "http://localhost:11434/api/generate",
+            "--llm-model",
+            "gemma4:e4b",
+        ]
+    )
+    enabled_args = parser.parse_args(
+        [
+            "--source-dir",
+            str(tmp_path / "source"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--llm-endpoint",
+            "http://localhost:11434/api/generate",
+            "--llm-model",
+            "gemma4:e4b",
+            "--ocr",
+            "--manifest-analysis",
+        ]
+    )
+    disabled_args = parser.parse_args(
+        [
+            "--source-dir",
+            str(tmp_path / "source"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--llm-endpoint",
+            "http://localhost:11434/api/generate",
+            "--llm-model",
+            "gemma4:e4b",
+            "--no-ocr",
+            "--skip-manifest-analysis",
+        ]
+    )
+
+    default_settings = main.build_settings_from_args(default_args)
+    enabled_settings = main.build_settings_from_args(enabled_args)
+    disabled_settings = main.build_settings_from_args(disabled_args)
+
+    assert default_settings.OCR_ENABLED is False
+    assert default_settings.SKIP_MANIFEST_ANALYSIS is True
+    assert enabled_settings.OCR_ENABLED is True
+    assert enabled_settings.SKIP_MANIFEST_ANALYSIS is False
+    assert disabled_settings.OCR_ENABLED is False
+    assert disabled_settings.SKIP_MANIFEST_ANALYSIS is True
+
+
+def test_main_cli_rejects_conflicting_ocr_and_manifest_switches(tmp_path: Path) -> None:
+    parser = main.build_parser()
+    base_args = [
+        "--source-dir",
+        str(tmp_path / "source"),
+        "--output-root",
+        str(tmp_path / "output"),
+        "--llm-endpoint",
+        "http://localhost:11434/api/generate",
+        "--llm-model",
+        "gemma4:e4b",
+    ]
+
+    with pytest.raises(SystemExit):
+        parser.parse_args([*base_args, "--ocr", "--no-ocr"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [*base_args, "--manifest-analysis", "--skip-manifest-analysis"]
+        )
+
+    args = parser.parse_args(base_args)
+    args.ocr = True
+    args.no_ocr = True
+    with pytest.raises(ValueError, match="--ocr and --no-ocr"):
+        main.build_settings_from_args(args)
+
+    args = parser.parse_args(base_args)
+    args.manifest_analysis = True
+    args.skip_manifest_analysis = True
+    with pytest.raises(
+        ValueError, match="--manifest-analysis and --skip-manifest-analysis"
+    ):
+        main.build_settings_from_args(args)
 
 
 def test_plain_relationship_mining_does_not_release_scoring_model(

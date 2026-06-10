@@ -63,7 +63,7 @@ HTML_PAGE = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DocTriage Console</title>
   <style>
-    :root { color-scheme: light; --line:#d7dde8; --muted:#5f6b7a; --bg:#f6f8fb; --text:#172033; --blue:#1d4ed8; --green:#15803d; --red:#b91c1c; }
+    :root { color-scheme: light; --line:#d7dde8; --muted:#5f6b7a; --bg:#f6f8fb; --text:#172033; --blue:#1d4ed8; --green:#15803d; --red:#b91c1c; --orange:#c2410c; }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--bg); }
     header { padding: 16px 20px; background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
@@ -77,6 +77,14 @@ HTML_PAGE = r"""<!doctype html>
     .tab.active { background: var(--blue); border-color: var(--blue); color: #fff; }
     .filters, .run-grid { display: grid; grid-template-columns: repeat(8, minmax(96px, 1fr)); gap: 8px; align-items: end; }
     .run-grid { grid-template-columns: repeat(6, minmax(120px, 1fr)); }
+    .run-toolbar { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .relationship-toolbar { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: flex-start; min-width: 0; }
+    .relationship-options { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; min-width: 0; }
+    .relationship-option { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+    .relationship-option input[type=checkbox] { flex: 0 0 auto; }
+    .relationship-embedding-row { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; min-width: 0; }
+    .embedding-option input[type=text] { width: min(280px, 34vw); min-width: 180px; }
+    .relationship-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .reading-filters { grid-template-columns: minmax(120px, 150px) minmax(110px, 140px) minmax(100px, 120px) minmax(190px, 1fr) minmax(190px, 1fr) minmax(160px, 1fr) minmax(100px, 120px) minmax(120px, 140px) auto; align-items: start; }
     .reading-target { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto minmax(220px, 1fr); gap: 8px; align-items: end; }
     label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
@@ -91,7 +99,6 @@ HTML_PAGE = r"""<!doctype html>
     button.danger { background: var(--red); border-color: var(--red); color: #fff; }
     .toggle-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .toggle-inline > input[type=text] { flex: 1 1 220px; min-width: 0; }
-    .advanced-run { display: none; }
     main { padding: 16px 20px; }
     section { display: none; }
     section.active { display: block; }
@@ -125,6 +132,8 @@ HTML_PAGE = r"""<!doctype html>
     .pill { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; font-size: 13px; }
     .progress { height: 12px; border: 1px solid var(--line); background: #eef2f7; border-radius: 999px; overflow: hidden; margin: 8px 0; }
     .progress > div { height: 100%; width: 0%; background: var(--green); }
+    .progress.embedding > div { background: var(--orange); }
+    .embedding-progress-wrap { display: none; margin-top: 10px; }
     pre { background: #101827; color: #e5e7eb; padding: 12px; overflow: auto; max-height: 360px; border-radius: 6px; white-space: pre-wrap; }
     .table-wrap { background: #fff; border: 1px solid var(--line); overflow: auto; max-height: calc(100vh - 250px); }
     table { width: 100%; border-collapse: collapse; min-width: 1200px; }
@@ -176,7 +185,7 @@ HTML_PAGE = r"""<!doctype html>
           <label><span class="label-row"><span data-i18n="output_dir">输出目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_dir" data-tip="写入进度、日志、评分结果和可选复制结果的目录。同一输出目录会自动续跑；同一时间只允许一个分析进程写入。">?</span></span><input id="run_output_root" placeholder="请选择输出目录" data-i18n-placeholder="ph_output_dir" /></label>
           <button id="pick_output_btn" onclick="pickFolder('run_output_root')" data-i18n="pick_output_dir">选择输出目录</button>
           <label><span class="label-row">LLM Endpoint <span class="help" tabindex="0" data-i18n-tip="tip_llm_endpoint" data-tip="文档评分调用的文本模型接口。Ollama 默认是 /api/generate；如果你切换服务地址，这里要一起改。">?</span></span><input id="run_llm_endpoint" value="http://localhost:11434/api/generate" /></label>
-          <label><span class="label-row"><span data-i18n="model">模型</span> <span class="help" tabindex="0" data-i18n-tip="tip_model" data-tip="用于文档分类、打分和摘要理解的模型名。关系挖掘若开启 embedding，但未单独指定 embedding 模型，也会回退使用这里的模型名。">?</span></span><input id="run_llm_model" value="gemma4:e4b" /></label>
+          <label><span class="label-row"><span data-i18n="model">模型</span> <span class="help" tabindex="0" data-i18n-tip="tip_model" data-tip="用于文档分类、打分和摘要理解的模型名。Embedding 关系需要单独填写向量模型，不会自动沿用这里的模型。">?</span></span><input id="run_llm_model" value="gemma4:e4b" /></label>
           <label><span class="label-row"><span data-i18n="output_language">输出语言</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_language" data-tip="摘要和原因的输出语言。自动会根据文档主体语言推断；也可以强制指定一种语言。">?</span></span>
             <select id="run_output_language">
               <option value="auto" data-i18n="lang_auto">自动</option>
@@ -190,40 +199,43 @@ HTML_PAGE = r"""<!doctype html>
             </select>
           </label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="concurrency">并发</span> <span class="help" tabindex="0" data-i18n-tip="tip_concurrency" data-tip="同时向 LLM 发起的请求数。大目录和本地模型首跑建议 1；模型空闲且显存足够时再逐步上调。">?</span></span><input id="run_concurrency" type="number" value="1" min="1" max="64" /></label>
-          <label class="advanced-run"><span class="label-row">Limit <span class="help" tabindex="0" data-i18n-tip="tip_limit" data-tip="只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。">?</span></span><input id="run_limit" type="number" min="1" placeholder="空为全量" data-i18n-placeholder="ph_limit" /></label>
+          <label class="advanced-run"><span class="label-row"><span data-i18n="limit">数量上限</span> <span class="help" tabindex="0" data-i18n-tip="tip_limit" data-tip="只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。">?</span></span><input id="run_limit" type="number" min="1" placeholder="空为全量" data-i18n-placeholder="ph_limit" /></label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="max_mb">最大 MB</span> <span class="help" tabindex="0" data-i18n-tip="tip_max_mb" data-tip="跳过超过这个体积的候选文件，避免极大 PDF 或 Office 文档拖慢首轮筛选。">?</span></span><input id="run_max_file_size_mb" type="number" value="80" min="1" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="quality_threshold">质量阈值</span> <span class="help" tabindex="0" data-i18n-tip="tip_quality_threshold" data-tip="达到这个分数的文档会被视为高价值候选。plan-only 模式下用于评分分层和后续筛选，不生成分类目录。">?</span></span><input id="run_quality_threshold" type="number" value="75" min="0" max="100" /></label>
+          <label class="advanced-run"><span class="label-row"><span data-i18n="quality_threshold">质量阈值</span> <span class="help" tabindex="0" data-i18n-tip="tip_quality_threshold" data-tip="达到这个分数的文档会被视为高价值候选。仅评分模式下用于评分分层和后续筛选，不生成分类目录。">?</span></span><input id="run_quality_threshold" type="number" value="75" min="0" max="100" /></label>
           <label class="advanced-run"><span class="label-row"><span data-i18n="timeout_seconds">超时秒</span> <span class="help" tabindex="0" data-i18n-tip="tip_timeout_seconds" data-tip="单个 LLM 请求最长等待时间。模型较慢或文档较大时可以调高；过高会让失败请求卡更久。">?</span></span><input id="run_timeout_seconds" type="number" value="240" min="5" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="summary">摘要</span> <span class="help" tabindex="0" data-i18n-tip="tip_summary" data-tip="把本地短摘要写入 decisions.jsonl，后续做关系挖掘、公开写作筛选和人工复核时更有用。会多占一点状态文件空间。">?</span></span><input id="run_document_summary" type="checkbox" checked /></label>
-          <label class="advanced-run"><span class="label-row">Plan only <span class="help" tabindex="0" data-i18n-tip="tip_plan_only" data-tip="只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。">?</span></span><input id="run_plan_only" type="checkbox" checked /></label>
-          <label class="advanced-run"><span class="label-row">No OCR <span class="help" tabindex="0" data-i18n-tip="tip_no_ocr" data-tip="关闭 OCR。对有文本层的 PDF 和 Office 文档更快；纯图片或扫描版 PDF 可能提取不到正文。建议首轮勾选，后续对扫描件分批取消。">?</span></span><input id="run_no_ocr" type="checkbox" checked /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="skip_manifest">跳过 Manifest</span> <span class="help" tabindex="0" data-i18n-tip="tip_skip_manifest" data-tip="跳过目录级系列/集合分析，直接进入文件级评分。大目录首跑通常建议开启，先拿到全局评分结果。">?</span></span><input id="run_skip_manifest" type="checkbox" checked /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="force_reprocess">强制重跑</span> <span class="help" tabindex="0" data-i18n-tip="tip_force_reprocess" data-tip="忽略已处理记录，按当前参数重新处理匹配文件。适合你调整模型、阈值或提示词后重算。">?</span></span><input id="run_force_reprocess" type="checkbox" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="content_hash">内容 Hash</span> <span class="help" tabindex="0" data-i18n-tip="tip_content_hash" data-tip="变更检测除了时间和大小，还计算文件内容哈希。更准，但大目录和大文件会更慢。">?</span></span><input id="run_content_hash" type="checkbox" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="mine_relationships">挖掘关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_mine_relationships" data-tip="在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。">?</span></span><input id="run_mine_relationships" type="checkbox" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="title_citations">标题引用</span> <span class="help" tabindex="0" data-i18n-tip="tip_title_citations" data-tip="启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。">?</span></span><input id="run_relationship_text" type="checkbox" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="embedding_relationships">Embedding 关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_embedding_relationships" data-tip="给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。">?</span></span><div class="toggle-inline"><input id="run_relationship_embeddings" type="checkbox" onchange="syncEmbeddingModelVisibility()" /><input id="run_embedding_model" type="text" placeholder="向量模型可留空沿用主模型" data-i18n-placeholder="ph_embedding_model" style="display:none;" disabled /></div></label>
+          <label class="advanced-run relationship-option"><input id="run_document_summary" type="checkbox" /><span class="label-row"><span data-i18n="summary">摘要</span> <span class="help" tabindex="0" data-i18n-tip="tip_summary" data-tip="把本地短摘要写入 decisions.jsonl，后续做关系挖掘、公开写作筛选和人工复核时更有用。会多占一点状态文件空间。">?</span></span></label>
+          <label class="advanced-run relationship-option"><input id="run_plan_only" type="checkbox" /><span class="label-row"><span data-i18n="plan_only">仅评分</span> <span class="help" tabindex="0" data-i18n-tip="tip_plan_only" data-tip="只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。">?</span></span></label>
+          <label class="advanced-run relationship-option"><input id="run_ocr_enabled" type="checkbox" /><span class="label-row"><span data-i18n="ocr_enabled">开启OCR</span> <span class="help" tabindex="0" data-i18n-tip="tip_ocr_enabled" data-tip="启用 OCR 解析纯图片或扫描版 PDF。会明显增加处理时间；普通带文本层的 PDF 和 Office 文档通常不需要。">?</span></span></label>
+          <label class="advanced-run relationship-option"><input id="run_manifest_analysis" type="checkbox" /><span class="label-row"><span data-i18n="manifest_analysis">开启目录分析</span> <span class="help" tabindex="0" data-i18n-tip="tip_manifest_analysis" data-tip="启用目录级系列/集合分析，再进入文件级评分。适合需要识别同一目录下系列资料的场景；大目录首轮可以先不勾选。">?</span></span></label>
+          <label class="advanced-run relationship-option"><input id="run_force_reprocess" type="checkbox" /><span class="label-row"><span data-i18n="force_reprocess">强制重跑</span> <span class="help" tabindex="0" data-i18n-tip="tip_force_reprocess" data-tip="忽略已处理记录，按当前参数重新处理匹配文件。适合你调整模型、阈值或提示词后重算。">?</span></span></label>
+          <label class="advanced-run relationship-option"><input id="run_content_hash" type="checkbox" /><span class="label-row"><span data-i18n="content_hash">内容 Hash</span> <span class="help" tabindex="0" data-i18n-tip="tip_content_hash" data-tip="变更检测除了时间和大小，还计算文件内容哈希。更准，但大目录和大文件会更慢。">?</span></span></label>
         </div>
-        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-          <select id="run_template">
-            <option value="" data-i18n="choose_template">选择模板</option>
-            <option value="sample" data-i18n="template_sample">小样本试跑</option>
-            <option value="overnight" data-i18n="template_overnight">过夜全量</option>
-            <option value="relationships" data-i18n="template_relationships">评分+关系挖掘</option>
-            <option value="strict" data-i18n="template_strict">严格小样本重跑</option>
-          </select>
-          <button onclick="applyTemplate()" data-i18n="apply_template">应用模板</button>
-          <button id="toggle_advanced_btn" onclick="toggleAdvancedRunOptions()">显示高级参数</button>
-          <button onclick="applyPaths()" data-i18n="apply_paths">应用路径</button>
+        <div class="run-toolbar">
           <button id="start_analysis_btn" class="primary" onclick="startAnalysis()" data-i18n="start_analysis">开始分析</button>
-          <button onclick="loadAnalysis()" data-i18n="refresh_status">刷新状态</button>
           <button id="stop_analysis_btn" class="danger" onclick="stopAnalysis()" data-i18n="stop_analysis">停止分析</button>
           <button id="reset_analysis_btn" class="danger" onclick="resetAnalysis()" data-i18n="reset_analysis">重置分析</button>
+          <div class="relationship-toolbar">
+            <div class="relationship-options">
+              <label class="relationship-option"><input id="run_mine_relationships" type="checkbox" /><span class="label-row"><span data-i18n="mine_relationships">挖掘关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_mine_relationships" data-tip="在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。">?</span></span></label>
+              <label class="relationship-option"><input id="run_relationship_text" type="checkbox" /><span class="label-row"><span data-i18n="title_citations">标题引用</span> <span class="help" tabindex="0" data-i18n-tip="tip_title_citations" data-tip="启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。">?</span></span></label>
+              <div class="relationship-embedding-row">
+                <label class="relationship-option embedding-option"><input id="run_relationship_embeddings" type="checkbox" /><span class="label-row"><span data-i18n="embedding_relationships">Embedding 关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_embedding_relationships" data-tip="给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。必须填写向量模型；更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。">?</span></span><input id="run_embedding_model" type="text" placeholder="填写向量模型后才能启用" data-i18n-placeholder="ph_embedding_model" /></label>
+                <span class="relationship-actions">
+                  <button id="early_relationships_btn" class="primary" onclick="startEarlyRelationships()" data-i18n="early_relationships">提前生成关系</button>
+                  <button id="stop_relationships_btn" class="danger" onclick="stopRelationships()" data-i18n="stop_relationships">停止生成关系</button>
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="panel">
         <div id="analysisStats" class="stats"></div>
         <div class="progress"><div id="analysisBar"></div></div>
+        <div id="embeddingProgressWrap" class="embedding-progress-wrap">
+          <div id="embeddingProgressStats" class="stats"></div>
+          <div class="progress embedding"><div id="embeddingProgressBar"></div></div>
+        </div>
         <pre id="analysisLog"></pre>
       </div>
     </section>
@@ -314,6 +326,7 @@ HTML_PAGE = r"""<!doctype html>
           <label><span data-i18n="graph_min_size">最小簇大小</span> <input id="graph_min_size" type="number" min="2" value="2" /></label>
           <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <button id="graph_mine_btn" class="primary" onclick="startGraphTask('mine')" data-i18n="generate_relationships">生成关系结果</button>
+            <button id="graph_stop_relationships_btn" class="danger" onclick="stopRelationships()" data-i18n="stop_relationships">停止生成关系</button>
             <button id="graph_export_graph_btn" onclick="startGraphTask('export_graph')" data-i18n="export_kg">导出知识图谱</button>
             <button id="graph_export_bundle_btn" onclick="startGraphTask('export_bundle')" data-i18n="export_bundle">导出 Bundle</button>
             <button onclick="loadGraph()" data-i18n="refresh_graph">刷新图谱</button>
@@ -361,16 +374,10 @@ HTML_PAGE = r"""<!doctype html>
         lang_de: "Deutsch",
         lang_fr: "Français",
         lang_es: "Español",
-        choose_template: "选择模板",
-        template_sample: "小样本试跑",
-        template_overnight: "过夜全量",
-        template_relationships: "评分+关系挖掘",
-        template_strict: "严格小样本重跑",
-        apply_template: "应用模板",
-        apply_paths: "应用路径",
         start_analysis: "开始分析",
-        refresh_status: "刷新状态",
+        early_relationships: "提前生成关系",
         stop_analysis: "停止分析",
+        stop_relationships: "停止生成关系",
         reset_analysis: "重置分析",
         reading_output_root: "阅读目标输出目录",
         graph_output_root: "图谱分析目录",
@@ -427,11 +434,14 @@ HTML_PAGE = r"""<!doctype html>
         export_bundle: "导出 Bundle",
         refresh_graph: "刷新图谱",
         concurrency: "并发",
+        limit: "数量上限",
         max_mb: "最大 MB",
         quality_threshold: "质量阈值",
         timeout_seconds: "超时秒",
         summary: "摘要",
-        skip_manifest: "跳过 Manifest",
+        plan_only: "仅评分",
+        ocr_enabled: "开启OCR",
+        manifest_analysis: "开启目录分析",
         force_reprocess: "强制重跑",
         content_hash: "内容 Hash",
         mine_relationships: "挖掘关系",
@@ -445,8 +455,6 @@ HTML_PAGE = r"""<!doctype html>
         status_skipped: "跳过",
         status_deferred: "稍后",
         status_all: "全部",
-        show_advanced: "显示高级参数",
-        hide_advanced: "隐藏高级参数",
         no_summary: "无摘要",
         empty_graph: "暂无关系结果",
         graph_need_paths: "请先选择图谱分析目录",
@@ -485,11 +493,17 @@ HTML_PAGE = r"""<!doctype html>
         reading_output_applied: "阅读目录已应用",
         graph_output_apply_failed: "图谱目录应用失败",
         graph_output_applied: "图谱目录已应用",
-        template_applied: "已应用模板",
         analysis_start_failed: "启动失败",
         analysis_started: "已启动分析",
+        early_relationships_failed: "提前生成关系失败",
+        early_relationships_started: "已停止分析并开始生成关系",
+        analysis_preempting_relationships: "正在停止生成关系并准备开始分析",
+        embedding_model_required: "已勾选 Embedding 关系，请先填写 Embedding 模型。",
+        early_relationships_without_embedding_confirm: "未勾选 Embedding 关系且未填写 Embedding 模型。\n\n本次将只生成关系挖掘和标题引用，不生成 Embedding 向量。确认继续？\n\n取消后请勾选 Embedding 关系并填写模型名称，再重新点击提前生成关系。",
         stop_requested: "已请求停止",
         stop_failed: "停止失败",
+        relationship_stop_requested: "已请求停止生成关系",
+        relationship_stop_failed: "停止生成关系失败",
         need_source_output: "请先应用源目录和输出目录",
         reset_confirm: "将清空输出目录中的日志、状态和关系结果：\n{output}\n\n如果该目录中存在已复制的分类文件，也会一并清理。该操作不可恢复，确认继续？",
         reset_failed: "重置失败",
@@ -522,10 +536,18 @@ HTML_PAGE = r"""<!doctype html>
         current_list_empty: "当前列表为空",
         sort_public_desc: "公开↓",
         sort_public_asc: "公开↑",
-        plan_only_pill: "Plan only：仅评分与阅读标记，不复制文件",
+        plan_only_pill: "仅评分：只记录评分与阅读标记，不复制文件",
         running_pill: "运行中",
         not_running_pill: "未运行",
         progress_pill: "进度",
+        embedding_progress_pill: "Embedding 向量",
+        embedding_phase_loading_cache: "读取缓存",
+        embedding_phase_embedding: "生成中",
+        embedding_phase_complete: "完成",
+        embedding_phase_ready: "准备",
+        embedding_cached_pill: "已缓存",
+        embedding_generated_pill: "本次生成",
+        embedding_missing_pill: "剩余",
         completed_pill: "完成",
         concurrency_pill: "并发",
         eta_waiting_pill: "ETA 等待连续规划",
@@ -545,13 +567,6 @@ HTML_PAGE = r"""<!doctype html>
         phase_completed_no_relationships: "分析完成，关系未生成",
         phase_completed: "分析完成",
         phase_stopped_resume: "已停止，可续传",
-        activity_resume_skipped: "续传跳过",
-        activity_planned: "已规划",
-        activity_progress_write: "进度写入",
-        activity_relationships: "关系挖掘",
-        activity_recent_log: "最近日志",
-        activity_relationships_started: "开始生成关系结果",
-        activity_done: "已完成",
         explain_summary: "摘要",
         explain_reason: "评分理由",
         explain_dimensions: "维度",
@@ -573,22 +588,22 @@ HTML_PAGE = r"""<!doctype html>
         tip_source_dir: "待分析的原始文档目录。程序会递归扫描其下支持的文件类型。不要把输出目录放到这个目录里面。",
         tip_output_dir: "写入进度、日志、评分结果和可选复制结果的目录。同一输出目录会自动续跑；同一时间只允许一个分析进程写入。",
         tip_llm_endpoint: "文档评分调用的文本模型接口。Ollama 默认是 /api/generate；如果你切换服务地址，这里要一起改。",
-        tip_model: "用于文档分类、打分和摘要理解的模型名。关系挖掘若开启 embedding，但未单独指定 embedding 模型，也会回退使用这里的模型名。",
+        tip_model: "用于文档分类、打分和摘要理解的模型名。Embedding 关系需要单独填写向量模型，不会自动沿用这里的模型。",
         tip_output_language: "摘要和原因的输出语言。自动会根据文档主体语言推断；也可以强制指定一种语言。",
         tip_concurrency: "同时向 LLM 发起的请求数。大目录和本地模型首跑建议 1；模型空闲且显存足够时再逐步上调。",
         tip_limit: "只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。",
         tip_max_mb: "跳过超过这个体积的候选文件，避免极大 PDF 或 Office 文档拖慢首轮筛选。",
-        tip_quality_threshold: "达到这个分数的文档会被视为高价值候选。plan-only 模式下用于评分分层和后续筛选，不生成分类目录。",
+        tip_quality_threshold: "达到这个分数的文档会被视为高价值候选。仅评分模式下用于评分分层和后续筛选，不生成分类目录。",
         tip_timeout_seconds: "单个 LLM 请求最长等待时间。模型较慢或文档较大时可以调高；过高会让失败请求卡更久。",
         tip_summary: "把本地短摘要写入 decisions.jsonl，后续做关系挖掘、公开写作筛选和人工复核时更有用。会多占一点状态文件空间。",
         tip_plan_only: "只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。",
-        tip_no_ocr: "关闭 OCR。对有文本层的 PDF 和 Office 文档更快；纯图片或扫描版 PDF 可能提取不到正文。建议首轮勾选，后续对扫描件分批取消。",
-        tip_skip_manifest: "跳过目录级系列/集合分析，直接进入文件级评分。大目录首跑通常建议开启，先拿到全局评分结果。",
+        tip_ocr_enabled: "启用 OCR 解析纯图片或扫描版 PDF。会明显增加处理时间；普通带文本层的 PDF 和 Office 文档通常不需要。",
+        tip_manifest_analysis: "启用目录级系列/集合分析，再进入文件级评分。适合需要识别同一目录下系列资料的场景；大目录首轮可以先不勾选。",
         tip_force_reprocess: "忽略已处理记录，按当前参数重新处理匹配文件。适合你调整模型、阈值或提示词后重算。",
         tip_content_hash: "变更检测除了时间和大小，还计算文件内容哈希。更准，但大目录和大文件会更慢。",
         tip_mine_relationships: "在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。",
         tip_title_citations: "启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。",
-        tip_embedding_relationships: "给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。",
+        tip_embedding_relationships: "给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。必须填写向量模型；更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。",
         ph_source_dir: "请选择源文档目录",
         ph_output_dir: "请选择输出目录",
         ph_reading_output_root: "选择或输入已分析输出目录",
@@ -596,7 +611,7 @@ HTML_PAGE = r"""<!doctype html>
         ph_text_search: "名称/路径/备注",
         ph_graph_search: "路径/分类/标签",
         ph_limit: "空为全量",
-        ph_embedding_model: "向量模型可留空沿用主模型"
+        ph_embedding_model: "填写向量模型后才能启用"
       },
       en: {
         app_title: "DocTriage Console",
@@ -617,16 +632,10 @@ HTML_PAGE = r"""<!doctype html>
         lang_de: "German",
         lang_fr: "French",
         lang_es: "Spanish",
-        choose_template: "Choose template",
-        template_sample: "Sample run",
-        template_overnight: "Overnight full run",
-        template_relationships: "Scoring + relationships",
-        template_strict: "Strict sample rerun",
-        apply_template: "Apply template",
-        apply_paths: "Apply paths",
         start_analysis: "Start analysis",
-        refresh_status: "Refresh status",
+        early_relationships: "Mine now",
         stop_analysis: "Stop analysis",
+        stop_relationships: "Stop relationships",
         reset_analysis: "Reset analysis",
         reading_output_root: "Reading output directory",
         graph_output_root: "Graph analysis directory",
@@ -683,11 +692,14 @@ HTML_PAGE = r"""<!doctype html>
         export_bundle: "Export bundle",
         refresh_graph: "Refresh graph",
         concurrency: "Concurrency",
+        limit: "Limit",
         max_mb: "Max MB",
         quality_threshold: "Quality threshold",
         timeout_seconds: "Timeout seconds",
         summary: "Summary",
-        skip_manifest: "Skip manifest",
+        plan_only: "Plan only",
+        ocr_enabled: "Enable OCR",
+        manifest_analysis: "Enable directory analysis",
         force_reprocess: "Force reprocess",
         content_hash: "Content hash",
         mine_relationships: "Mine relationships",
@@ -701,8 +713,6 @@ HTML_PAGE = r"""<!doctype html>
         status_skipped: "Skipped",
         status_deferred: "Deferred",
         status_all: "All",
-        show_advanced: "Show advanced",
-        hide_advanced: "Hide advanced",
         no_summary: "No summary",
         empty_graph: "No relationship results",
         graph_need_paths: "Select a graph analysis directory first",
@@ -741,11 +751,17 @@ HTML_PAGE = r"""<!doctype html>
         reading_output_applied: "Reading directory applied",
         graph_output_apply_failed: "Failed to apply graph directory",
         graph_output_applied: "Graph directory applied",
-        template_applied: "Template applied",
         analysis_start_failed: "Failed to start analysis",
         analysis_started: "Analysis started",
+        early_relationships_failed: "Failed to mine relationships early",
+        early_relationships_started: "Analysis stopped and relationship generation started",
+        analysis_preempting_relationships: "Stopping relationship generation and preparing analysis",
+        embedding_model_required: "Embedding relationships are selected. Enter an embedding model first.",
+        early_relationships_without_embedding_confirm: "Embedding relationships are not selected and no embedding model is set.\n\nThis run will only mine relationships and title citations, without generating embedding vectors. Continue?\n\nCancel, then select Embedding relationships and enter a model name if you need vectors.",
         stop_requested: "Stop requested",
         stop_failed: "Failed to stop",
+        relationship_stop_requested: "Relationship stop requested",
+        relationship_stop_failed: "Failed to stop relationship generation",
         need_source_output: "Apply source and output directories first",
         reset_confirm: "This will clear logs, status, and relationship results in the output directory:\n{output}\n\nCopied routed files in that directory will also be removed. This cannot be undone. Continue?",
         reset_failed: "Reset failed",
@@ -782,6 +798,14 @@ HTML_PAGE = r"""<!doctype html>
         running_pill: "Running",
         not_running_pill: "Not running",
         progress_pill: "Progress",
+        embedding_progress_pill: "Embedding vectors",
+        embedding_phase_loading_cache: "Loading cache",
+        embedding_phase_embedding: "Generating",
+        embedding_phase_complete: "Complete",
+        embedding_phase_ready: "Ready",
+        embedding_cached_pill: "Cached",
+        embedding_generated_pill: "Generated this run",
+        embedding_missing_pill: "Remaining",
         completed_pill: "Completed",
         concurrency_pill: "Concurrency",
         eta_waiting_pill: "ETA waiting for steady planning",
@@ -801,13 +825,6 @@ HTML_PAGE = r"""<!doctype html>
         phase_completed_no_relationships: "Analysis complete, relationships not generated",
         phase_completed: "Analysis complete",
         phase_stopped_resume: "Stopped, resumable",
-        activity_resume_skipped: "Resume skipped",
-        activity_planned: "Planned",
-        activity_progress_write: "Progress written",
-        activity_relationships: "Relationships",
-        activity_recent_log: "Recent log",
-        activity_relationships_started: "Started relationship generation",
-        activity_done: "Done",
         explain_summary: "Summary",
         explain_reason: "Scoring reason",
         explain_dimensions: "Dimensions",
@@ -829,7 +846,7 @@ HTML_PAGE = r"""<!doctype html>
         tip_source_dir: "Original document directory. DocTriage recursively scans supported file types under this folder.",
         tip_output_dir: "Directory for progress, logs, scoring results, and optional routed copies. A run can resume from the same output directory.",
         tip_llm_endpoint: "Text model endpoint for document scoring. Ollama defaults to /api/generate.",
-        tip_model: "Model name for classification, scoring, and summaries. Relationship embedding can reuse it when no embedding model is set.",
+        tip_model: "Model name for classification, scoring, and summaries. Embedding relationships require a separate embedding model and will not reuse this model automatically.",
         tip_output_language: "Language for generated summaries and reasons. Auto infers from the document body; explicit choices force that language.",
         tip_concurrency: "Maximum concurrent LLM requests. Start with 1 for large local runs.",
         tip_limit: "Process only the first N candidate files. Leave empty for all files.",
@@ -838,13 +855,13 @@ HTML_PAGE = r"""<!doctype html>
         tip_timeout_seconds: "Maximum wait time for one LLM request.",
         tip_summary: "Persist short summaries to decisions.jsonl for relationship mining, public-writing review, and manual triage.",
         tip_plan_only: "Record scoring, categories, progress, and decisions without copying source files.",
-        tip_no_ocr: "Disable OCR. Faster for PDFs with text layers; scanned documents may extract little or no text.",
-        tip_skip_manifest: "Skip directory-level series analysis and start file-level scoring directly.",
+        tip_ocr_enabled: "Enable OCR for image-only files and scanned PDFs. This can noticeably slow processing; PDFs with text layers and Office documents usually do not need it.",
+        tip_manifest_analysis: "Enable directory-level series detection before file-level scoring. Useful for related document sets; large first-pass runs can leave it off.",
         tip_force_reprocess: "Ignore processed records and rerun matching files with current settings.",
         tip_content_hash: "Use content hashes in addition to timestamps and sizes. More accurate, slower on large folders.",
         tip_mine_relationships: "Generate document relations and clusters after scoring.",
         tip_title_citations: "Use lightweight title/path citation signals without calling an embedding model.",
-        tip_embedding_relationships: "Generate embeddings for summaries, titles, and categories to find semantic relationships.",
+        tip_embedding_relationships: "Generate embeddings for summaries, titles, and categories to find semantic relationships. Requires an explicit embedding model.",
         ph_source_dir: "Select source document directory",
         ph_output_dir: "Select output directory",
         ph_reading_output_root: "Select or enter an analyzed output directory",
@@ -852,7 +869,7 @@ HTML_PAGE = r"""<!doctype html>
         ph_text_search: "Name/path/note",
         ph_graph_search: "Path/category/tag",
         ph_limit: "empty means all",
-        ph_embedding_model: "empty reuses main model"
+        ph_embedding_model: "required for embedding relationships"
       }
     };
     let uiLanguage = localStorage.getItem("doctriage_ui_language") || "zh-CN";
@@ -874,9 +891,13 @@ HTML_PAGE = r"""<!doctype html>
     let tooltipTarget = null;
     let readingSourceDir = "";
     let lastSyncedRunOutputRoot = "";
+    let lastAppliedRunPathKey = "";
     let graphSourceDir = "";
     let lastSyncedGraphOutputRoot = "";
+    let lastAnalysisPayload = null;
+    let relationshipLaunchPending = null;
     const RUN_FORM_STORAGE_KEY = "doctriage_run_form";
+    const RUN_FORM_STORAGE_VERSION = 2;
     const READING_TARGET_STORAGE_KEY = "doctriage_reading_target";
     const GRAPH_TARGET_STORAGE_KEY = "doctriage_graph_target";
     const RUN_FORM_VALUE_FIELDS = [
@@ -890,14 +911,13 @@ HTML_PAGE = r"""<!doctype html>
       "run_limit",
       "run_max_file_size_mb",
       "run_quality_threshold",
-      "run_timeout_seconds",
-      "run_template"
+      "run_timeout_seconds"
     ];
     const RUN_FORM_CHECKBOX_FIELDS = [
       "run_document_summary",
       "run_plan_only",
-      "run_no_ocr",
-      "run_skip_manifest",
+      "run_ocr_enabled",
+      "run_manifest_analysis",
       "run_force_reprocess",
       "run_content_hash",
       "run_mine_relationships",
@@ -906,8 +926,7 @@ HTML_PAGE = r"""<!doctype html>
     ];
     const RUN_FORM_ALLOW_EMPTY_FIELDS = new Set([
       "run_limit",
-      "run_embedding_model",
-      "run_template"
+      "run_embedding_model"
     ]);
     const EXPLANATION_DIMENSIONS = [
       ["knowledge_density", "dim_knowledge_density"],
@@ -962,7 +981,7 @@ HTML_PAGE = r"""<!doctype html>
     }
 
     function currentRunFormState() {
-      const state = {};
+      const state = {_version: RUN_FORM_STORAGE_VERSION};
       for (const id of RUN_FORM_VALUE_FIELDS) {
         const element = $(id);
         if (element) state[id] = element.value;
@@ -1134,6 +1153,7 @@ HTML_PAGE = r"""<!doctype html>
 
     function applyStoredRunFormState() {
       const state = readStoredRunFormState();
+      const applyCheckboxState = Number(state._version || 0) === RUN_FORM_STORAGE_VERSION;
       for (const id of RUN_FORM_VALUE_FIELDS) {
         if (!Object.prototype.hasOwnProperty.call(state, id)) continue;
         const element = $(id);
@@ -1142,12 +1162,12 @@ HTML_PAGE = r"""<!doctype html>
         if (!value && !RUN_FORM_ALLOW_EMPTY_FIELDS.has(id)) continue;
         element.value = value;
       }
+      if (!applyCheckboxState) return;
       for (const id of RUN_FORM_CHECKBOX_FIELDS) {
         if (!Object.prototype.hasOwnProperty.call(state, id)) continue;
         const element = $(id);
         if (element) element.checked = !!state[id];
       }
-      syncEmbeddingModelVisibility();
     }
 
     function initRunFormPersistence() {
@@ -1156,11 +1176,14 @@ HTML_PAGE = r"""<!doctype html>
         if (!element) continue;
         const eventName = element.tagName === "INPUT" && element.type !== "checkbox" ? "input" : "change";
         element.addEventListener(eventName, () => {
-          if (id === "run_relationship_embeddings") syncEmbeddingModelVisibility();
           if (id === "run_output_root") syncReadingTargetFromRunOutput({force: true});
           if (id === "run_source_dir") syncReadingSourceFromRunIfLinked();
           saveRunFormState();
         });
+      }
+      for (const id of ["run_source_dir", "run_output_root"]) {
+        const element = $(id);
+        if (element) element.addEventListener("blur", () => autoApplyPaths());
       }
     }
 
@@ -1202,7 +1225,6 @@ HTML_PAGE = r"""<!doctype html>
         item.dataset.tip = tr(item.dataset.i18nTip);
       });
       if ($("reading_scope")) $("reading_scope").value = readingScope;
-      setAdvancedRunOptionsVisible(localStorage.getItem("doctriage_run_advanced") === "1");
       renderStatsFromRows(filteredRows, allRows.length);
       renderPager();
       renderRows(currentRows);
@@ -1244,6 +1266,7 @@ HTML_PAGE = r"""<!doctype html>
       $("graph_output_root").value = payload.output_root || "";
       readingSourceDir = payload.source_dir || "";
       lastSyncedRunOutputRoot = payload.output_root || "";
+      lastAppliedRunPathKey = runPathKey(payload.source_dir || "", payload.output_root || "");
       graphSourceDir = payload.source_dir || "";
       lastSyncedGraphOutputRoot = payload.output_root || "";
       applyStoredRunFormState();
@@ -1276,6 +1299,7 @@ HTML_PAGE = r"""<!doctype html>
       if (targetId === "run_output_root") syncReadingTargetFromRunOutput({force: true});
       if (targetId === "run_source_dir") syncReadingSourceFromRunIfLinked();
       if (targetId.startsWith("run_")) saveRunFormState();
+      if (targetId === "run_source_dir" || targetId === "run_output_root") autoApplyPaths();
       if (targetId === "reading_output_root") {
         readingSourceDir = "";
         saveReadingTargetState();
@@ -1287,20 +1311,36 @@ HTML_PAGE = r"""<!doctype html>
       }
     }
 
-    async function applyPaths() {
+    function runPathKey(sourceDir, outputRoot) {
+      return `${String(sourceDir || "").trim()}\n${String(outputRoot || "").trim()}`;
+    }
+
+    async function autoApplyPaths() {
+      const sourceDir = $("run_source_dir").value.trim();
+      const outputRoot = $("run_output_root").value.trim();
+      if (!sourceDir || !outputRoot) return;
+      const key = runPathKey(sourceDir, outputRoot);
+      if (key === lastAppliedRunPathKey) return;
+      await applyPaths({showSuccess: false});
+    }
+
+    async function applyPaths({showSuccess = true} = {}) {
       saveRunFormState();
+      const sourceDir = $("run_source_dir").value.trim();
+      const outputRoot = $("run_output_root").value.trim();
       const response = await fetch("/api/paths", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-          source_dir: $("run_source_dir").value.trim(),
-          output_root: $("run_output_root").value.trim()
+          source_dir: sourceDir,
+          output_root: outputRoot
         })
       });
       const payload = await response.json();
       if (!response.ok) return showToast(payload.error || tr("paths_apply_failed"));
+      lastAppliedRunPathKey = runPathKey(sourceDir, outputRoot);
       syncReadingTargetFromRunOutput({force: true});
-      showToast(tr("paths_applied"));
+      if (showSuccess) showToast(tr("paths_applied"));
       loadAnalysis();
       loadRows();
       if ($("section-graph").classList.contains("active")) loadGraph();
@@ -1344,7 +1384,7 @@ HTML_PAGE = r"""<!doctype html>
         llm_endpoint: $("run_llm_endpoint").value.trim(),
         llm_model: $("run_llm_model").value.trim(),
         output_language: $("run_output_language").value,
-        embedding_model: $("run_relationship_embeddings").checked ? $("run_embedding_model").value.trim() : "",
+        embedding_model: $("run_embedding_model").value.trim(),
         concurrency: $("run_concurrency").value,
         limit: $("run_limit").value,
         max_file_size_mb: $("run_max_file_size_mb").value,
@@ -1352,15 +1392,37 @@ HTML_PAGE = r"""<!doctype html>
         timeout_seconds: $("run_timeout_seconds").value,
         document_summary: $("run_document_summary").checked,
         plan_only: $("run_plan_only").checked,
-        no_ocr: $("run_no_ocr").checked,
-        skip_manifest_analysis: $("run_skip_manifest").checked,
+        ocr_enabled: $("run_ocr_enabled").checked,
+        no_ocr: !$("run_ocr_enabled").checked,
+        manifest_analysis: $("run_manifest_analysis").checked,
+        skip_manifest_analysis: !$("run_manifest_analysis").checked,
         force_reprocess: $("run_force_reprocess").checked,
         content_hash: $("run_content_hash").checked,
         mine_relationships: $("run_mine_relationships").checked,
         relationship_use_text_citations: $("run_relationship_text").checked,
-        relationship_use_embeddings: $("run_relationship_embeddings").checked,
-        template: $("run_template").value
+        relationship_use_embeddings: $("run_relationship_embeddings").checked
       };
+    }
+
+    function earlyRelationshipPayload() {
+      const payload = runPayload();
+      payload.embedding_model = $("run_embedding_model").value.trim();
+      payload.mine_relationships = true;
+      payload.relationship_use_text_citations = true;
+      return payload;
+    }
+
+    function validateEmbeddingModelSelection(payload) {
+      if (!payload || !payload.relationship_use_embeddings) return true;
+      if (String(payload.embedding_model || "").trim()) return true;
+      showToast(tr("embedding_model_required"));
+      return false;
+    }
+
+    function confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(payload) {
+      if (!payload || payload.relationship_use_embeddings) return true;
+      if (String(payload.embedding_model || "").trim()) return true;
+      return window.confirm(tr("early_relationships_without_embedding_confirm"));
     }
 
     function pathPayload() {
@@ -1398,65 +1460,92 @@ HTML_PAGE = r"""<!doctype html>
       return query.toString();
     }
 
-    function syncEmbeddingModelVisibility() {
-      const enabled = $("run_relationship_embeddings").checked;
-      $("run_embedding_model").style.display = enabled ? "" : "none";
-      $("run_embedding_model").disabled = !enabled;
-    }
-
-    function setAdvancedRunOptionsVisible(visible) {
-      document.querySelectorAll(".advanced-run").forEach(item => item.style.display = visible ? "grid" : "none");
-      $("toggle_advanced_btn").textContent = visible ? tr("hide_advanced") : tr("show_advanced");
-      localStorage.setItem("doctriage_run_advanced", visible ? "1" : "0");
-    }
-
-    function toggleAdvancedRunOptions() {
-      const visible = localStorage.getItem("doctriage_run_advanced") === "1";
-      setAdvancedRunOptionsVisible(!visible);
-    }
-
-    function applyTemplate() {
-      const name = $("run_template").value;
-      if (!name) return;
-      $("run_limit").value = "";
-      $("run_max_file_size_mb").value = "80";
-      $("run_quality_threshold").value = "75";
-      $("run_timeout_seconds").value = "240";
-      $("run_document_summary").checked = true;
-      $("run_plan_only").checked = true;
-      $("run_no_ocr").checked = true;
-      $("run_skip_manifest").checked = true;
-      $("run_force_reprocess").checked = false;
-      $("run_content_hash").checked = false;
-      $("run_mine_relationships").checked = false;
-      $("run_relationship_text").checked = false;
-      $("run_relationship_embeddings").checked = false;
-      if (name === "sample") $("run_limit").value = "200";
-      if (name === "relationships") {
-        $("run_mine_relationships").checked = true;
-        $("run_relationship_text").checked = true;
-      }
-      if (name === "strict") {
-        $("run_limit").value = "200";
-        $("run_force_reprocess").checked = true;
-        $("run_content_hash").checked = true;
-      }
-      syncEmbeddingModelVisibility();
-      saveRunFormState();
-      showToast(tr("template_applied"));
-    }
-
     async function startAnalysis() {
       saveRunFormState();
+      const requestPayload = runPayload();
+      requestPayload.preempt_relationships = true;
+      if (!validateEmbeddingModelSelection(requestPayload)) return;
+      if (shouldPreemptRelationshipsForAnalysis()) showToast(tr("analysis_preempting_relationships"));
+      relationshipLaunchPending = null;
+      $("start_analysis_btn").disabled = true;
       const response = await fetch("/api/analysis/start", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(runPayload())
+        body: JSON.stringify(requestPayload)
       });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("analysis_start_failed"));
+      const responsePayload = await response.json();
+      if (!response.ok) return showToast(responsePayload.error || tr("analysis_start_failed"));
       showToast(tr("analysis_started"));
       loadAnalysis();
+    }
+
+    function shouldPreemptRelationshipsForAnalysis() {
+      const relationshipTask = (lastAnalysisPayload && lastAnalysisPayload.relationship_task) || {};
+      const graphTask = (graphMeta && graphMeta.task) || {};
+      return !!relationshipTask.running || !!graphTask.running || !!relationshipLaunchPending;
+    }
+
+    async function startEarlyRelationships() {
+      saveRunFormState();
+      const requestPayload = earlyRelationshipPayload();
+      if (!validateEmbeddingModelSelection(requestPayload)) return;
+      if (!confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(requestPayload)) return;
+      showRelationshipLaunchPending(requestPayload);
+      const response = await fetch("/api/analysis/early-relationships", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(requestPayload)
+      });
+      const responsePayload = await response.json();
+      if (!response.ok) {
+        clearRelationshipLaunchPending();
+        return showToast(responsePayload.error || tr("early_relationships_failed"));
+      }
+      syncReadingTargetFromRunOutput({force: true});
+      showToast(tr("early_relationships_started"));
+      loadAnalysis();
+      if ($("section-graph").classList.contains("active")) loadGraph();
+    }
+
+    function showRelationshipLaunchPending(payload) {
+      relationshipLaunchPending = {
+        useEmbeddings: !!(payload && payload.relationship_use_embeddings),
+        startedAt: Date.now()
+      };
+      if (lastAnalysisPayload) {
+        renderAnalysis(lastAnalysisPayload);
+        return;
+      }
+      const task = pendingRelationshipTask();
+      $("analysisStats").innerHTML = `<span class="pill">${escapeHtml(relationshipTaskPillText(task))}</span>`;
+      renderEmbeddingProgress(pendingEmbeddingProgress(), task);
+      $("start_analysis_btn").disabled = true;
+      $("early_relationships_btn").disabled = true;
+      $("reset_analysis_btn").disabled = true;
+    }
+
+    function clearRelationshipLaunchPending() {
+      relationshipLaunchPending = null;
+      if (lastAnalysisPayload) renderAnalysis(lastAnalysisPayload);
+      else renderEmbeddingProgress({}, {});
+    }
+
+    function pendingRelationshipTask() {
+      if (!relationshipLaunchPending) return null;
+      return {
+        running: true,
+        pending: true,
+        kind: "mine",
+        command: relationshipLaunchPending.useEmbeddings ? ["--use-embeddings"] : []
+      };
+    }
+
+    function pendingEmbeddingProgress() {
+      return {
+        enabled: true,
+        phase: "ready",
+        percent: 0
+      };
     }
 
     async function stopAnalysis() {
@@ -1468,6 +1557,23 @@ HTML_PAGE = r"""<!doctype html>
       const payload = await response.json();
       showToast(response.ok ? tr("stop_requested") : (payload.error || tr("stop_failed")));
       loadAnalysis();
+    }
+
+    async function stopRelationships() {
+      relationshipLaunchPending = null;
+      const graphPaths = graphPathPayload();
+      const targetPayload = $("section-graph").classList.contains("active") && graphPaths.output_root
+        ? {...runPayload(), ...graphPaths}
+        : runPayload();
+      const response = await fetch("/api/relationships/stop", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(targetPayload)
+      });
+      const payload = await response.json();
+      showToast(response.ok ? tr("relationship_stop_requested") : (payload.error || tr("relationship_stop_failed")));
+      loadAnalysis();
+      if ($("section-graph").classList.contains("active")) loadGraph();
     }
 
     function clearReadingRows() {
@@ -1534,6 +1640,7 @@ HTML_PAGE = r"""<!doctype html>
     }
 
     function renderAnalysis(payload) {
+      lastAnalysisPayload = payload;
       syncReadingTarget(payload);
       const progress = payload.progress || {};
       const activity = payload.activity || {};
@@ -1545,10 +1652,14 @@ HTML_PAGE = r"""<!doctype html>
       const retrySucceeded = Number(summary.retry_succeeded || 0);
       const phaseText = localizedPhase(payload.phase);
       const rateReady = !!progress.rate_window_active && Number(progress.rate_window_completed || 0) > 0;
+      const relationshipTask = payload.relationship_task || {};
+      if (relationshipTask.running || relationshipTask.return_code !== null) relationshipLaunchPending = null;
+      const effectiveRelationshipTask = relationshipTask.running ? relationshipTask : (pendingRelationshipTask() || relationshipTask);
       const parts = [
         phaseText,
         payload.plan_only ? tr("plan_only_pill") : "",
         payload.running ? tr("running_pill") : tr("not_running_pill"),
+        relationshipTaskPillText(effectiveRelationshipTask),
         payload.pid ? "PID " + payload.pid : "",
         payload.effective_concurrency ? `${tr("concurrency_pill")} ${payload.effective_concurrency}` : "",
         progress.percent !== undefined ? `${tr("progress_pill")} ${progress.percent}%` : "",
@@ -1563,9 +1674,56 @@ HTML_PAGE = r"""<!doctype html>
       $("analysisStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
       $("analysisBar").style.width = Math.max(0, Math.min(100, Number(progress.percent || 0))) + "%";
       $("analysisLog").textContent = payload.log_tail || "";
+      const decisionCount = Number((activity.state_counts || {}).decisions || 0);
+      const embeddingProgress = effectiveRelationshipTask.pending ? pendingEmbeddingProgress() : (payload.embedding_progress || {});
+      renderEmbeddingProgress(embeddingProgress, effectiveRelationshipTask);
       $("start_analysis_btn").disabled = !!payload.running;
+      $("early_relationships_btn").disabled = decisionCount <= 0 || !!relationshipTask.running || !!relationshipLaunchPending;
       $("stop_analysis_btn").disabled = !payload.running;
-      $("reset_analysis_btn").disabled = !!payload.running;
+      $("stop_relationships_btn").disabled = !relationshipTask.running;
+      $("reset_analysis_btn").disabled = !!payload.running || !!relationshipTask.running || !!relationshipLaunchPending;
+    }
+
+    function renderEmbeddingProgress(progress, task) {
+      const command = task && Array.isArray(task.command) ? task.command : [];
+      const embeddingTask = command.includes("--use-embeddings");
+      const activeEmbeddingTask = !!(task && task.running && embeddingTask);
+      const visible = activeEmbeddingTask && (!!(progress && progress.enabled) || !!task.pending);
+      $("embeddingProgressWrap").style.display = visible ? "block" : "none";
+      if (!visible) {
+        $("embeddingProgressStats").innerHTML = "";
+        $("embeddingProgressBar").style.width = "0%";
+        return;
+      }
+      const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+      const total = Number(progress.total || 0);
+      const phase = localizedEmbeddingPhase(progress.phase || "ready");
+      const parts = [
+        `${tr("embedding_progress_pill")} ${percent}%`,
+        phase,
+        total > 0 ? `${tr("completed_pill")} ${Number(progress.completed || 0)}/${total}` : "",
+        total > 0 ? `${tr("embedding_cached_pill")} ${Number(progress.cached || 0)}` : "",
+        total > 0 ? `${tr("embedding_generated_pill")} ${Number(progress.generated || 0)}` : "",
+        Number(progress.missing || 0) > 0 ? `${tr("embedding_missing_pill")} ${Number(progress.missing || 0)}` : "",
+        progress.workers ? `${tr("concurrency_pill")} ${progress.workers}` : ""
+      ].filter(Boolean);
+      $("embeddingProgressStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+      $("embeddingProgressBar").style.width = percent + "%";
+    }
+
+    function relationshipTaskPillText(task) {
+      if (!task || !task.running) return "";
+      return trf("graph_task_running", {task: graphTaskKindLabel(task.kind || "mine")});
+    }
+
+    function localizedEmbeddingPhase(phase) {
+      const key = {
+        loading_cache: "embedding_phase_loading_cache",
+        embedding: "embedding_phase_embedding",
+        complete: "embedding_phase_complete",
+        ready: "embedding_phase_ready"
+      }[phase];
+      return key ? tr(key) : (phase || "");
     }
 
     function activityPillText(latest) {
@@ -1593,22 +1751,11 @@ HTML_PAGE = r"""<!doctype html>
     }
 
     function localizedActivityLabel(label) {
-      const key = {
-        "续传跳过": "activity_resume_skipped",
-        "已规划": "activity_planned",
-        "进度写入": "activity_progress_write",
-        "关系挖掘": "activity_relationships",
-        "最近日志": "activity_recent_log"
-      }[label];
-      return key ? tr(key) : (label || "");
+      return label || "";
     }
 
     function localizedActivityDetail(detail) {
-      const key = {
-        "开始生成关系结果": "activity_relationships_started",
-        "已完成": "activity_done"
-      }[detail];
-      return key ? tr(key) : (detail || "");
+      return detail || "";
     }
 
     async function loadRows() {
@@ -1643,6 +1790,7 @@ HTML_PAGE = r"""<!doctype html>
         changed = true;
       }
       if (changed) {
+        lastAppliedRunPathKey = runPathKey($("run_source_dir").value, $("run_output_root").value);
         syncReadingTargetFromRunOutput();
         saveRunFormState();
       } else if (!$("reading_output_root").value.trim()) {
@@ -1706,6 +1854,7 @@ HTML_PAGE = r"""<!doctype html>
       }
       $("graphTaskStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
       $("graph_mine_btn").disabled = !!task.running || !payload.decisions_exists;
+      $("graph_stop_relationships_btn").disabled = !task.running;
       $("graph_export_graph_btn").disabled = !!task.running || !payload.relations_exists;
       $("graph_export_bundle_btn").disabled = !!task.running || !payload.relations_exists;
     }
@@ -1714,14 +1863,16 @@ HTML_PAGE = r"""<!doctype html>
       if (!graphPathPayload().output_root) {
         return showToast(tr("graph_need_paths"));
       }
+      const requestPayload = {...runPayload(), ...graphPathPayload()};
+      if (taskName === "mine" && !validateEmbeddingModelSelection(requestPayload)) return;
       const response = await fetch(`/api/relationships/${taskName.replace("_", "-")}`, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({...runPayload(), ...graphPathPayload()})
+        body: JSON.stringify(requestPayload)
       });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("graph_task_start_failed"));
-      showToast(trf("graph_task_started", {task: localGraphTaskLabel(payload.label, taskName)}));
+      const responsePayload = await response.json();
+      if (!response.ok) return showToast(responsePayload.error || tr("graph_task_start_failed"));
+      showToast(trf("graph_task_started", {task: localGraphTaskLabel(responsePayload.label, taskName)}));
       loadGraph();
     }
 
@@ -3203,6 +3354,10 @@ def relationship_relations_path(paths: ReadingPaths) -> Path:
     return relationship_dir(paths) / "relations.jsonl"
 
 
+def relationship_embedding_progress_path(paths: ReadingPaths) -> Path:
+    return relationship_dir(paths) / "embedding_progress.json"
+
+
 def coerce_int_value(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -3256,6 +3411,7 @@ def build_relationship_payload(
         "clusters": summaries,
         "selected_cluster": selected_cluster,
         "task": relationship_task_status(app_state, paths),
+        "embedding_progress": read_json_file(relationship_embedding_progress_path(paths)),
     }
 
 
@@ -3398,13 +3554,13 @@ def relationship_task_status(
         kind = app_state.relationship_process_kind
         command = app_state.relationship_process_command
         matches_paths = paths is None or paths_match_command(command, paths)
-        running = process is not None and process.poll() is None and matches_paths
-        pid = process.pid if process is not None and matches_paths else None
         return_code = None if process is None or not matches_paths else process.poll()
         if process is not None and process.poll() is not None:
             app_state.relationship_process = None
             app_state.relationship_process_kind = None
             app_state.relationship_process_command = None
+        running = process is not None and return_code is None and matches_paths
+        pid = process.pid if process is not None and matches_paths else None
     return {
         "running": running,
         "pid": pid,
@@ -3447,6 +3603,10 @@ def relationship_task_command(
         if bool(payload.get("relationship_use_text_citations", True)):
             command.append("--use-text-citations")
         if bool(payload.get("relationship_use_embeddings")):
+            if not embedding_model:
+                raise ValueError(
+                    "Embedding model is required when embedding relationships are enabled."
+                )
             command.append("--use-embeddings")
         if embedding_model:
             command.extend(["--embedding-model", embedding_model])
@@ -3496,6 +3656,41 @@ def start_relationship_task(
         "pid": task_process.pid,
         "command": command,
     }
+
+
+def stop_relationship_task(
+    app_state: AppState, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    requested_paths = reading_paths_from_payload(app_state, payload or {})
+    with app_state.lock:
+        process = app_state.relationship_process
+        command = app_state.relationship_process_command
+        kind = app_state.relationship_process_kind
+        process_matches_paths = (
+            requested_paths is None
+            or paths_match_command(command, requested_paths)
+        )
+        if process is None or not process_matches_paths:
+            return {"stopped": False, "running": False}
+        if process.poll() is None:
+            process.terminate()
+            stopped = wait_for_process_exit(process, timeout_seconds=5.0)
+            if not stopped:
+                stopped = kill_process(process)
+            running = process.poll() is None
+            return {
+                "stopped": stopped,
+                "running": running,
+                "pid": process.pid,
+                "kind": kind,
+            }
+        return {
+            "stopped": False,
+            "running": False,
+            "pid": process.pid,
+            "kind": kind,
+            "return_code": process.poll(),
+        }
 
 
 def row_matches_query(row: dict[str, Any], q: str) -> bool:
@@ -3630,14 +3825,60 @@ def can_reveal_file() -> bool:
 
 
 def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(payload)
+    source_dir, output_root = resolve_payload_paths(payload)
+    paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
+    preempt_relationships = bool(payload.get("preempt_relationships"))
+    relationship_stop_result: dict[str, Any] | None = None
+    relationship_command: list[str] | None = None
+
     with app_state.lock:
         process = app_state.process
         if process is not None and process.poll() is None:
             raise RuntimeError(f"Analysis is already running with PID {process.pid}")
 
-        source_dir, output_root = resolve_payload_paths(payload)
+        relationship_process = app_state.relationship_process
+        relationship_running = (
+            relationship_process is not None and relationship_process.poll() is None
+        )
+        relationship_running_for_paths = relationship_running and paths_match_command(
+            app_state.relationship_process_command, paths
+        )
+        if relationship_running:
+            relationship_command = app_state.relationship_process_command
+
+    if relationship_running:
+        if not preempt_relationships:
+            if relationship_running_for_paths:
+                raise RuntimeError(
+                    "Cannot start analysis while a relationship task is running for this output."
+                )
+        else:
+            if not str(payload.get("embedding_model") or "").strip() and relationship_command:
+                embedding_model = command_option_value(relationship_command, "--embedding-model")
+                if embedding_model:
+                    payload["embedding_model"] = embedding_model
+            relationship_stop_result = stop_relationship_task(app_state)
+            if relationship_stop_result.get("running"):
+                raise RuntimeError(
+                    "Relationship task did not stop; analysis was not started."
+                )
+
+    with app_state.lock:
+        process = app_state.process
+        if process is not None and process.poll() is None:
+            raise RuntimeError(f"Analysis is already running with PID {process.pid}")
+        relationship_process = app_state.relationship_process
+        if (
+            relationship_process is not None
+            and relationship_process.poll() is None
+            and paths_match_command(app_state.relationship_process_command, paths)
+        ):
+            raise RuntimeError(
+                "Cannot start analysis while a relationship task is running for this output."
+            )
         clear_source_file_scan_cache(source_dir)
-        app_state.paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
+        app_state.paths = paths
         active_pid = find_active_run_pid(app_state.paths)
         if active_pid is not None:
             raise RuntimeError(f"Analysis is already running with PID {active_pid}")
@@ -3665,6 +3906,7 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
             "plan_only": is_plan_only_command(command),
             "source_dir": str(source_dir),
             "output_root": str(output_root),
+            "relationship_stop": relationship_stop_result,
         }
 
 
@@ -3833,6 +4075,10 @@ def build_analysis_command(
     if output_language:
         command.extend(["--output-language", output_language])
     embedding_model = str(payload.get("embedding_model") or "").strip()
+    if bool(payload.get("relationship_use_embeddings")) and not embedding_model:
+        raise ValueError(
+            "Embedding model is required when embedding relationships are enabled."
+        )
     if embedding_model:
         command.extend(["--embedding-model", embedding_model])
 
@@ -3848,10 +4094,21 @@ def build_analysis_command(
         if value:
             command.extend([option_name, value])
 
+    if "ocr_enabled" in payload:
+        command.append("--ocr" if bool(payload.get("ocr_enabled")) else "--no-ocr")
+    elif bool(payload.get("no_ocr")):
+        command.append("--no-ocr")
+    if "manifest_analysis" in payload:
+        command.append(
+            "--manifest-analysis"
+            if bool(payload.get("manifest_analysis"))
+            else "--skip-manifest-analysis"
+        )
+    elif bool(payload.get("skip_manifest_analysis")):
+        command.append("--skip-manifest-analysis")
+
     flag_map = {
         "plan_only": "--plan-only",
-        "no_ocr": "--no-ocr",
-        "skip_manifest_analysis": "--skip-manifest-analysis",
         "document_summary": "--document-summary",
         "force_reprocess": "--force-reprocess",
         "content_hash": "--content-hash",
@@ -4006,6 +4263,15 @@ def reset_analysis_output(app_state: AppState, payload: dict[str, Any]) -> dict[
         process = app_state.process
         if process is not None and process.poll() is None:
             raise RuntimeError("Cannot reset output while analysis is running.")
+        relationship_process = app_state.relationship_process
+        if (
+            relationship_process is not None
+            and relationship_process.poll() is None
+            and paths_match_command(app_state.relationship_process_command, paths)
+        ):
+            raise RuntimeError(
+                "Cannot reset output while a relationship task is running for this output."
+            )
         active_pid = find_active_run_pid(paths)
         if active_pid is not None:
             raise RuntimeError(
@@ -4055,6 +4321,44 @@ def stop_analysis(app_state: AppState, payload: dict[str, Any] | None = None) ->
             return {"stopped": False, "running": False}
         stopped = terminate_process_id(pid)
         return {"stopped": stopped, "running": is_process_alive(pid), "pid": pid}
+
+
+def start_early_relationships(
+    app_state: AppState, payload: dict[str, Any]
+) -> dict[str, Any]:
+    paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
+    relationship_payload = {
+        **payload,
+        "source_dir": str(paths.source_dir),
+        "output_root": str(paths.output_root),
+        "mine_relationships": True,
+        "relationship_use_text_citations": True,
+        "relationship_use_embeddings": bool(payload.get("relationship_use_embeddings")),
+    }
+    relationship_task_command("mine", relationship_payload, paths)
+
+    with app_state.lock:
+        relationship_process = app_state.relationship_process
+        if relationship_process is not None and relationship_process.poll() is None:
+            raise RuntimeError("Another relationship task is already running.")
+
+    stop_result = stop_analysis(app_state, relationship_payload)
+    if stop_result.get("running"):
+        raise RuntimeError("Analysis did not stop; relationship mining was not started.")
+    if not paths.decisions_path.exists() or count_nonempty_lines(paths.decisions_path) == 0:
+        raise RuntimeError(
+            "No scored decision records found yet. Wait until at least one document is scored."
+        )
+
+    task_result = start_relationship_task(app_state, relationship_payload, "mine")
+    return {
+        "started": True,
+        "stopped": bool(stop_result.get("stopped")),
+        "stop": stop_result,
+        "relationship": task_result,
+        "source_dir": str(paths.source_dir),
+        "output_root": str(paths.output_root),
+    }
 
 
 def wait_for_process_exit(process: subprocess.Popen, timeout_seconds: float) -> bool:
@@ -4158,6 +4462,8 @@ def analysis_status(
                 "latest_activity": {"label": "", "detail": "", "line": ""},
             },
             "run_summary": {},
+            "relationship_task": {"running": False, "pid": None, "kind": None},
+            "embedding_progress": {},
         }
 
     active_pid = find_active_run_pid(paths)
@@ -4197,6 +4503,8 @@ def analysis_status(
         "run_lock": lock_status,
         "activity": build_analysis_activity(paths, log_tail),
         "run_summary": run_summary,
+        "relationship_task": relationship_task_status(app_state, paths),
+        "embedding_progress": read_json_file(relationship_embedding_progress_path(paths)),
     }
 
 
@@ -4362,27 +4670,7 @@ def latest_log_activity(log_tail: str) -> dict[str, str]:
     if not selected:
         selected = lines[-1]
 
-    message = selected.split(" - ", 1)[1] if " - " in selected else selected
-    if "Skipping resumed item already materialized:" in message:
-        return {
-            "label": "续传跳过",
-            "detail": message.split("Skipping resumed item already materialized:", 1)[1].strip(),
-            "line": selected,
-        }
-    if message.startswith("Planned "):
-        detail = message.removeprefix("Planned ").strip()
-        return {
-            "label": "已规划",
-            "detail": detail,
-            "line": selected,
-        }
-    if message.startswith("Progress "):
-        return {"label": "进度写入", "detail": "", "line": selected}
-    if message.startswith("Starting relationship mining"):
-        return {"label": "关系挖掘", "detail": "开始生成关系结果", "line": selected}
-    if message.startswith("Relationship mining completed"):
-        return {"label": "关系挖掘", "detail": "已完成", "line": selected}
-    return {"label": "最近日志", "detail": message, "line": selected}
+    return {"label": "", "detail": "", "line": selected}
 
 
 def build_analysis_activity(paths: ReadingPaths, log_tail: str) -> dict[str, Any]:
@@ -4781,8 +5069,17 @@ def parse_optional_int(value: str | None) -> int | None:
     return parse_int(value, 0)
 
 
+_CLIENT_DISCONNECT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+
+
 class ReadingRequestHandler(BaseHTTPRequestHandler):
     state: AppState
+
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except _CLIENT_DISCONNECT_ERRORS:
+            return
 
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -4841,6 +5138,9 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/api/analysis/stop":
             self.send_json(lambda: stop_analysis(self.state, self.read_json()))
             return
+        if self.path == "/api/analysis/early-relationships":
+            self.send_json(lambda: start_early_relationships(self.state, self.read_json()))
+            return
         if self.path == "/api/analysis/reset":
             self.send_json(lambda: reset_analysis_output(self.state, self.read_json()))
             return
@@ -4848,6 +5148,9 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
             self.send_json(
                 lambda: start_relationship_task(self.state, self.read_json(), "mine")
             )
+            return
+        if self.path == "/api/relationships/stop":
+            self.send_json(lambda: stop_relationship_task(self.state, self.read_json()))
             return
         if self.path == "/api/relationships/export-graph":
             self.send_json(
