@@ -6,9 +6,12 @@ import json
 import math
 import os
 import re
+import subprocess
 import sys
 import time
+import uuid
 from collections import defaultdict
+from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
@@ -22,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from config import Settings, get_settings
+from embedding_store import SQLiteEmbeddingStore
 from ollama_runtime import prepare_embedding_model_for_relationships
 from runtime_encoding import configure_utf8_runtime
 from relationship_strategies import (
@@ -61,6 +65,8 @@ MIN_PARALLEL_CITATION_RECORDS = 1000
 PARALLEL_BATCH_TARGET = 8
 T = TypeVar("T")
 EMBEDDING_PROGRESS_VERSION = "doctriage_embedding_progress.v1"
+RELATIONSHIP_PROGRESS_VERSION = "doctriage_relationship_progress.v1"
+RELATIONSHIP_TASK_RECORD_VERSION = "doctriage_relationship_task_record.v1"
 
 
 @dataclass(slots=True)
@@ -98,7 +104,7 @@ class CandidateRelation:
 
 _CITATION_ALIAS_INDEX: dict[str, int] = {}
 _SCORE_RECORDS: list[RelationshipRecord] = []
-_SCORE_EMBEDDINGS: dict[int, list[float]] = {}
+_SCORE_EMBEDDINGS: Mapping[int, list[float]] = {}
 _SCORE_SETTINGS: Settings | None = None
 _SCORE_CITATION_PAIRS: dict[tuple[int, int], int] = {}
 
@@ -128,8 +134,10 @@ class OllamaEmbeddingClient:
         if not texts:
             return []
         payload = self._build_payload(texts)
+        headers = self._build_headers()
         response = self._client.post(
             self.endpoint,
+            headers=headers,
             json=payload,
             timeout=self.settings.EMBEDDING_TIMEOUT_SECONDS,
         )
@@ -140,9 +148,21 @@ class OllamaEmbeddingClient:
         return [[float(value) for value in vector] for vector in vectors]
 
     def _build_payload(self, texts: Sequence[str]) -> dict[str, Any]:
-        if self.endpoint.lower().endswith("/api/embed"):
+        lower_endpoint = self.endpoint.lower()
+        if lower_endpoint.endswith("/api/embed"):
+            return {"model": self.model, "input": list(texts)}
+        if lower_endpoint.endswith("/embeddings") and "/v1/" in lower_endpoint:
             return {"model": self.model, "input": list(texts)}
         return {"model": self.model, "prompt": texts[0]}
+
+    def _build_headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        api_key = str(
+            self.settings.EMBEDDING_API_KEY or self.settings.LLM_API_KEY or ""
+        ).strip()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        return headers
 
     def _extract_vectors(
         self, response_json: dict[str, Any], expected_count: int
@@ -164,7 +184,135 @@ class OllamaEmbeddingClient:
                     )
                 return list(vectors)
 
+        data = response_json.get("data")
+        if isinstance(data, list) and data:
+            vectors = []
+            for item in data:
+                if isinstance(item, dict):
+                    vectors.append(item.get("embedding"))
+            if all(isinstance(item, list) for item in vectors):
+                if expected_count > 1 and len(vectors) != expected_count:
+                    raise ValueError(
+                        f"Embedding response returned {len(vectors)} vectors for {expected_count} inputs."
+                    )
+                return list(vectors)
+
         raise ValueError("Embedding response did not contain a vector.")
+
+
+class RelationshipTaskLease:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.record_path = settings.relationship_dir / "task.json"
+        self.token = uuid.uuid4().hex
+        self.acquired = False
+
+    def __enter__(self) -> "RelationshipTaskLease":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.release()
+
+    def acquire(self) -> None:
+        self.record_path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(
+                    str(self.record_path),
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                )
+            except FileExistsError:
+                info = read_task_record(self.record_path)
+                pid = coerce_pid(info.get("pid"))
+                if pid == os.getpid():
+                    try:
+                        self.record_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    continue
+                if pid is not None and is_process_alive(pid):
+                    raise RuntimeError(
+                        "Another relationship task is already using this OUTPUT_ROOT: "
+                        f"pid={pid}, task={self.record_path}"
+                    )
+                try:
+                    self.record_path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema_version": RELATIONSHIP_TASK_RECORD_VERSION,
+                        "pid": os.getpid(),
+                        "token": self.token,
+                        "kind": "mine",
+                        "command": [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
+                        "source_dir": str(self.settings.SOURCE_DIR),
+                        "output_root": str(self.settings.OUTPUT_ROOT),
+                        "created_epoch": time.time(),
+                    },
+                    handle,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            self.acquired = True
+            return
+        raise RuntimeError(f"Could not acquire relationship task lease: {self.record_path}")
+
+    def release(self) -> None:
+        if not self.acquired:
+            return
+        info = read_task_record(self.record_path)
+        if info.get("token") != self.token:
+            return
+        try:
+            self.record_path.unlink()
+        except FileNotFoundError:
+            pass
+        finally:
+            self.acquired = False
+
+
+def read_task_record(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def coerce_pid(value: Any) -> int | None:
+    try:
+        pid = int(value)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def is_process_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return True
+        return str(pid) in result.stdout
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def mine_relationships(settings: Settings | None = None) -> None:
@@ -177,28 +325,140 @@ def mine_relationships(settings: Settings | None = None) -> None:
             "EMBEDDING_MODEL must be configured when RELATIONSHIP_USE_EMBEDDINGS is enabled."
         )
 
-    decisions_path = current_settings.processed_log_path.parent / "decisions.jsonl"
-    records = load_records(decisions_path, current_settings)
-    if current_settings.RELATIONSHIP_MAX_RECORDS:
-        records = records[: current_settings.RELATIONSHIP_MAX_RECORDS]
-
     current_settings.relationship_dir.mkdir(parents=True, exist_ok=True)
-    if current_settings.RELATIONSHIP_USE_EMBEDDINGS:
-        prepare_embedding_model_for_relationships(current_settings)
-    embeddings = (
-        load_or_build_embeddings(records, current_settings)
-        if current_settings.RELATIONSHIP_USE_EMBEDDINGS
-        else {}
+    progress_path = current_settings.relationship_progress_path
+    write_relationship_progress(
+        progress_path,
+        phase="loading_decisions",
+        percent=2,
     )
+    try:
+        decisions_path = current_settings.processed_log_path.parent / "decisions.jsonl"
+        records = load_records(decisions_path, current_settings)
+        if current_settings.RELATIONSHIP_MAX_RECORDS:
+            records = records[: current_settings.RELATIONSHIP_MAX_RECORDS]
+        write_relationship_progress(
+            progress_path,
+            phase="records_loaded",
+            percent=8,
+            total_records=len(records),
+        )
 
-    candidates = build_candidate_relations(records, embeddings, current_settings)
-    write_relations(candidates, records, current_settings.relationship_relations_path)
-    write_clusters(
-        candidates,
-        records,
-        current_settings.relationship_clusters_path,
-        cluster_min_score=current_settings.RELATIONSHIP_CLUSTER_MIN_SCORE,
-    )
+        if current_settings.RELATIONSHIP_USE_EMBEDDINGS:
+            write_relationship_progress(
+                progress_path,
+                phase="preparing_embeddings",
+                percent=12,
+                total_records=len(records),
+            )
+            prepare_embedding_model_for_relationships(current_settings)
+        embeddings: Mapping[int, list[float]] = (
+            load_or_build_embeddings(records, current_settings)
+            if current_settings.RELATIONSHIP_USE_EMBEDDINGS
+            else {}
+        )
+        try:
+            embedded_record_count = len(embeddings)
+            write_relationship_progress(
+                progress_path,
+                phase="scoring_relationships",
+                percent=45 if current_settings.RELATIONSHIP_USE_EMBEDDINGS else 20,
+                total_records=len(records),
+                embedded_records=embedded_record_count,
+            )
+
+            candidates = build_candidate_relations(records, embeddings, current_settings)
+            write_relationship_progress(
+                progress_path,
+                phase="writing_relations",
+                percent=82,
+                total_records=len(records),
+                candidate_relations=len(candidates),
+                embedded_records=embedded_record_count,
+            )
+            write_relations(candidates, records, current_settings.relationship_relations_path)
+            write_relationship_progress(
+                progress_path,
+                phase="clustering",
+                percent=90,
+                total_records=len(records),
+                candidate_relations=len(candidates),
+                embedded_records=embedded_record_count,
+            )
+            write_clusters(
+                candidates,
+                records,
+                current_settings.relationship_clusters_path,
+                cluster_min_score=current_settings.RELATIONSHIP_CLUSTER_MIN_SCORE,
+            )
+            write_relationship_progress(
+                progress_path,
+                phase="complete",
+                percent=100,
+                total_records=len(records),
+                candidate_relations=len(candidates),
+                embedded_records=embedded_record_count,
+            )
+        finally:
+            if isinstance(embeddings, SQLiteEmbeddingStore):
+                embeddings.close()
+    except Exception as exc:
+        write_relationship_progress(
+            progress_path,
+            phase="error",
+            percent=100,
+            message=str(exc),
+        )
+        raise
+
+
+def write_relationship_progress(
+    path: Path,
+    *,
+    phase: str,
+    percent: float,
+    total_records: int | None = None,
+    candidate_relations: int | None = None,
+    embedded_records: int | None = None,
+    message: str = "",
+) -> None:
+    now = time.time()
+    previous = read_relationship_progress(path)
+    previous_started = previous.get("started_epoch")
+    if phase == "loading_decisions" or not isinstance(previous_started, (int, float)):
+        started_epoch = now
+    else:
+        started_epoch = float(previous_started)
+    payload: dict[str, Any] = {
+        "schema_version": RELATIONSHIP_PROGRESS_VERSION,
+        "phase": phase,
+        "percent": round(max(0.0, min(100.0, float(percent))), 1),
+        "started_epoch": started_epoch,
+        "updated_epoch": now,
+        "elapsed_seconds": round(max(0.0, now - started_epoch), 1),
+    }
+    if total_records is not None:
+        payload["total_records"] = max(0, int(total_records))
+    if candidate_relations is not None:
+        payload["candidate_relations"] = max(0, int(candidate_relations))
+    if embedded_records is not None:
+        payload["embedded_records"] = max(0, int(embedded_records))
+    if message:
+        payload["message"] = message
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", errors="ignore") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def read_relationship_progress(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
 
 def load_records(path: Path, settings: Settings) -> list[RelationshipRecord]:
     if not path.exists():
@@ -279,7 +539,7 @@ def build_embedding_text(record: RelationshipRecord, settings: Settings) -> str:
 
 def load_or_build_embeddings(
     records: list[RelationshipRecord], settings: Settings
-) -> dict[int, list[float]]:
+) -> SQLiteEmbeddingStore:
     progress_path = settings.embedding_progress_path
     write_embedding_progress(
         progress_path,
@@ -291,27 +551,37 @@ def load_or_build_embeddings(
         workers=0,
         enabled=settings.RELATIONSHIP_USE_EMBEDDINGS,
     )
-    cache = (
-        load_embedding_cache_with_legacy(settings)
-        if settings.EMBEDDING_CACHE_ENABLED
-        else {}
+    embeddings = SQLiteEmbeddingStore(
+        settings.embedding_store_path,
+        cache_size=max(512, min(settings.RELATIONSHIP_EMBEDDING_EXHAUSTIVE_LIMIT, 2000)),
     )
-    embeddings: dict[int, list[float]] = {}
-    missing: list[tuple[int, RelationshipRecord, str]] = []
+    if settings.EMBEDDING_CACHE_ENABLED:
+        load_embedding_cache_with_legacy_into_store(settings, embeddings)
+        embeddings.clear_index()
+    else:
+        embeddings.clear_all()
 
+    keyed_records: list[tuple[int, RelationshipRecord, str]] = []
     for index, record in enumerate(records):
-        cache_key = embedding_cache_key(record)
-        vector = cache.get(cache_key)
-        if vector is not None:
-            embeddings[index] = vector
-        else:
-            missing.append((index, record, cache_key))
+        keyed_records.append((index, record, embedding_cache_key(record)))
+
+    cached_indexes = (
+        embeddings.bind_existing((index, cache_key) for index, _, cache_key in keyed_records)
+        if settings.EMBEDDING_CACHE_ENABLED
+        else set()
+    )
+    missing = [
+        (index, record, cache_key)
+        for index, record, cache_key in keyed_records
+        if index not in cached_indexes
+    ]
+    cached_count = len(cached_indexes)
 
     write_embedding_progress(
         progress_path,
         phase="ready" if not missing else "embedding",
         total=len(records),
-        cached=len(embeddings),
+        cached=cached_count,
         generated=0,
         missing=len(missing),
         workers=0 if not missing else resolve_embedding_workers(settings, len(missing)),
@@ -322,7 +592,7 @@ def load_or_build_embeddings(
             progress_path,
             phase="complete",
             total=len(records),
-            cached=len(embeddings),
+            cached=cached_count,
             generated=0,
             missing=0,
             workers=0,
@@ -341,9 +611,8 @@ def load_or_build_embeddings(
                 results = embed_records_with_client(client, chunk)
                 cache_writes = []
                 for index, cache_key, vector in results:
-                    cache[cache_key] = vector
-                    embeddings[index] = vector
                     cache_writes.append((cache_key, vector))
+                embeddings.put_many(results)
                 generated += len(cache_writes)
                 if settings.EMBEDDING_CACHE_ENABLED:
                     append_embedding_cache_entries(settings.embedding_cache_path, cache_writes)
@@ -351,7 +620,7 @@ def load_or_build_embeddings(
                     progress_path,
                     phase="embedding",
                     total=len(records),
-                    cached=len(records) - len(missing),
+                    cached=cached_count,
                     generated=generated,
                     missing=max(0, len(missing) - generated),
                     workers=worker_count,
@@ -361,7 +630,7 @@ def load_or_build_embeddings(
             progress_path,
             phase="complete",
             total=len(records),
-            cached=len(records) - len(missing),
+            cached=cached_count,
             generated=generated,
             missing=0,
             workers=worker_count,
@@ -385,9 +654,8 @@ def load_or_build_embeddings(
             results = future.result()
             cache_writes = []
             for index, cache_key, vector in results:
-                cache[cache_key] = vector
-                embeddings[index] = vector
                 cache_writes.append((cache_key, vector))
+            embeddings.put_many(results)
             generated += len(cache_writes)
             if settings.EMBEDDING_CACHE_ENABLED:
                 append_embedding_cache_entries(settings.embedding_cache_path, cache_writes)
@@ -395,7 +663,7 @@ def load_or_build_embeddings(
                 progress_path,
                 phase="embedding",
                 total=len(records),
-                cached=len(records) - len(missing),
+                cached=cached_count,
                 generated=generated,
                 missing=max(0, len(missing) - generated),
                 workers=worker_count,
@@ -406,7 +674,7 @@ def load_or_build_embeddings(
         progress_path,
         phase="complete",
         total=len(records),
-        cached=len(records) - len(missing),
+        cached=cached_count,
         generated=generated,
         missing=0,
         workers=worker_count,
@@ -433,7 +701,11 @@ def split_worker_chunks(
 
 
 def embedding_chunk_size(settings: Settings, missing_count: int, worker_count: int) -> int:
-    if not settings.EMBEDDING_ENDPOINT.rstrip("/").lower().endswith("/api/embed"):
+    endpoint = settings.EMBEDDING_ENDPOINT.rstrip("/").lower()
+    supports_batch = endpoint.endswith("/api/embed") or (
+        endpoint.endswith("/embeddings") and "/v1/" in endpoint
+    )
+    if not supports_batch:
         return 1
     return max(1, min(32, math.ceil(missing_count / max(1, worker_count))))
 
@@ -449,7 +721,21 @@ def write_embedding_progress(
     workers: int,
     enabled: bool,
 ) -> None:
+    now = time.time()
+    previous = read_embedding_progress(path)
+    started_epoch = embedding_started_epoch(previous, phase, now)
     completed = max(0, min(total, cached + generated))
+    elapsed_seconds = max(0.0, now - started_epoch) if started_epoch else 0.0
+    items_per_minute = (
+        round(generated / elapsed_seconds * 60, 2)
+        if generated > 0 and elapsed_seconds > 0
+        else 0.0
+    )
+    eta_seconds = (
+        missing / (items_per_minute / 60)
+        if missing > 0 and items_per_minute > 0
+        else None
+    )
     payload = {
         "schema_version": EMBEDDING_PROGRESS_VERSION,
         "enabled": enabled,
@@ -461,11 +747,51 @@ def write_embedding_progress(
         "missing": max(0, missing),
         "workers": workers,
         "percent": round((completed / total * 100) if total else 0.0, 2),
-        "updated_epoch": time.time(),
+        "started_epoch": started_epoch,
+        "updated_epoch": now,
+        "elapsed_seconds": round(elapsed_seconds, 2),
+        "items_per_minute": items_per_minute,
+        "eta_seconds": round(eta_seconds, 2) if eta_seconds is not None else None,
+        "eta_human": format_duration(eta_seconds),
+        "eta_finish_epoch": round(now + eta_seconds, 3) if eta_seconds is not None else None,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", errors="ignore") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def read_embedding_progress(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def embedding_started_epoch(
+    previous: dict[str, Any], phase: str, now: float
+) -> float:
+    if phase == "loading_cache":
+        return now
+    previous_started = previous.get("started_epoch")
+    if isinstance(previous_started, (int, float)) and previous_started > 0:
+        return float(previous_started)
+    return now
+
+
+def format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "unknown"
+    remaining = max(0, int(seconds))
+    hours, remainder = divmod(remaining, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
 
 
 def resolve_embedding_workers(settings: Settings, missing_count: int) -> int:
@@ -533,6 +859,41 @@ def load_embedding_cache_with_legacy(settings: Settings) -> dict[str, list[float
     return legacy_cache
 
 
+def load_embedding_cache_with_legacy_into_store(
+    settings: Settings, store: SQLiteEmbeddingStore
+) -> None:
+    legacy_path = settings.state_dir / "embedding_cache.jsonl"
+    if legacy_path != settings.embedding_cache_path:
+        load_embedding_cache_into_store(legacy_path, store)
+    load_embedding_cache_into_store(settings.embedding_cache_path, store)
+
+
+def load_embedding_cache_into_store(
+    path: Path, store: SQLiteEmbeddingStore, *, batch_size: int = 500
+) -> None:
+    if not path.exists():
+        return
+
+    pending: list[tuple[str, list[float]]] = []
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            key = payload.get("key")
+            vector = payload.get("embedding")
+            if isinstance(key, str) and isinstance(vector, list):
+                pending.append((key, [float(value) for value in vector]))
+            if len(pending) >= batch_size:
+                store.put_vectors(pending)
+                pending.clear()
+    store.put_vectors(pending)
+
+
 def append_embedding_cache(path: Path, key: str, vector: list[float]) -> None:
     append_embedding_cache_entries(path, [(key, vector)])
 
@@ -557,12 +918,12 @@ def embedding_cache_key(record: RelationshipRecord) -> str:
 
 def build_candidate_relations(
     records: list[RelationshipRecord],
-    embeddings: dict[int, list[float]],
+    embeddings: Mapping[int, list[float]],
     settings: Settings,
 ) -> list[CandidateRelation]:
     worker_count = resolve_relationship_workers(settings, len(records))
     citation_pairs = (
-        collect_citation_pairs_parallel(records, worker_count)
+        collect_citation_pairs_parallel(records, worker_count, settings)
         if settings.RELATIONSHIP_USE_TEXT_CITATIONS
         else {}
     )
@@ -580,22 +941,13 @@ def build_candidate_relations(
             worker_count,
         )
     else:
-        relations = [
-            relation
-            for relation in (
-                score_pair(
-                    records[left],
-                    records[right],
-                    left,
-                    right,
-                    embeddings,
-                    settings,
-                    citation_count=citation_pairs.get((left, right), 0),
-                )
-                for left, right in sorted_pairs
-            )
-            if relation.relation_score >= settings.RELATIONSHIP_MIN_SCORE
-        ]
+        relations = score_candidate_pairs_chunk(
+            sorted_pairs,
+            records,
+            embeddings,
+            settings,
+            citation_pairs,
+        )
 
     relations.sort(key=lambda item: item.relation_score, reverse=True)
     return relations
@@ -619,7 +971,7 @@ def should_parallelize_pairs(worker_count: int, pair_count: int) -> bool:
 
 
 def collect_citation_pairs_parallel(
-    records: list[RelationshipRecord], worker_count: int
+    records: list[RelationshipRecord], worker_count: int, settings: Settings
 ) -> dict[tuple[int, int], int]:
     if worker_count <= 1 or len(records) < MIN_PARALLEL_CITATION_RECORDS:
         return collect_citation_pairs(records)
@@ -641,8 +993,9 @@ def collect_citation_pairs_parallel(
         chunk_size_for(len(citation_payloads), worker_count),
     )
     citation_pairs: dict[tuple[int, int], int] = defaultdict(int)
-    with ProcessPoolExecutor(
-        max_workers=worker_count,
+    with relationship_process_pool(
+        settings,
+        worker_count,
         initializer=init_citation_worker,
         initargs=(alias_index,),
     ) as executor:
@@ -653,6 +1006,21 @@ def collect_citation_pairs_parallel(
             for pair, count in partial.items():
                 citation_pairs[pair] += count
     return dict(citation_pairs)
+
+
+def relationship_process_pool(
+    settings: Settings,
+    worker_count: int,
+    *,
+    initializer,
+    initargs: tuple[Any, ...],
+) -> ProcessPoolExecutor:
+    return ProcessPoolExecutor(
+        max_workers=worker_count,
+        initializer=initializer,
+        initargs=initargs,
+        max_tasks_per_child=settings.RELATIONSHIP_WORKER_MAX_TASKS,
+    )
 
 
 def init_citation_worker(alias_index: dict[str, int]) -> None:
@@ -683,7 +1051,7 @@ def collect_citation_pairs_chunk(
 def score_candidate_pairs_parallel(
     sorted_pairs: list[tuple[int, int]],
     records: list[RelationshipRecord],
-    embeddings: dict[int, list[float]],
+    embeddings: Mapping[int, list[float]],
     settings: Settings,
     citation_pairs: dict[tuple[int, int], int],
     worker_count: int,
@@ -692,30 +1060,49 @@ def score_candidate_pairs_parallel(
         sorted_pairs,
         chunk_size_for(len(sorted_pairs), worker_count),
     )
-    with ProcessPoolExecutor(
-        max_workers=worker_count,
+    with relationship_process_pool(
+        settings,
+        worker_count,
         initializer=init_score_worker,
-        initargs=(records, embeddings, settings, citation_pairs),
+        initargs=score_worker_initargs(records, embeddings, settings, citation_pairs),
     ) as executor:
-        relation_chunks = executor.map(
-            score_candidate_pairs_chunk_worker,
-            chunks,
-        )
-    return [relation for chunk in relation_chunks for relation in chunk]
+        relations: list[CandidateRelation] = []
+        for chunk in executor.map(score_candidate_pairs_chunk_worker, chunks):
+            relations.extend(chunk)
+        return relations
+
+
+def score_worker_initargs(
+    records: list[RelationshipRecord],
+    embeddings: Mapping[int, list[float]],
+    settings: Settings,
+    citation_pairs: dict[tuple[int, int], int],
+) -> tuple[Any, ...]:
+    store_path = str(embeddings.path) if isinstance(embeddings, SQLiteEmbeddingStore) else ""
+    worker_embeddings: Mapping[int, list[float]] = {} if store_path else embeddings
+    return (records, worker_embeddings, settings, citation_pairs, store_path)
 
 
 def init_score_worker(
     records: list[RelationshipRecord],
-    embeddings: dict[int, list[float]],
+    embeddings: Mapping[int, list[float]],
     settings: Settings,
     citation_pairs: dict[tuple[int, int], int],
+    embedding_store_path: str = "",
 ) -> None:
     global _SCORE_RECORDS
     global _SCORE_EMBEDDINGS
     global _SCORE_SETTINGS
     global _SCORE_CITATION_PAIRS
     _SCORE_RECORDS = records
-    _SCORE_EMBEDDINGS = embeddings
+    _SCORE_EMBEDDINGS = (
+        SQLiteEmbeddingStore(
+            Path(embedding_store_path),
+            cache_size=max(512, min(settings.RELATIONSHIP_EMBEDDING_EXHAUSTIVE_LIMIT, 2000)),
+        )
+        if embedding_store_path
+        else embeddings
+    )
     _SCORE_SETTINGS = settings
     _SCORE_CITATION_PAIRS = citation_pairs
 
@@ -737,11 +1124,12 @@ def score_candidate_pairs_chunk_worker(
 def score_candidate_pairs_chunk(
     pairs: Sequence[tuple[int, int]],
     records: list[RelationshipRecord],
-    embeddings: dict[int, list[float]],
+    embeddings: Mapping[int, list[float]],
     settings: Settings,
     citation_pairs: dict[tuple[int, int], int],
 ) -> list[CandidateRelation]:
     relations: list[CandidateRelation] = []
+    embeddings_enabled = bool(embeddings)
     for left, right in pairs:
         relation = score_pair(
             records[left],
@@ -751,6 +1139,7 @@ def score_candidate_pairs_chunk(
             embeddings,
             settings,
             citation_count=citation_pairs.get((left, right), 0),
+            embeddings_enabled=embeddings_enabled,
         )
         if relation.relation_score >= settings.RELATIONSHIP_MIN_SCORE:
             relations.append(relation)
@@ -769,7 +1158,7 @@ def chunk_sequence(items: Sequence[T], chunk_size: int) -> list[Sequence[T]]:
 
 def collect_candidate_pairs(
     records: list[RelationshipRecord],
-    embeddings: dict[int, list[float]],
+    embeddings: Mapping[int, list[float]],
     settings: Settings,
 ) -> set[tuple[int, int]]:
     return collect_pairs(DEFAULT_PAIR_COLLECTORS, records, embeddings, settings)
@@ -780,22 +1169,28 @@ def score_pair(
     right_record: RelationshipRecord,
     left: int,
     right: int,
-    embeddings: dict[int, list[float]],
+    embeddings: Mapping[int, list[float]],
     settings: Settings,
     citation_count: int = 0,
+    embeddings_enabled: bool | None = None,
 ) -> CandidateRelation:
     filename = filename_similarity(left_record, right_record)
     time_score = time_proximity(left_record, right_record, settings)
     path_score = path_proximity(left_record, right_record)
+    left_vector = embeddings.get(left)
+    right_vector = embeddings.get(right)
     embedding_score = (
-        cosine_similarity(embeddings[left], embeddings[right])
-        if left in embeddings and right in embeddings
+        cosine_similarity(left_vector, right_vector)
+        if left_vector is not None and right_vector is not None
         else 0.0
     )
     type_score = type_compatibility(left_record, right_record)
     citation_score = min(1.0, citation_count / 2) if citation_count else 0.0
 
-    if embeddings:
+    if embeddings_enabled is None:
+        embeddings_enabled = bool(embeddings)
+
+    if embeddings_enabled:
         relation_score = (
             filename * 0.27
             + time_score * 0.15
@@ -822,7 +1217,7 @@ def score_pair(
         embedding_score,
         type_score,
         citation_count,
-        embeddings_enabled=bool(embeddings),
+        embeddings_enabled=embeddings_enabled,
     )
     return CandidateRelation(
         left=left,
@@ -1119,13 +1514,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--llm-endpoint")
     parser.add_argument("--llm-model")
+    parser.add_argument("--llm-api-key")
     parser.add_argument("--concurrency", type=int)
     parser.add_argument("--embedding-endpoint")
     parser.add_argument("--embedding-model")
+    parser.add_argument("--embedding-api-key")
     parser.add_argument("--relationship-min-score", type=float)
     parser.add_argument("--relationship-cluster-min-score", type=float)
     parser.add_argument("--relationship-max-records", type=int)
     parser.add_argument("--relationship-workers", type=int)
+    parser.add_argument("--relationship-worker-max-tasks", type=int)
     parser.add_argument("--embedding-text-max-chars", type=int)
     parser.add_argument("--use-embeddings", action="store_true")
     parser.add_argument("--use-text-citations", action="store_true")
@@ -1142,12 +1540,16 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["LLM_ENDPOINT"] = args.llm_endpoint
     if args.llm_model is not None:
         overrides["LLM_MODEL"] = args.llm_model
+    if args.llm_api_key is not None:
+        overrides["LLM_API_KEY"] = args.llm_api_key
     if args.concurrency is not None:
         overrides["CONCURRENCY_LIMIT"] = args.concurrency
     if args.embedding_endpoint is not None:
         overrides["EMBEDDING_ENDPOINT"] = args.embedding_endpoint
     if args.embedding_model is not None:
         overrides["EMBEDDING_MODEL"] = args.embedding_model
+    if args.embedding_api_key is not None:
+        overrides["EMBEDDING_API_KEY"] = args.embedding_api_key
     if args.relationship_min_score is not None:
         overrides["RELATIONSHIP_MIN_SCORE"] = args.relationship_min_score
     if args.relationship_cluster_min_score is not None:
@@ -1156,6 +1558,8 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["RELATIONSHIP_MAX_RECORDS"] = args.relationship_max_records
     if args.relationship_workers is not None:
         overrides["RELATIONSHIP_WORKERS"] = args.relationship_workers
+    if args.relationship_worker_max_tasks is not None:
+        overrides["RELATIONSHIP_WORKER_MAX_TASKS"] = args.relationship_worker_max_tasks
     if args.embedding_text_max_chars is not None:
         overrides["EMBEDDING_TEXT_MAX_CHARS"] = args.embedding_text_max_chars
     if args.use_embeddings:
@@ -1174,7 +1578,9 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
 def main(argv: list[str] | None = None) -> None:
     configure_utf8_runtime()
     args = build_parser().parse_args(argv)
-    mine_relationships(build_settings_from_args(args))
+    settings = build_settings_from_args(args)
+    with RelationshipTaskLease(settings):
+        mine_relationships(settings)
 
 
 if __name__ == "__main__":

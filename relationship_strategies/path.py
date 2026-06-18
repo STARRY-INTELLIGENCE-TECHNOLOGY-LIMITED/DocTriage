@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ class PathPairCollector:
     def collect(
         self,
         records: list[Any],
-        embeddings: dict[int, list[float]],
+        embeddings: Mapping[int, list[float]],
         settings: Any,
     ) -> set[tuple[int, int]]:
         pairs: set[tuple[int, int]] = set()

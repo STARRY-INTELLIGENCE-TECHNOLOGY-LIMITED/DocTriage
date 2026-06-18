@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Protocol
 
 
@@ -9,7 +10,7 @@ class PairCollector(Protocol):
     def collect(
         self,
         records: list[Any],
-        embeddings: dict[int, list[float]],
+        embeddings: Mapping[int, list[float]],
         settings: Any,
     ) -> set[tuple[int, int]]:
         """Return normalized candidate document index pairs."""
@@ -18,7 +19,7 @@ class PairCollector(Protocol):
 def collect_pairs(
     collectors: tuple[PairCollector, ...],
     records: list[Any],
-    embeddings: dict[int, list[float]],
+    embeddings: Mapping[int, list[float]],
     settings: Any,
 ) -> set[tuple[int, int]]:
     pairs: set[tuple[int, int]] = set()

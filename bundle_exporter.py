@@ -16,7 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from config import Settings, get_settings
 from runtime_encoding import configure_utf8_runtime
 
-SCHEMA_VERSION = "doctriage_bundle.v1"
+SCHEMA_VERSION = "doctriage_bundle.v2"
 TERMINAL_DECISION_STATUSES = {
     "planned",
     "success",
@@ -120,52 +120,59 @@ def select_documents(
             continue
         source_path = str(decision.get("source_path") or "")
         target_path = str(decision.get("target_path") or "")
+        relative_path = str(decision.get("relative_path") or "")
         selected.append(
             {
                 "id": document_id(decision),
-                "source_path": source_path,
-                "target_path": target_path,
-                "preferred_path": choose_preferred_path(
-                    source_path,
-                    target_path,
-                    selection.prefer_target_path,
-                ),
-                "relative_path": str(decision.get("relative_path") or ""),
                 "title": Path(str(decision.get("relative_path") or source_path)).stem,
-                "category": category,
-                "document_kind": str(decision.get("document_kind") or "Unknown"),
-                "topic_tags": coerce_string_list(decision.get("topic_tags")),
-                "quality": quality,
-                "knowledge_density": coerce_int(decision.get("knowledge_density"), 0),
-                "implementation_specificity": coerce_int(
-                    decision.get("implementation_specificity"), 0
-                ),
-                "logical_structure": coerce_int(decision.get("logical_structure"), 0),
-                "evidence_richness": coerce_int(decision.get("evidence_richness"), 0),
-                "actionability": coerce_int(decision.get("actionability"), 0),
-                "strategic_value": coerce_int(decision.get("strategic_value"), 0),
-                "freshness": coerce_int(decision.get("freshness"), 0),
-                "uniqueness": coerce_int(decision.get("uniqueness"), 0),
-                "sensitivity_risk": sensitivity_risk,
-                "public_writing_suitability": public_writing_suitability,
-                "reason": str(decision.get("reason") or ""),
-                "summary": (
-                    str(decision.get("summary") or "")
-                    if selection.include_summaries
-                    else ""
-                ),
-                "status": str(decision.get("status") or ""),
-                "media_type": guess_media_type(
-                    Path(str(decision.get("relative_path") or source_path))
-                ),
+                "paths": {
+                    "source": source_path,
+                    "target": target_path,
+                    "preferred": choose_preferred_path(
+                        source_path,
+                        target_path,
+                        selection.prefer_target_path,
+                    ),
+                    "relative": relative_path,
+                },
+                "classification": {
+                    "category": category,
+                    "document_kind": str(decision.get("document_kind") or "Unknown"),
+                    "topic_tags": coerce_string_list(decision.get("topic_tags")),
+                    "status": str(decision.get("status") or ""),
+                    "media_type": guess_media_type(Path(relative_path or source_path)),
+                },
+                "scores": {
+                    "quality": quality,
+                    "knowledge_density": coerce_int(decision.get("knowledge_density"), 0),
+                    "implementation_specificity": coerce_int(
+                        decision.get("implementation_specificity"), 0
+                    ),
+                    "logical_structure": coerce_int(decision.get("logical_structure"), 0),
+                    "evidence_richness": coerce_int(decision.get("evidence_richness"), 0),
+                    "actionability": coerce_int(decision.get("actionability"), 0),
+                    "strategic_value": coerce_int(decision.get("strategic_value"), 0),
+                    "freshness": coerce_int(decision.get("freshness"), 0),
+                    "uniqueness": coerce_int(decision.get("uniqueness"), 0),
+                    "sensitivity_risk": sensitivity_risk,
+                    "public_writing_suitability": public_writing_suitability,
+                },
+                "text": {
+                    "summary": (
+                        str(decision.get("summary") or "")
+                        if selection.include_summaries
+                        else ""
+                    ),
+                    "reason": str(decision.get("reason") or ""),
+                },
             }
         )
 
     selected.sort(
         key=lambda item: (
-            -item["quality"],
-            item["category"],
-            item["relative_path"],
+            -item["scores"]["quality"],
+            item["classification"]["category"],
+            item["paths"]["relative"],
         )
     )
     if selection.limit is not None:
@@ -180,7 +187,11 @@ def load_relations_for_documents(
     if not path.exists() or not documents:
         return []
 
-    document_paths = {str(document["relative_path"]) for document in documents}
+    document_by_path = {
+        str(document["paths"]["relative"]): document
+        for document in documents
+        if str(document["paths"]["relative"])
+    }
     relations: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8", errors="ignore") as handle:
         for raw_line in handle:
@@ -193,32 +204,34 @@ def load_relations_for_documents(
                 continue
             left_path = str(payload.get("left", {}).get("relative_path") or "")
             right_path = str(payload.get("right", {}).get("relative_path") or "")
-            if left_path not in document_paths or right_path not in document_paths:
+            left_document = document_by_path.get(left_path)
+            right_document = document_by_path.get(right_path)
+            if left_document is None or right_document is None:
                 continue
             relations.append(
                 {
-                    "left_relative_path": left_path,
-                    "right_relative_path": right_path,
-                    "relation_score": coerce_float(
-                        payload.get("relation_score"), 0.0
-                    ),
-                    "signals": list(payload.get("signals") or []),
-                    "filename_similarity": coerce_float(
-                        payload.get("filename_similarity"), 0.0
-                    ),
-                    "time_proximity": coerce_float(
-                        payload.get("time_proximity"), 0.0
-                    ),
-                    "path_proximity": coerce_float(
-                        payload.get("path_proximity"), 0.0
-                    ),
-                    "embedding_similarity": coerce_float(
-                        payload.get("embedding_similarity"), 0.0
-                    ),
-                    "citation_count": coerce_int(payload.get("citation_count"), 0),
+                    "left_document_id": left_document["id"],
+                    "right_document_id": right_document["id"],
+                    "score": coerce_float(payload.get("relation_score"), 0.0),
+                    "signals": coerce_string_list(payload.get("signals")),
+                    "evidence": {
+                        "filename_similarity": coerce_float(
+                            payload.get("filename_similarity"), 0.0
+                        ),
+                        "time_proximity": coerce_float(
+                            payload.get("time_proximity"), 0.0
+                        ),
+                        "path_proximity": coerce_float(
+                            payload.get("path_proximity"), 0.0
+                        ),
+                        "embedding_similarity": coerce_float(
+                            payload.get("embedding_similarity"), 0.0
+                        ),
+                        "citation_count": coerce_int(payload.get("citation_count"), 0),
+                    },
                 }
             )
-    relations.sort(key=lambda item: item["relation_score"], reverse=True)
+    relations.sort(key=lambda item: item["score"], reverse=True)
     return relations
 
 
@@ -247,8 +260,11 @@ def build_bundle_payload(
         "statistics": {
             "document_count": len(documents),
             "relation_count": len(relations),
-            "category_counts": count_by(documents, "category"),
-            "document_kind_counts": count_by(documents, "document_kind"),
+            "category_counts": count_by(documents, ("classification", "category")),
+            "document_kind_counts": count_by(
+                documents,
+                ("classification", "document_kind"),
+            ),
         },
         "documents": documents,
         "relations": relations,
@@ -314,11 +330,20 @@ def guess_media_type(path: Path) -> str:
     return mapping.get(path.suffix.lower(), "unknown")
 
 
-def count_by(documents: list[dict[str, Any]], field_name: str) -> dict[str, int]:
+def count_by(documents: list[dict[str, Any]], field_path: tuple[str, ...]) -> dict[str, int]:
     counts: dict[str, int] = defaultdict(int)
     for document in documents:
-        counts[str(document.get(field_name) or "")] += 1
+        counts[str(nested_value(document, field_path) or "")] += 1
     return dict(sorted(counts.items()))
+
+
+def nested_value(payload: dict[str, Any], field_path: tuple[str, ...]) -> Any:
+    current: Any = payload
+    for field_name in field_path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(field_name)
+    return current
 
 
 def coerce_int(value: Any, default: int) -> int:

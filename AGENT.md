@@ -10,7 +10,7 @@ DocTriage 是面向 RAG / Agent 入库前的本地文档预处理中间件。
 - 将处理状态写入 `OUTPUT_ROOT/_state/`，支持断点续跑和变更重跑。
 - 可选复制高价值文档到分类目录；源目录只读，不删除、不移动源文件。
 - 可选挖掘文件名、时间、路径和 embedding 关系。
-- 可导出 `knowledge_graph.json` 和 `doctriage_bundle.v1` 供下游系统消费。
+- 可导出 `knowledge_graph.json` 和 `doctriage_bundle.v2` 供下游系统消费。
 
 ## 工程边界
 
@@ -18,7 +18,7 @@ DocTriage 是面向 RAG / Agent 入库前的本地文档预处理中间件。
 - 生成物统一写入 `OUTPUT_ROOT`，且 `OUTPUT_ROOT` 不能位于 `SOURCE_DIR` 内。
 - 默认优先大目录首跑效率：跳过目录级 manifest、不持久化正文摘要、不提取 PDF 原生元数据。
 - embedding、OCR、manifest 分析都是可选增强，不应成为基础流程必需条件。
-- 下游项目应优先消费 `doctriage_bundle.v1`，不要直接依赖内部 JSONL 日志结构。
+- 下游项目应优先消费 `doctriage_bundle.v2`，不要直接依赖内部 JSONL 日志结构。
 
 ## 主要入口
 

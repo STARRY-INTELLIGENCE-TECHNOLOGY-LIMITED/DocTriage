@@ -21,10 +21,14 @@ doctriage = "main:main"
 doctriage-relationships = "relationship_miner:main"
 doctriage-graph = "knowledge_graph:main"
 doctriage-bundle = "bundle_exporter:main"
+doctriage-rag = "rag_indexer:main"
 doctriage-reading = "reading_tracker:main"
 doctriage-reading-ui = "reading_ui:main"
 doctriage-workflow = "workflow_adapter:main"
 
 [tool.setuptools]
-py-modules = ["bundle_exporter", "cleaner", "config", "knowledge_graph", "main", "meta_profiler", "ollama_runtime", "ranker_engine", "reading_tracker", "reading_ui", "relationship_miner", "runtime_encoding", "workflow_adapter"]
-packages = ["relationship_strategies"]
+py-modules = ["bundle_exporter", "cleaner", "config", "embedding_store", "knowledge_graph", "main", "meta_profiler", "ollama_runtime", "rag_indexer", "ranker_engine", "reading_tracker", "reading_ui", "relationship_miner", "runtime_encoding", "workflow_adapter"]
+packages = ["doctriage_ui", "relationship_strategies"]
+
+[tool.setuptools.package-data]
+doctriage_ui = ["*.css", "*.html", "*.js"]

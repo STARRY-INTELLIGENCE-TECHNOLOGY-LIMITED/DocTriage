@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 from dataclasses import dataclass
@@ -64,16 +65,25 @@ def analyze_document(
 
     washer = DocumentWasher(settings=settings)
     profiler = MetadataProfiler(settings=settings)
-    scoring = scorer or SemanticScoring(llm_client=LLMClient(settings=settings))
+    owned_llm_client: LLMClient | None = None
+    if scorer is None:
+        owned_llm_client = LLMClient(settings=settings)
+        scoring = SemanticScoring(llm_client=owned_llm_client)
+    else:
+        scoring = scorer
 
-    washed = washer.wash(path)
-    profile = profiler.profile_document(path, washed.clean_markdown)
-    score = scoring.score_document(
-        path,
-        washed.clean_markdown,
-        profile,
-        ManifestResult(),
-    )
+    try:
+        washed = washer.wash(path)
+        profile = profiler.profile_document(path, washed.clean_markdown)
+        score = scoring.score_document(
+            path,
+            washed.clean_markdown,
+            profile,
+            ManifestResult(),
+        )
+    finally:
+        if owned_llm_client is not None:
+            owned_llm_client.close()
     fallback_summary = build_local_summary(
         washed.clean_markdown,
         max_chars=settings.DOCUMENT_SUMMARY_MAX_CHARS,
@@ -152,7 +162,7 @@ def build_routing(
     policy: WorkflowPolicy | None = None,
 ) -> dict[str, Any]:
     active_policy = policy or WorkflowPolicy()
-    values = score.model_dump() if isinstance(score, SemanticScore) else score
+    values = score.model_dump() if isinstance(score, SemanticScore) else flatten_document_payload(score)
     quality = coerce_int(values.get("quality"), 0)
     actionability = coerce_int(values.get("actionability"), 0)
     evidence_richness = coerce_int(values.get("evidence_richness"), 0)
@@ -230,44 +240,123 @@ def build_dataset_record(
     purpose: str,
     policy: WorkflowPolicy,
 ) -> dict[str, Any]:
-    routing = build_routing(document, policy)
+    values = flatten_document_payload(document)
+    routing = build_routing(values, policy)
     return {
         "schema_version": DSampleSET_SCHEMA_VERSION,
-        "id": document["id"],
+        "id": values["id"],
         "purpose": purpose,
         "include": purpose == "all" or routing["routes"].get(purpose, False),
-        "path": document.get("preferred_path") or document.get("source_path") or "",
-        "source_path": document.get("source_path") or "",
-        "target_path": document.get("target_path") or "",
-        "relative_path": document.get("relative_path") or "",
-        "media_type": document.get("media_type") or "unknown",
+        "path": values.get("preferred_path") or values.get("source_path") or "",
+        "source_path": values.get("source_path") or "",
+        "target_path": values.get("target_path") or "",
+        "relative_path": values.get("relative_path") or "",
+        "media_type": values.get("media_type") or "unknown",
         "metadata": {
-            "title": document.get("title") or "",
-            "category": document.get("category") or "",
-            "document_kind": document.get("document_kind") or "Unknown",
-            "topic_tags": document.get("topic_tags") or [],
+            "title": values.get("title") or "",
+            "category": values.get("category") or "",
+            "document_kind": values.get("document_kind") or "Unknown",
+            "topic_tags": values.get("topic_tags") or [],
         },
         "scores": {
-            "quality": document.get("quality", 0),
-            "knowledge_density": document.get("knowledge_density", 0),
-            "implementation_specificity": document.get(
+            "quality": values.get("quality", 0),
+            "knowledge_density": values.get("knowledge_density", 0),
+            "implementation_specificity": values.get(
                 "implementation_specificity", 0
             ),
-            "logical_structure": document.get("logical_structure", 0),
-            "evidence_richness": document.get("evidence_richness", 0),
-            "actionability": document.get("actionability", 0),
-            "strategic_value": document.get("strategic_value", 0),
-            "freshness": document.get("freshness", 0),
-            "uniqueness": document.get("uniqueness", 0),
-            "sensitivity_risk": document.get("sensitivity_risk", 0),
-            "public_writing_suitability": document.get(
+            "logical_structure": values.get("logical_structure", 0),
+            "evidence_richness": values.get("evidence_richness", 0),
+            "actionability": values.get("actionability", 0),
+            "strategic_value": values.get("strategic_value", 0),
+            "freshness": values.get("freshness", 0),
+            "uniqueness": values.get("uniqueness", 0),
+            "sensitivity_risk": values.get("sensitivity_risk", 0),
+            "public_writing_suitability": values.get(
                 "public_writing_suitability", 0
             ),
         },
-        "summary": document.get("summary") or "",
-        "reason": document.get("reason") or "",
+        "summary": values.get("summary") or "",
+        "reason": values.get("reason") or "",
         "workflow": routing,
     }
+
+
+def flatten_document_payload(document: dict[str, Any]) -> dict[str, Any]:
+    paths = document.get("paths") if isinstance(document.get("paths"), dict) else {}
+    classification = (
+        document.get("classification")
+        if isinstance(document.get("classification"), dict)
+        else {}
+    )
+    scores = document.get("scores") if isinstance(document.get("scores"), dict) else {}
+    text = document.get("text") if isinstance(document.get("text"), dict) else {}
+    return {
+        "id": document.get("id") or document_id_from_values(document, paths),
+        "title": document.get("title") or Path(str(paths.get("relative") or "")).stem,
+        "source_path": document.get("source_path") or paths.get("source") or "",
+        "target_path": document.get("target_path") or paths.get("target") or "",
+        "preferred_path": document.get("preferred_path") or paths.get("preferred") or "",
+        "relative_path": document.get("relative_path") or paths.get("relative") or "",
+        "media_type": document.get("media_type")
+        or classification.get("media_type")
+        or "unknown",
+        "category": document.get("category") or classification.get("category") or "",
+        "document_kind": document.get("document_kind")
+        or classification.get("document_kind")
+        or "Unknown",
+        "topic_tags": document.get("topic_tags") or classification.get("topic_tags") or [],
+        "quality": coerce_int(document.get("quality", scores.get("quality")), 0),
+        "knowledge_density": coerce_int(
+            document.get("knowledge_density", scores.get("knowledge_density")), 0
+        ),
+        "implementation_specificity": coerce_int(
+            document.get(
+                "implementation_specificity",
+                scores.get("implementation_specificity"),
+            ),
+            0,
+        ),
+        "logical_structure": coerce_int(
+            document.get("logical_structure", scores.get("logical_structure")), 0
+        ),
+        "evidence_richness": coerce_int(
+            document.get("evidence_richness", scores.get("evidence_richness")), 0
+        ),
+        "actionability": coerce_int(
+            document.get("actionability", scores.get("actionability")), 0
+        ),
+        "strategic_value": coerce_int(
+            document.get("strategic_value", scores.get("strategic_value")), 0
+        ),
+        "freshness": coerce_int(document.get("freshness", scores.get("freshness")), 0),
+        "uniqueness": coerce_int(
+            document.get("uniqueness", scores.get("uniqueness")), 0
+        ),
+        "sensitivity_risk": coerce_int(
+            document.get("sensitivity_risk", scores.get("sensitivity_risk")), 0
+        ),
+        "public_writing_suitability": coerce_int(
+            document.get(
+                "public_writing_suitability",
+                scores.get("public_writing_suitability"),
+            ),
+            0,
+        ),
+        "summary": document.get("summary") or text.get("summary") or "",
+        "reason": document.get("reason") or text.get("reason") or "",
+    }
+
+
+def document_id_from_values(document: dict[str, Any], paths: dict[str, Any]) -> str:
+    return str(
+        document.get("relative_path")
+        or paths.get("relative")
+        or document.get("source_path")
+        or paths.get("source")
+        or document.get("target_path")
+        or paths.get("target")
+        or ""
+    )
 
 
 def selection_for_purpose(purpose: str, policy: WorkflowPolicy) -> BundleSelection:
@@ -304,10 +393,12 @@ def iter_input_paths(args: argparse.Namespace) -> list[Path]:
 
     if str(args.input_jsonl) == "-":
         lines = sys.stdin
+        close_lines = contextlib.nullcontext()
     else:
         lines = Path(args.input_jsonl).open("r", encoding="utf-8", errors="ignore")
+        close_lines = lines
 
-    with lines:
+    with close_lines:
         for raw_line in lines:
             line = raw_line.strip()
             if not line:

@@ -59,7 +59,7 @@ Mine relationship clusters for duplicate detection, series discovery, connected 
 ## Requirements
 
 - Python `>=3.11,<3.15`
-- A local LLM endpoint, for example Ollama
+- An LLM endpoint: Ollama locally, or an OpenAI-compatible REST endpoint
 - Optional: LibreOffice for legacy `.ppt` ingestion
 
 ## Install
@@ -105,6 +105,16 @@ If console scripts are not on `PATH`, run the modules from the checkout:
 .\.venv\Scripts\python.exe main.py --help
 ```
 
+## Model Endpoints
+
+DocTriage can run without Ollama if your provider exposes OpenAI-compatible REST APIs:
+
+- scoring/classification: set `LLM_ENDPOINT` to `/v1/chat/completions`, set `LLM_MODEL`, and provide `LLM_API_KEY`;
+- relationship/RAG embeddings: set `EMBEDDING_ENDPOINT` to `/v1/embeddings`, set `EMBEDDING_MODEL`, and optionally provide `EMBEDDING_API_KEY`;
+- if `EMBEDDING_API_KEY` is empty, embedding requests reuse `LLM_API_KEY`.
+
+The browser console has API key fields for ad hoc runs. It passes keys to worker processes through environment variables and does not save them in browser storage.
+
 ## Core Workflow
 
 1. **Run a plan-only pass**
@@ -141,6 +151,7 @@ If console scripts are not on `PATH`, run the modules from the checkout:
 | `doctriage-relationships` | Mine document relationships |
 | `doctriage-graph` | Export a knowledge graph |
 | `doctriage-bundle` | Export a stable downstream bundle |
+| `doctriage-rag` | Build or search the resumable RAG chunk index |
 | `doctriage-workflow` | Workflow adapter entrypoint |
 
 Each command supports `--help`.
@@ -163,9 +174,25 @@ OUTPUT_ROOT/
     clusters.json
     knowledge_graph.json
     doctriage_bundle.json
+  _rag/
+    progress.json
+    manifest.json
+    documents.jsonl
+    chunks.jsonl
+    vectors.jsonl
 ```
 
 Downstream integrations should prefer `doctriage_bundle.json` over internal JSONL logs.
+
+## AnyDocsToAgents Handoff
+
+The browser console has an **Agent compile** tab for optional handoff to [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents). It exports `OUTPUT_ROOT/_relationships/doctriage_bundle.json` and opens AnyDocsToAgents with a URL such as:
+
+```text
+http://127.0.0.1:8000/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json&autoplan=1#view-planner
+```
+
+This is intentionally a loose bridge: DocTriage does not start, embed, or depend on AnyDocsToAgents. Both projects can still run independently.
 
 ## Language
 

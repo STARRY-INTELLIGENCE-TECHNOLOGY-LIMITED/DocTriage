@@ -1,6 +1,9 @@
 import json
+import argparse
+import io
 from pathlib import Path
 
+import workflow_adapter
 from config import Settings
 from ranker_engine import SemanticScore
 from workflow_adapter import (
@@ -8,6 +11,7 @@ from workflow_adapter import (
     analyze_document,
     build_dataset_records,
     build_routing,
+    iter_input_paths,
     selection_for_purpose,
 )
 
@@ -130,6 +134,16 @@ def test_build_dataset_records_filters_by_purpose(tmp_path: Path) -> None:
     assert records[0]["workflow"]["routes"]["public_writing"] is True
 
 
+def test_iter_input_paths_does_not_close_stdin(monkeypatch) -> None:
+    stdin = io.StringIO('{"path": "a.md"}\nplain.md\n')
+    monkeypatch.setattr(workflow_adapter.sys, "stdin", stdin)
+
+    paths = iter_input_paths(argparse.Namespace(file=[], input_jsonl="-"))
+
+    assert [str(path) for path in paths] == ["a.md", "plain.md"]
+    assert stdin.closed is False
+
+
 def test_analyze_document_returns_machine_readable_record(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"
@@ -158,3 +172,79 @@ def test_analyze_document_returns_machine_readable_record(tmp_path: Path) -> Non
     assert record["triage"]["quality"] == 86
     assert record["text"]["summary"].startswith("This guide explains")
     assert record["workflow"]["routes"]["rag"] is True
+
+
+def test_analyze_document_closes_owned_llm_client(tmp_path: Path, monkeypatch) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    document = source_dir / "guide.md"
+    document.write_text("# Guide\n\nUse RAG with tests.", encoding="utf-8")
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="stub",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        OCR_ENABLED=False,
+        DOCUMENT_SUMMARY_ENABLED=True,
+    )
+    created_clients: list[object] = []
+
+    class FakeWashedDocument:
+        clean_markdown = "# Guide\n\nUse RAG with tests."
+        notes: list[str] = []
+
+    class FakeWasher:
+        def __init__(self, *, settings):
+            self.settings = settings
+
+        def wash(self, path):
+            return FakeWashedDocument()
+
+    class FakeProfile:
+        def to_llm_payload(self):
+            return {}
+
+    class FakeProfiler:
+        def __init__(self, *, settings):
+            self.settings = settings
+
+        def profile_document(self, path, clean_markdown):
+            return FakeProfile()
+
+    class FakeLLMClient:
+        def __init__(self, *, settings):
+            self.closed = False
+            created_clients.append(self)
+
+        def close(self):
+            self.closed = True
+
+    class FakeSemanticScoring:
+        def __init__(self, *, llm_client):
+            self.llm_client = llm_client
+
+        def score_document(self, file_path, clean_markdown, profile, manifest):
+            return SemanticScore(
+                quality=86,
+                category="Implementation",
+                document_kind="ImplementationGuide",
+                topic_tags=["RAG"],
+                summary="This guide explains how to build a RAG workflow.",
+                reason="usable",
+            )
+
+    monkeypatch.setattr(workflow_adapter, "DocumentWasher", FakeWasher)
+    monkeypatch.setattr(workflow_adapter, "MetadataProfiler", FakeProfiler)
+    monkeypatch.setattr(workflow_adapter, "LLMClient", FakeLLMClient)
+    monkeypatch.setattr(workflow_adapter, "SemanticScoring", FakeSemanticScoring)
+
+    record = analyze_document(
+        document,
+        settings=settings,
+        source_root=source_dir,
+    )
+
+    assert record["ok"] is True
+    assert len(created_clients) == 1
+    assert created_clients[0].closed is True

@@ -1,0 +1,3839 @@
+const $ = (id) => document.getElementById(id);
+const I18N = {
+  "zh-CN": {
+    app_title: "DocTriage 控制台",
+    tab_analysis: "分析执行",
+    tab_reading: "阅读台",
+    tab_graph: "关系图谱",
+    tab_rag: "RAG 索引",
+    tab_agents: "Agent 编译",
+    source_dir: "源目录",
+    output_dir: "输出目录",
+    pick_source_dir: "选择源目录",
+    pick_output_dir: "选择输出目录",
+    model: "模型",
+    output_language: "输出语言",
+    lang_auto: "自动",
+    lang_zh: "中文",
+    lang_en: "English",
+    lang_ja: "日本語",
+    lang_ko: "한국어",
+    lang_de: "Deutsch",
+    lang_fr: "Français",
+    lang_es: "Español",
+    start_analysis: "开始分析",
+    early_relationships: "生成关系",
+    stop_analysis: "停止分析",
+    stop_relationships: "停止生成",
+    reset_analysis: "重置分析",
+    reset_relationships: "重置关系",
+    reading_output_root: "阅读目标输出目录",
+    graph_output_root: "图谱分析目录",
+    rag_output_root: "RAG 索引目录",
+    anydocs_output_root: "DocTriage 输出目录",
+    anydocs_url: "AnyDocsToAgents 地址",
+    anydocs_bundle_path: "Bundle 路径",
+    pick_folder: "选择目录",
+    reading_scope: "阅读范围",
+    scope_analysis: "分析结果",
+    scope_source: "全部源文件",
+    scope_source_unscored: "未分析",
+    status: "状态",
+    min_quality: "最低质量",
+    category: "分类",
+    keywords: "关键词",
+    search: "搜索",
+    max_sensitivity: "最高敏感",
+    min_public: "最低公开适配",
+    refresh: "刷新",
+    select_all: "全选",
+    invert: "反选",
+    select_current_page: "全选当前页",
+    clear_selection: "取消选择",
+    bulk_reading: "批量在读",
+    bulk_read: "批量已读",
+    bulk_deferred: "批量稍后",
+    bulk_skipped: "批量跳过",
+    bulk_unread: "批量未读",
+    open_next: "打开下一篇",
+    export_filtered_csv: "导出当前筛选 CSV",
+    export_filtered_jsonl: "导出当前筛选 JSONL",
+    open: "打开",
+    reveal: "定位",
+    mark_reading: "在读",
+    mark_read: "已读",
+    mark_deferred: "稍后",
+    mark_skipped: "跳过",
+    mark_unread: "未读",
+    disabled_open_title: "当前环境不支持调用系统默认阅读器",
+    disabled_reveal_title: "当前环境不支持文件管理器定位",
+    missing_source_title: "源文件不存在，无法打开或定位",
+    table_select: "选择",
+    table_quality: "质量",
+    table_type: "类型",
+    table_sensitivity_public: "敏感/公开",
+    table_name: "名称",
+    table_modified: "修改时间",
+    table_tags: "标签",
+    table_actions: "操作",
+    graph_search: "簇搜索",
+    graph_min_size: "最小簇大小",
+    generate_relationships: "生成图谱",
+    export_kg: "导出知识图谱",
+    export_bundle: "导出 Bundle",
+    open_anydocs: "打开 AnyDocsToAgents",
+    open_anydocs_autoplan: "打开并生成 Graph",
+    refresh_graph: "刷新图谱",
+    build_rag: "构建索引",
+    stop_rag: "停止索引",
+    rag_embedding_model: "Embedding 模型",
+    rag_min_quality: "最低质量",
+    rag_categories: "分类过滤",
+    rag_limit: "文档上限",
+    rag_chunk_max_chars: "切片长度",
+    rag_chunk_overlap_chars: "重叠长度",
+    rag_advanced: "高级功能",
+    rag_redaction_enabled: "启用敏感词防火墙",
+    rag_redact_drop_matched_documents: "命中后跳过文档",
+    rag_redact_placeholder: "脱敏占位符",
+    rag_redact_terms: "敏感词列表",
+    rag_redact_mappings: "映射规则",
+    rag_search_query: "检索测试",
+    rag_top_k: "Top K",
+    rag_search: "检索",
+    concurrency: "并发",
+    limit: "数量上限",
+    max_mb: "最大 MB",
+    quality_threshold: "质量阈值",
+    timeout_seconds: "超时秒",
+    summary: "摘要",
+    plan_only: "仅评分，不复制文件",
+    ocr_enabled: "开启OCR",
+    manifest_analysis: "开启目录分析",
+    mine_relationships: "挖掘关系",
+    title_citations: "标题引用",
+    embedding_relationships: "Embedding 关系",
+    status_unread: "未读",
+    status_reading: "在读",
+    status_read: "已读",
+    status_reread_needed: "需重读",
+    status_failed: "失败",
+    status_skipped: "跳过",
+    status_deferred: "稍后",
+    status_all: "全部",
+    no_summary: "无摘要",
+    empty_graph: "暂无关系结果",
+    graph_need_paths: "请先选择图谱分析目录",
+    graph_no_match: "没有匹配的关系簇",
+    graph_select_cluster: "选择一个关系簇查看文档详情",
+    graph_no_docs: "这个关系簇没有可展示的文档",
+    graph_no_edges: "当前文档没有可展示的关系边",
+    related_documents: "关联文档",
+    no_related_edges: "当前文档没有命中的关系边",
+    no_explicit_signal: "无显式信号",
+    uncategorized: "未分类",
+    no_preview_path: "无预览路径",
+    cluster: "簇",
+    documents_unit: "篇",
+    edges_unit: "条边",
+    sensitive: "敏感",
+    public_label: "公开",
+    match_prefix: "匹配",
+    all_prefix: "全部",
+    first_page: "首页",
+    previous_page: "上一页",
+    next_page: "下一页",
+    last_page: "末页",
+    page_label: "第",
+    page_suffix: "页",
+    page_size_label: "数量",
+    requested_open: "已请求打开",
+    requested_reveal: "已请求定位",
+    exported_rows: "已导出当前筛选",
+    pick_failed: "选择失败",
+    paths_apply_failed: "路径应用失败",
+    paths_applied: "路径已应用",
+    need_reading_output: "请先输入阅读目标输出目录",
+    need_graph_output: "请先输入图谱分析目录",
+    reading_output_apply_failed: "阅读目录应用失败",
+    graph_output_apply_failed: "图谱目录应用失败",
+    analysis_start_failed: "启动失败",
+    analysis_started: "已启动分析",
+    early_relationships_failed: "生成关系失败",
+    early_relationships_started: "已停止分析并开始生成关系",
+    analysis_preempting_relationships: "正在停止生成关系并准备开始分析",
+    embedding_model_required: "已勾选 Embedding 关系，请先填写 Embedding 模型。",
+    early_relationships_without_embedding_confirm: "未勾选 Embedding 关系且未填写 Embedding 模型。\n\n本次将只生成关系挖掘和标题引用，不生成 Embedding 向量。确认继续？\n\n取消后请勾选 Embedding 关系并填写模型名称，再重新点击生成关系。",
+    stop_requested: "已请求停止",
+    stop_failed: "停止失败",
+    relationship_stop_requested: "已请求停止生成关系",
+    relationship_stop_failed: "停止生成关系失败",
+    need_source_output: "请先应用源目录和输出目录",
+    reset_confirm: "将清空输出目录中的日志、状态和关系结果：\n{output}\n\n如果该目录中存在已复制的分类文件，也会一并清理。该操作不可恢复，确认继续？",
+    reset_relationships_confirm: "将清空关系产物目录：\n{output}\\_relationships\n\n分析进度、阅读标记和 RAG 索引不会被删除。该操作不可恢复，确认继续？",
+    reset_failed: "重置失败",
+    output_reset: "输出目录已重置",
+    relationship_reset_failed: "重置关系失败",
+    relationships_reset: "关系产物已重置",
+    reset_relationships_blocked_analysis: "分析运行中，请先停止分析再重置关系。",
+    reset_relationships_blocked_relationships: "关系生成运行中，请先停止生成再重置关系。",
+    status_load_failed: "状态加载失败",
+    rows_load_failed: "加载失败",
+    graph_load_failed: "图谱加载失败",
+    graph_relations_exists: "存在 relations.jsonl",
+    graph_clusters_exists: "存在 clusters.json",
+    graph_decisions_exists: "存在 decisions.jsonl",
+    graph_task_mine: "图谱生成",
+    graph_task_export_graph: "知识图谱导出",
+    graph_task_export_bundle: "Bundle 导出",
+    graph_task_running: "{task}中",
+    testing_llm: "正在检查模型链路",
+    llm_check_failed: "模型链路检查失败",
+    llm_check_ok: "模型链路可用",
+    llm_check_reachable: "Endpoint 可达",
+    llm_model_exists: "模型存在",
+    llm_model_missing: "模型不存在",
+    llm_model_unchecked: "未检查模型",
+    graph_need_analysis_once: "先完成至少一次文档分析",
+    graph_task_start_failed: "关系任务启动失败",
+    graph_task_started: "已启动{task}",
+    anydocs_export_failed: "Bundle 导出失败",
+    anydocs_exported: "Bundle 已导出",
+    anydocs_open_failed: "打开 AnyDocsToAgents 失败",
+    anydocs_opened: "已打开 AnyDocsToAgents",
+    anydocs_optional: "可选联动：只传 Bundle 路径，两个项目仍可独立运行",
+    anydocs_hint: "AnyDocsToAgents 独立运行。这里仅生成 Bundle 路径并打开浏览器，不启动、不依赖、不嵌入下游服务。",
+    rag_need_output: "请先输入 RAG 索引目录",
+    rag_started: "已启动 RAG 索引",
+    rag_start_failed: "RAG 索引启动失败",
+    rag_stop_requested: "已请求停止 RAG 索引",
+    rag_stop_failed: "停止 RAG 索引失败",
+    rag_load_failed: "RAG 状态加载失败",
+    rag_search_failed: "RAG 检索失败",
+    rag_query_required: "请输入检索内容",
+    rag_redaction_rules_required: "已启用敏感词防火墙，请先填写敏感词或映射规则。",
+    rag_no_index: "暂无 RAG 索引",
+    rag_no_results: "没有匹配结果",
+    rag_documents_pill: "文档",
+    rag_chunks_pill: "切片",
+    rag_vectors_pill: "向量",
+    rag_failed_pill: "失败文档",
+    rag_phase_loading_decisions: "读取决策",
+    rag_phase_extracting_text: "抽取正文",
+    rag_phase_chunking: "写入切片",
+    rag_phase_embedding: "生成向量",
+    rag_phase_complete: "完成",
+    rag_phase_error: "错误",
+    rag_task_running: "RAG 索引中",
+    vector_store_type: "向量库类型",
+    vector_store_local: "本地 JSONL",
+    vector_store_url: "向量库地址",
+    vector_store_collection: "集合",
+    test_vector_store: "测试向量库",
+    testing_vector_store: "正在测试向量库",
+    vector_store_test_failed: "向量库测试失败",
+    vector_store_ok: "向量库可用",
+    vector_store_unavailable: "向量库不可用",
+    vector_store_reachable: "服务可达",
+    vector_store_collection_exists: "集合存在",
+    vector_store_collection_missing: "集合不存在",
+    vector_store_vectors: "向量记录",
+    rag_result_count: "结果",
+    rag_mode_vector: "向量检索",
+    rag_mode_lexical: "词法检索",
+    graph_cluster_load_failed: "关系簇加载失败",
+    graph_task_running_refresh: "{task}中，请稍后刷新",
+    graph_need_analysis_before_graph: "先完成一次文档分析，再生成关系图谱",
+    graph_no_relationships_generate: "还没有图谱结果，可点击“生成图谱”",
+    graph_task_running_detail: "后台任务运行中，完成后这里会显示局部图和证据。",
+    graph_generate_then_detail: "生成图谱后，这里会显示局部图、证据和文档详情。",
+    graph_phase_loading_decisions: "读取决策",
+    graph_phase_records_loaded: "决策已读取",
+    graph_phase_preparing_embeddings: "准备 Embedding",
+    graph_phase_scoring_relationships: "计算关系",
+    graph_phase_writing_relations: "写入关系",
+    graph_phase_clustering: "生成聚类",
+    graph_phase_complete: "完成",
+    graph_phase_error: "错误",
+    graph_records_pill: "文档",
+    graph_candidates_pill: "候选关系",
+    graph_embedded_pill: "向量",
+    mark_failed: "标记失败",
+    marked_status: "已标记：{status}",
+    select_documents_first: "请先选择文档",
+    bulk_mark_failed: "批量标记失败",
+    bulk_marked: "已批量标记 {count} 篇",
+    current_list_empty: "当前列表为空",
+    sort_public_desc: "公开↓",
+    sort_public_asc: "公开↑",
+    plan_only_pill: "仅评分：只记录评分与阅读标记，不复制文件",
+    running_pill: "运行中",
+    not_running_pill: "未运行",
+    progress_pill: "进度",
+    elapsed_pill: "耗时",
+    embedding_progress_pill: "Embedding 向量",
+    embedding_phase_loading_cache: "读取缓存",
+    embedding_phase_embedding: "生成中",
+    embedding_phase_complete: "完成",
+    embedding_phase_ready: "准备",
+    embedding_speed_waiting_pill: "速度等待连续生成",
+    embedding_eta_waiting_pill: "ETA 等待连续生成",
+    eta_finish_pill: "预计完成",
+    completed_pill: "完成",
+    concurrency_pill: "并发",
+    eta_waiting_pill: "ETA 等待连续规划",
+    speed_pill: "速度",
+    speed_waiting_pill: "速度等待连续规划",
+    unresolved_failures_pill: "未解决失败",
+    retry_recovered_pill: "重试恢复",
+    stale_lock_pid_pill: "陈旧锁 PID",
+    phase_not_started: "未启动",
+    phase_relationship_mining: "关系挖掘中",
+    phase_resume_preparing: "续传准备中",
+    phase_resume_skipping: "续传跳过中",
+    phase_scoring: "文档评分中",
+    phase_scanning: "扫描准备中",
+    phase_completed_with_failures: "分析完成，仍有失败",
+    phase_completed_relationships: "分析完成，关系已生成",
+    phase_completed_no_relationships: "分析完成，关系未生成",
+    phase_completed: "分析完成",
+    phase_stopped_resume: "已停止，可续传",
+    explain_summary: "摘要",
+    explain_reason: "评分理由",
+    explain_dimensions: "维度",
+    explain_failure: "失败",
+    explain_failure_stage: "阶段",
+    explain_failure_reason: "原因",
+    explain_failure_attempts: "尝试",
+    explain_failure_error: "错误",
+    dim_knowledge_density: "知识密度",
+    dim_implementation_specificity: "实现细节",
+    dim_logical_structure: "逻辑结构",
+    dim_evidence_richness: "证据",
+    dim_actionability: "可执行",
+    dim_strategic_value: "战略",
+    dim_freshness: "新鲜",
+    dim_uniqueness: "独特",
+    folder_picker_unavailable: "当前环境不支持图形目录选择，请手工输入路径",
+    operation_failed: "操作失败",
+    tip_source_dir: "待分析的原始文档目录。程序会递归扫描其下支持的文件类型。不要把输出目录放到这个目录里面。",
+    tip_output_dir: "写入进度、日志、评分结果和可选复制结果的目录。同一输出目录会自动续跑；同一时间只允许一个分析进程写入。",
+    tip_llm_endpoint: "文档评分调用的文本模型接口。Ollama 默认是 /api/generate；如果你切换服务地址，这里要一起改。",
+    tip_model: "用于文档分类、打分和摘要理解的模型名。Embedding 关系需要单独填写向量模型，不会自动沿用这里的模型。",
+    tip_llm_api_key: "OpenAI 或兼容云接口的 Bearer Token。本地 Ollama 可留空；不会保存到浏览器本地存储。",
+    tip_embedding_api_key: "向量接口的 Bearer Token。留空时沿用 LLM API Key；不会保存到浏览器本地存储。",
+    tip_output_language: "摘要和原因的输出语言。自动会根据文档主体语言推断；也可以强制指定一种语言。",
+    tip_concurrency: "同时向 LLM 发起的请求数。大目录和本地模型首跑建议 1；模型空闲且显存足够时再逐步上调。",
+    tip_limit: "只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。",
+    tip_max_mb: "跳过超过这个体积的候选文件，避免极大 PDF 或 Office 文档拖慢首轮筛选。",
+    tip_quality_threshold: "达到这个分数的文档会被视为高价值候选。仅评分模式下用于评分分层和后续筛选，不生成分类目录。",
+    tip_timeout_seconds: "单个 LLM 请求最长等待时间。模型较慢或文档较大时可以调高；过高会让失败请求卡更久。",
+    tip_summary: "把本地短摘要写入 decisions.jsonl，后续做关系挖掘、公开写作筛选和人工复核时更有用。会多占一点状态文件空间。",
+    tip_plan_only: "只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。",
+    tip_ocr_enabled: "启用 OCR 解析纯图片或扫描版 PDF。会明显增加处理时间；普通带文本层的 PDF 和 Office 文档通常不需要。",
+    tip_manifest_analysis: "启用目录级系列/集合分析，再进入文件级评分。适合需要识别同一目录下系列资料的场景；大目录首轮可以先不勾选。",
+    tip_mine_relationships: "在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。",
+    tip_title_citations: "启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。",
+    tip_embedding_relationships: "给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。必须填写向量模型；更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。",
+    tip_rag_output_root: "指向已经跑过分析的输出目录。索引会写入该目录下的 _rag。",
+    tip_rag_embedding_model: "留空则只构建文档与切片，不生成向量；填写后会额外写入 _rag/vectors.jsonl，并可用语义检索。",
+    tip_rag_redaction_enabled: "只作用于 RAG 索引链路，不改原始分析结果。写入 _rag 和送入向量库前，会先对文本做过滤、替换或映射。",
+    tip_rag_redact_drop_matched_documents: "当文档正文命中任一敏感词或映射规则时，整篇文档不会进入 _rag/chunks.jsonl、_rag/vectors.jsonl 和后续向量库。适合高敏场景。",
+    tip_rag_redact_placeholder: "普通敏感词替换时使用的固定文本。默认是 [REDACTED]。",
+    tip_rag_redact_terms: "一行一个词，也支持英文逗号分隔。命中后替换为上方占位符。适合姓名、项目代号、客户名、账号前缀等固定词。",
+    tip_rag_redact_mappings: "一行一条，格式为 原文=>映射值。前缀 regex: 可启用正则，前缀 case: 可区分大小写，例如 regex:\\b1[3-9]\\d{9}\\b=>[PHONE]。",
+    tip_vector_store_type: "测试 RAG 产物要流转到的向量库。本地 JSONL 会只读检查当前输出目录下的 _rag；Qdrant、Chroma 和 HTTP 会检查网络连通性。",
+    tip_vector_store_url: "外部向量库服务地址，例如 Qdrant 的 http://localhost:6333 或 Chroma 的 http://localhost:8000。本地 JSONL 不需要填写。",
+    tip_vector_store_collection: "可选。填写后会进一步检查集合是否存在；留空则只检查服务是否可达。",
+    tip_rag_search_query: "优先使用向量检索；当没有向量或未填写向量模型时，会自动退回到词法匹配。",
+    ph_source_dir: "请选择源文档目录",
+    ph_output_dir: "请选择输出目录",
+    ph_reading_output_root: "选择或输入已分析输出目录",
+    ph_graph_output_root: "选择或输入已分析输出目录",
+    ph_rag_output_root: "选择或输入已分析输出目录",
+    ph_vector_store_url: "本地 JSONL 可留空",
+    ph_vector_store_collection: "可选",
+    ph_text_search: "名称/路径/备注",
+    ph_graph_search: "路径/分类/标签",
+    ph_limit: "空为全量",
+    ph_api_key_optional: "本地 Ollama 可留空",
+    ph_embedding_api_key: "留空沿用 LLM API Key",
+    ph_embedding_model: "填写向量模型后才能启用",
+    ph_rag_embedding_model: "留空则仅构建文本索引",
+    ph_rag_categories: "可多选",
+    ph_rag_redact_terms: "一行一个，或逗号分隔",
+    ph_rag_redact_mappings: "原文=>映射值\nregex:\\b1[3-9]\\d{9}\\b=>[PHONE]",
+    ph_rag_query: "输入问题、主题或关键词"
+  },
+  en: {
+    app_title: "DocTriage Console",
+    tab_analysis: "Analysis",
+    tab_reading: "Reading",
+    tab_graph: "Graph",
+    tab_rag: "RAG Index",
+    tab_agents: "Agent compile",
+    source_dir: "Source directory",
+    output_dir: "Output directory",
+    pick_source_dir: "Pick source",
+    pick_output_dir: "Pick output",
+    model: "Model",
+    output_language: "Output language",
+    lang_auto: "Auto",
+    lang_zh: "Chinese",
+    lang_en: "English",
+    lang_ja: "Japanese",
+    lang_ko: "Korean",
+    lang_de: "German",
+    lang_fr: "French",
+    lang_es: "Spanish",
+    start_analysis: "Start analysis",
+    early_relationships: "Generate relationships",
+    stop_analysis: "Stop analysis",
+    stop_relationships: "Stop generation",
+    reset_analysis: "Reset analysis",
+    reset_relationships: "Reset relationships",
+    reading_output_root: "Reading output directory",
+    graph_output_root: "Graph analysis directory",
+    rag_output_root: "RAG index directory",
+    anydocs_output_root: "DocTriage output directory",
+    anydocs_url: "AnyDocsToAgents URL",
+    anydocs_bundle_path: "Bundle path",
+    pick_folder: "Pick folder",
+    reading_scope: "Reading scope",
+    scope_analysis: "Analysis results",
+    scope_source: "All source files",
+    scope_source_unscored: "Unscored",
+    status: "Status",
+    min_quality: "Min quality",
+    category: "Category",
+    keywords: "Keywords",
+    search: "Search",
+    max_sensitivity: "Max sensitivity",
+    min_public: "Min public suitability",
+    refresh: "Refresh",
+    select_all: "Select all",
+    invert: "Invert",
+    select_current_page: "Select current page",
+    clear_selection: "Clear selection",
+    bulk_reading: "Bulk reading",
+    bulk_read: "Bulk read",
+    bulk_deferred: "Bulk defer",
+    bulk_skipped: "Bulk skip",
+    bulk_unread: "Bulk unread",
+    open_next: "Open next",
+    export_filtered_csv: "Export filtered CSV",
+    export_filtered_jsonl: "Export filtered JSONL",
+    open: "Open",
+    reveal: "Reveal",
+    mark_reading: "Reading",
+    mark_read: "Read",
+    mark_deferred: "Defer",
+    mark_skipped: "Skip",
+    mark_unread: "Unread",
+    disabled_open_title: "System default file opening is unavailable in this environment",
+    disabled_reveal_title: "File-manager reveal is unavailable in this environment",
+    missing_source_title: "Source file does not exist",
+    table_select: "Select",
+    table_quality: "Quality",
+    table_type: "Type",
+    table_sensitivity_public: "Sensitivity/public",
+    table_name: "Name",
+    table_modified: "Modified",
+    table_tags: "Tags",
+    table_actions: "Actions",
+    graph_search: "Cluster search",
+    graph_min_size: "Min cluster size",
+    generate_relationships: "Generate graph",
+    export_kg: "Export graph",
+    export_bundle: "Export bundle",
+    open_anydocs: "Open AnyDocsToAgents",
+    open_anydocs_autoplan: "Open and generate Graph",
+    refresh_graph: "Refresh graph",
+    build_rag: "Build index",
+    stop_rag: "Stop index",
+    rag_embedding_model: "Embedding model",
+    rag_min_quality: "Min quality",
+    rag_categories: "Category filter",
+    rag_limit: "Document limit",
+    rag_chunk_max_chars: "Chunk length",
+    rag_chunk_overlap_chars: "Overlap length",
+    rag_advanced: "Advanced",
+    rag_redaction_enabled: "Enable sensitive firewall",
+    rag_redact_drop_matched_documents: "Skip matched documents",
+    rag_redact_placeholder: "Redaction placeholder",
+    rag_redact_terms: "Sensitive terms",
+    rag_redact_mappings: "Mapping rules",
+    rag_search_query: "Search test",
+    rag_top_k: "Top K",
+    rag_search: "Search",
+    concurrency: "Concurrency",
+    limit: "Limit",
+    max_mb: "Max MB",
+    quality_threshold: "Quality threshold",
+    timeout_seconds: "Timeout seconds",
+    summary: "Summary",
+    plan_only: "Score only, do not copy files",
+    ocr_enabled: "Enable OCR",
+    manifest_analysis: "Enable directory analysis",
+    mine_relationships: "Mine relationships",
+    title_citations: "Title citations",
+    embedding_relationships: "Embedding relationships",
+    status_unread: "Unread",
+    status_reading: "Reading",
+    status_read: "Read",
+    status_reread_needed: "Reread needed",
+    status_failed: "Failed",
+    status_skipped: "Skipped",
+    status_deferred: "Deferred",
+    status_all: "All",
+    no_summary: "No summary",
+    empty_graph: "No relationship results",
+    graph_need_paths: "Select a graph analysis directory first",
+    graph_no_match: "No matching relationship clusters",
+    graph_select_cluster: "Select a relationship cluster to inspect documents",
+    graph_no_docs: "This cluster has no displayable documents",
+    graph_no_edges: "The selected document has no displayable relationship edges",
+    related_documents: "Related documents",
+    no_related_edges: "The selected document has no matching relationship edges",
+    no_explicit_signal: "No explicit signal",
+    uncategorized: "Uncategorized",
+    no_preview_path: "No preview path",
+    cluster: "Cluster",
+    documents_unit: "docs",
+    edges_unit: "edges",
+    sensitive: "Sensitive",
+    public_label: "Public",
+    match_prefix: "Matched",
+    all_prefix: "All",
+    first_page: "First",
+    previous_page: "Previous",
+    next_page: "Next",
+    last_page: "Last",
+    page_label: "Page",
+    page_suffix: "",
+    page_size_label: "Page size",
+    requested_open: "Open requested",
+    requested_reveal: "Reveal requested",
+    exported_rows: "Filtered rows exported",
+    pick_failed: "Selection failed",
+    paths_apply_failed: "Failed to apply paths",
+    paths_applied: "Paths applied",
+    need_reading_output: "Enter a reading output directory first",
+    need_graph_output: "Enter a graph analysis directory first",
+    reading_output_apply_failed: "Failed to apply reading directory",
+    graph_output_apply_failed: "Failed to apply graph directory",
+    analysis_start_failed: "Failed to start analysis",
+    analysis_started: "Analysis started",
+    early_relationships_failed: "Failed to generate relationships",
+    early_relationships_started: "Analysis stopped and relationship generation started",
+    analysis_preempting_relationships: "Stopping relationship generation and preparing analysis",
+    embedding_model_required: "Embedding relationships are selected. Enter an embedding model first.",
+    early_relationships_without_embedding_confirm: "Embedding relationships are not selected and no embedding model is set.\n\nThis run will only mine relationships and title citations, without generating embedding vectors. Continue?\n\nCancel, then select Embedding relationships and enter a model name if you need vectors.",
+    stop_requested: "Stop requested",
+    stop_failed: "Failed to stop",
+    relationship_stop_requested: "Relationship stop requested",
+    relationship_stop_failed: "Failed to stop relationship generation",
+    need_source_output: "Apply source and output directories first",
+    reset_confirm: "This will clear logs, status, and relationship results in the output directory:\n{output}\n\nCopied routed files in that directory will also be removed. This cannot be undone. Continue?",
+    reset_relationships_confirm: "This will clear relationship outputs in:\n{output}\\_relationships\n\nAnalysis progress, reading marks, and RAG indexes will not be deleted. This cannot be undone. Continue?",
+    reset_failed: "Reset failed",
+    output_reset: "Output directory reset",
+    relationship_reset_failed: "Failed to reset relationship outputs",
+    relationships_reset: "Relationship outputs reset",
+    reset_relationships_blocked_analysis: "Analysis is running. Stop analysis before resetting relationships.",
+    reset_relationships_blocked_relationships: "Relationship generation is running. Stop generation before resetting relationships.",
+    status_load_failed: "Failed to load status",
+    rows_load_failed: "Failed to load rows",
+    graph_load_failed: "Failed to load graph",
+    graph_relations_exists: "relations.jsonl exists",
+    graph_clusters_exists: "clusters.json exists",
+    graph_decisions_exists: "decisions.jsonl exists",
+    graph_task_mine: "Graph generation",
+    graph_task_export_graph: "Graph export",
+    graph_task_export_bundle: "Bundle export",
+    graph_task_running: "{task} running",
+    testing_llm: "Checking model endpoint",
+    llm_check_failed: "Model endpoint check failed",
+    llm_check_ok: "Model endpoint is ready",
+    llm_check_reachable: "Endpoint reachable",
+    llm_model_exists: "Model exists",
+    llm_model_missing: "Model missing",
+    llm_model_unchecked: "Model unchecked",
+    graph_need_analysis_once: "Complete at least one document analysis first",
+    graph_task_start_failed: "Failed to start relationship task",
+    graph_task_started: "Started {task}",
+    anydocs_export_failed: "Failed to export bundle",
+    anydocs_exported: "Bundle exported",
+    anydocs_open_failed: "Failed to open AnyDocsToAgents",
+    anydocs_opened: "AnyDocsToAgents opened",
+    anydocs_optional: "Optional bridge: only passes the bundle path; both projects remain standalone",
+    anydocs_hint: "AnyDocsToAgents runs independently. This page only generates a bundle path and opens the browser; it does not start, depend on, or embed the downstream service.",
+    rag_need_output: "Enter a RAG index directory first",
+    rag_started: "RAG indexing started",
+    rag_start_failed: "Failed to start RAG indexing",
+    rag_stop_requested: "RAG stop requested",
+    rag_stop_failed: "Failed to stop RAG indexing",
+    rag_load_failed: "Failed to load RAG status",
+    rag_search_failed: "RAG search failed",
+    rag_query_required: "Enter a search query",
+    rag_redaction_rules_required: "Sensitive firewall is enabled. Enter sensitive terms or mapping rules first.",
+    rag_no_index: "No RAG index yet",
+    rag_no_results: "No matching results",
+    rag_documents_pill: "Documents",
+    rag_chunks_pill: "Chunks",
+    rag_vectors_pill: "Vectors",
+    rag_failed_pill: "Failed docs",
+    rag_phase_loading_decisions: "Loading decisions",
+    rag_phase_extracting_text: "Extracting text",
+    rag_phase_chunking: "Writing chunks",
+    rag_phase_embedding: "Embedding",
+    rag_phase_complete: "Complete",
+    rag_phase_error: "Error",
+    rag_task_running: "RAG indexing",
+    vector_store_type: "Vector store",
+    vector_store_local: "Local JSONL",
+    vector_store_url: "Vector store URL",
+    vector_store_collection: "Collection",
+    test_vector_store: "Test vector store",
+    testing_vector_store: "Testing vector store",
+    vector_store_test_failed: "Vector store test failed",
+    vector_store_ok: "Vector store ready",
+    vector_store_unavailable: "Vector store unavailable",
+    vector_store_reachable: "Service reachable",
+    vector_store_collection_exists: "Collection exists",
+    vector_store_collection_missing: "Collection missing",
+    vector_store_vectors: "Vector records",
+    rag_result_count: "Results",
+    rag_mode_vector: "Vector search",
+    rag_mode_lexical: "Lexical search",
+    graph_cluster_load_failed: "Failed to load relationship cluster",
+    graph_task_running_refresh: "{task} is running. Refresh later.",
+    graph_need_analysis_before_graph: "Complete one document analysis before generating the graph",
+    graph_no_relationships_generate: "No graph results yet. Click Generate graph.",
+    graph_task_running_detail: "The background task is running. Local graph and evidence will appear here after it finishes.",
+    graph_generate_then_detail: "After graph generation, local graph, evidence, and document details will appear here.",
+    graph_phase_loading_decisions: "Loading decisions",
+    graph_phase_records_loaded: "Decisions loaded",
+    graph_phase_preparing_embeddings: "Preparing embeddings",
+    graph_phase_scoring_relationships: "Scoring relationships",
+    graph_phase_writing_relations: "Writing relations",
+    graph_phase_clustering: "Building clusters",
+    graph_phase_complete: "Complete",
+    graph_phase_error: "Error",
+    graph_records_pill: "Documents",
+    graph_candidates_pill: "Candidate relations",
+    graph_embedded_pill: "Vectors",
+    mark_failed: "Failed to mark document",
+    marked_status: "Marked: {status}",
+    select_documents_first: "Select documents first",
+    bulk_mark_failed: "Failed to mark selected documents",
+    bulk_marked: "Marked {count} docs",
+    current_list_empty: "The current list is empty",
+    sort_public_desc: "Public↓",
+    sort_public_asc: "Public↑",
+    plan_only_pill: "Plan only: score and mark reading status without copying files",
+    running_pill: "Running",
+    not_running_pill: "Not running",
+    progress_pill: "Progress",
+    elapsed_pill: "Elapsed",
+    embedding_progress_pill: "Embedding vectors",
+    embedding_phase_loading_cache: "Loading cache",
+    embedding_phase_embedding: "Generating",
+    embedding_phase_complete: "Complete",
+    embedding_phase_ready: "Ready",
+    embedding_speed_waiting_pill: "Speed waiting for steady generation",
+    embedding_eta_waiting_pill: "ETA waiting for steady generation",
+    eta_finish_pill: "Finish",
+    completed_pill: "Completed",
+    concurrency_pill: "Concurrency",
+    eta_waiting_pill: "ETA waiting for steady planning",
+    speed_pill: "Speed",
+    speed_waiting_pill: "Speed waiting for steady planning",
+    unresolved_failures_pill: "Unresolved failures",
+    retry_recovered_pill: "Retry recovered",
+    stale_lock_pid_pill: "Stale lock PID",
+    phase_not_started: "Not started",
+    phase_relationship_mining: "Mining relationships",
+    phase_resume_preparing: "Preparing resume",
+    phase_resume_skipping: "Resume skipping",
+    phase_scoring: "Scoring documents",
+    phase_scanning: "Preparing scan",
+    phase_completed_with_failures: "Analysis complete, failures remain",
+    phase_completed_relationships: "Analysis complete, relationships generated",
+    phase_completed_no_relationships: "Analysis complete, relationships not generated",
+    phase_completed: "Analysis complete",
+    phase_stopped_resume: "Stopped, resumable",
+    explain_summary: "Summary",
+    explain_reason: "Scoring reason",
+    explain_dimensions: "Dimensions",
+    explain_failure: "Failure",
+    explain_failure_stage: "Stage",
+    explain_failure_reason: "Reason",
+    explain_failure_attempts: "Attempts",
+    explain_failure_error: "Error",
+    dim_knowledge_density: "Knowledge",
+    dim_implementation_specificity: "Implementation",
+    dim_logical_structure: "Structure",
+    dim_evidence_richness: "Evidence",
+    dim_actionability: "Actionability",
+    dim_strategic_value: "Strategic",
+    dim_freshness: "Freshness",
+    dim_uniqueness: "Uniqueness",
+    folder_picker_unavailable: "Folder picker is unavailable here; type the path manually",
+    operation_failed: "Operation failed",
+    tip_source_dir: "Original document directory. DocTriage recursively scans supported file types under this folder.",
+    tip_output_dir: "Directory for progress, logs, scoring results, and optional routed copies. A run can resume from the same output directory.",
+    tip_llm_endpoint: "Text model endpoint for document scoring. Ollama defaults to /api/generate.",
+    tip_model: "Model name for classification, scoring, and summaries. Embedding relationships require a separate embedding model and will not reuse this model automatically.",
+    tip_llm_api_key: "Bearer token for OpenAI or compatible cloud endpoints. Leave empty for local Ollama; it is not saved to browser storage.",
+    tip_embedding_api_key: "Bearer token for the embedding endpoint. Empty reuses the LLM API key; it is not saved to browser storage.",
+    tip_output_language: "Language for generated summaries and reasons. Auto infers from the document body; explicit choices force that language.",
+    tip_concurrency: "Maximum concurrent LLM requests. Start with 1 for large local runs.",
+    tip_limit: "Process only the first N candidate files. Leave empty for all files.",
+    tip_max_mb: "Skip files larger than this size to keep the first pass responsive.",
+    tip_quality_threshold: "Documents at or above this score are treated as high-value candidates. Plan-only mode uses it for scoring layers, not copied folders.",
+    tip_timeout_seconds: "Maximum wait time for one LLM request.",
+    tip_summary: "Persist short summaries to decisions.jsonl for relationship mining, public-writing review, and manual triage.",
+    tip_plan_only: "Record scoring, categories, progress, and decisions without copying source files.",
+    tip_ocr_enabled: "Enable OCR for image-only files and scanned PDFs. This can noticeably slow processing; PDFs with text layers and Office documents usually do not need it.",
+    tip_manifest_analysis: "Enable directory-level series detection before file-level scoring. Useful for related document sets; large first-pass runs can leave it off.",
+    tip_mine_relationships: "Generate document relations and clusters after scoring.",
+    tip_title_citations: "Use lightweight title/path citation signals without calling an embedding model.",
+    tip_embedding_relationships: "Generate embeddings for summaries, titles, and categories to find semantic relationships. Requires an explicit embedding model.",
+    tip_rag_output_root: "Select an analyzed output directory. The index is written under _rag.",
+    tip_rag_embedding_model: "Leave empty to build documents and chunks only; enter a model to also write _rag/vectors.jsonl and enable semantic search.",
+    tip_rag_redaction_enabled: "Applies only to the RAG indexing path. Original analysis outputs are unchanged; text is filtered, replaced, or mapped before it is written to _rag or sent to vector storage.",
+    tip_rag_redact_drop_matched_documents: "If document text matches any sensitive term or mapping rule, the whole document is excluded from _rag/chunks.jsonl, _rag/vectors.jsonl, and later vector-store ingestion.",
+    tip_rag_redact_placeholder: "Fixed text used for plain sensitive-term replacements. Defaults to [REDACTED].",
+    tip_rag_redact_terms: "One term per line, or comma-separated. Matches are replaced by the placeholder. Use for names, project codes, customer names, and account prefixes.",
+    tip_rag_redact_mappings: "One rule per line in original=>mapped form. Prefix with regex: for regular expressions or case: for case-sensitive matching, for example regex:\\b1[3-9]\\d{9}\\b=>[PHONE].",
+    tip_vector_store_type: "Test the vector store that will receive RAG outputs. Local JSONL only reads _rag under the selected output directory; Qdrant, Chroma, and HTTP check network connectivity.",
+    tip_vector_store_url: "External vector store URL, for example Qdrant http://localhost:6333 or Chroma http://localhost:8000. Local JSONL does not need a URL.",
+    tip_vector_store_collection: "Optional. When set, the test also checks whether the collection exists; empty checks service reachability only.",
+    tip_rag_search_query: "Uses vector search first. If vectors or an embedding model are unavailable, it falls back to lexical matching.",
+    ph_source_dir: "Select source document directory",
+    ph_output_dir: "Select output directory",
+    ph_reading_output_root: "Select or enter an analyzed output directory",
+    ph_graph_output_root: "Select or enter an analyzed output directory",
+    ph_rag_output_root: "Select or enter an analyzed output directory",
+    ph_vector_store_url: "empty for local JSONL",
+    ph_vector_store_collection: "optional",
+    ph_text_search: "Name/path/note",
+    ph_graph_search: "Path/category/tag",
+    ph_limit: "empty means all",
+    ph_api_key_optional: "empty for local Ollama",
+    ph_embedding_api_key: "empty reuses LLM API key",
+    ph_embedding_model: "required for embedding relationships",
+    ph_rag_embedding_model: "empty builds text index only",
+    ph_rag_categories: "multi-select",
+    ph_rag_redact_terms: "one per line, or comma-separated",
+    ph_rag_redact_mappings: "original=>mapped\nregex:\\b1[3-9]\\d{9}\\b=>[PHONE]",
+    ph_rag_query: "Enter a question, topic, or keyword"
+  }
+};
+let uiLanguage = localStorage.getItem("doctriage_ui_language") || "zh-CN";
+let allRows = [];
+let filteredRows = [];
+let currentRows = [];
+let capabilities = {};
+let currentPage = 1;
+let pageSize = Number(localStorage.getItem("doctriage_page_size") || 100);
+let readingScope = localStorage.getItem("doctriage_reading_scope") || "analysis";
+let sortKey = localStorage.getItem(sortStorageKey(readingScope)) || defaultSortForScope(readingScope);
+let graphMeta = {};
+let graphClusters = [];
+let filteredGraphClusters = [];
+let graphSelectedClusterId = null;
+let graphClusterData = null;
+let graphSelectedDocPath = "";
+let graphClearMessageKey = "empty_graph";
+let ragMeta = {};
+let ragSearchPayload = null;
+let tooltipTarget = null;
+let readingSourceDir = "";
+let lastSyncedRunOutputRoot = "";
+let lastAppliedRunPathKey = "";
+let graphSourceDir = "";
+let lastSyncedGraphOutputRoot = "";
+let ragSourceDir = "";
+let lastSyncedRagOutputRoot = "";
+let anydocsSourceDir = "";
+let lastSyncedAnydocsOutputRoot = "";
+let lastAnalysisPayload = null;
+let relationshipLaunchPending = null;
+let relationshipStopPending = null;
+let lastEmbeddingProgress = null;
+let lastEmbeddingTask = null;
+let analysisActionBusy = false;
+let relationshipActionBusy = false;
+let graphActionBusy = false;
+let ragActionBusy = false;
+let relationshipLaunchToken = 0;
+let configuredEmbeddingEndpoint = "";
+const DEFAULT_EMBEDDING_ENDPOINT = "http://localhost:11434/api/embeddings";
+const RUN_FORM_STORAGE_KEY = "doctriage_run_form";
+const RUN_FORM_STORAGE_VERSION = 3;
+const READING_TARGET_STORAGE_KEY = "doctriage_reading_target";
+const GRAPH_TARGET_STORAGE_KEY = "doctriage_graph_target";
+const RAG_TARGET_STORAGE_KEY = "doctriage_rag_target";
+const ANYDOCS_TARGET_STORAGE_KEY = "doctriage_anydocs_target";
+const DEFAULT_ANYDOCS_URL = "http://127.0.0.1:8000/";
+const RUN_FORM_VALUE_FIELDS = [
+  "run_source_dir",
+  "run_output_root",
+  "run_llm_endpoint",
+  "run_llm_model",
+  "run_output_language",
+  "run_embedding_model",
+  "run_concurrency",
+  "run_limit",
+  "run_max_file_size_mb",
+  "run_quality_threshold",
+  "run_timeout_seconds"
+];
+const RUN_FORM_SECRET_FIELDS = [
+  "run_llm_api_key",
+  "run_embedding_api_key"
+];
+const RUN_FORM_CHECKBOX_FIELDS = [
+  "run_plan_only",
+  "run_document_summary",
+  "run_ocr_enabled",
+  "run_manifest_analysis",
+  "run_mine_relationships",
+  "run_relationship_text",
+  "run_relationship_embeddings"
+];
+const RUN_FORM_ALLOW_EMPTY_FIELDS = new Set([
+  "run_limit",
+  "run_embedding_model"
+]);
+const EXPLANATION_DIMENSIONS = [
+  ["knowledge_density", "dim_knowledge_density"],
+  ["implementation_specificity", "dim_implementation_specificity"],
+  ["logical_structure", "dim_logical_structure"],
+  ["evidence_richness", "dim_evidence_richness"],
+  ["actionability", "dim_actionability"],
+  ["strategic_value", "dim_strategic_value"],
+  ["freshness", "dim_freshness"],
+  ["uniqueness", "dim_uniqueness"]
+];
+
+function readingParams() {
+  const pairs = new URLSearchParams();
+  pairs.set("sort", sortKey);
+  pairs.set("scope", readingScope);
+  const paths = readingPathPayload();
+  if (paths.source_dir) pairs.set("source_dir", paths.source_dir);
+  if (paths.output_root) pairs.set("output_root", paths.output_root);
+  return pairs.toString();
+}
+
+function sortStorageKey(scope) {
+  return scope === "source" ? "doctriage_reading_sort_source" : "doctriage_reading_sort_analysis";
+}
+
+function defaultSortForScope(scope) {
+  return scope === "source" ? "source_path_asc" : "quality_desc";
+}
+
+function tr(key) {
+  return (I18N[uiLanguage] && I18N[uiLanguage][key]) || I18N["zh-CN"][key] || key;
+}
+
+function trf(key, values = {}) {
+  let text = tr(key);
+  for (const [name, value] of Object.entries(values)) {
+    text = text.split(`{${name}}`).join(String(value ?? ""));
+  }
+  return text;
+}
+
+function readStoredRunFormState() {
+  try {
+    const raw = localStorage.getItem(RUN_FORM_STORAGE_KEY);
+    if (!raw) return {};
+    const payload = JSON.parse(raw);
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function currentRunFormState() {
+  const state = {_version: RUN_FORM_STORAGE_VERSION};
+  for (const id of RUN_FORM_VALUE_FIELDS) {
+    const element = $(id);
+    if (element) state[id] = element.value;
+  }
+  for (const id of RUN_FORM_CHECKBOX_FIELDS) {
+    const element = $(id);
+    if (element) state[id] = !!element.checked;
+  }
+  return state;
+}
+
+function saveRunFormState() {
+  try {
+    localStorage.setItem(RUN_FORM_STORAGE_KEY, JSON.stringify(currentRunFormState()));
+  } catch (error) {
+    // Browser storage can be disabled or full; the form still works without persistence.
+  }
+}
+
+function readStoredReadingTargetState() {
+  try {
+    const raw = localStorage.getItem(READING_TARGET_STORAGE_KEY);
+    if (!raw) return {};
+    const payload = JSON.parse(raw);
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveReadingTargetState() {
+  try {
+    localStorage.setItem(READING_TARGET_STORAGE_KEY, JSON.stringify(readingPathPayload()));
+  } catch (error) {
+    // Browser storage can be disabled or full; reading still works without persistence.
+  }
+}
+
+function readStoredGraphTargetState() {
+  try {
+    const raw = localStorage.getItem(GRAPH_TARGET_STORAGE_KEY);
+    if (!raw) return {};
+    const payload = JSON.parse(raw);
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveGraphTargetState() {
+  try {
+    localStorage.setItem(GRAPH_TARGET_STORAGE_KEY, JSON.stringify(currentGraphTargetState()));
+  } catch (error) {
+    // Browser storage can be disabled or full; graph still works without persistence.
+  }
+}
+
+function readStoredRagTargetState() {
+  try {
+    const raw = localStorage.getItem(RAG_TARGET_STORAGE_KEY);
+    if (!raw) return {};
+    const payload = JSON.parse(raw);
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveRagTargetState() {
+  try {
+    localStorage.setItem(RAG_TARGET_STORAGE_KEY, JSON.stringify(currentRagTargetState()));
+  } catch (error) {
+    // Browser storage can be disabled or full; rag still works without persistence.
+  }
+}
+
+function readStoredAnydocsTargetState() {
+  try {
+    const raw = localStorage.getItem(ANYDOCS_TARGET_STORAGE_KEY);
+    if (!raw) return {};
+    const payload = JSON.parse(raw);
+    return payload && typeof payload === "object" ? payload : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function saveAnydocsTargetState() {
+  try {
+    localStorage.setItem(ANYDOCS_TARGET_STORAGE_KEY, JSON.stringify(currentAnydocsTargetState()));
+  } catch (error) {
+    // Browser storage can be disabled or full; integration still works without persistence.
+  }
+}
+
+function applyStoredReadingTargetState() {
+  const state = readStoredReadingTargetState();
+  let applied = false;
+  if (Object.prototype.hasOwnProperty.call(state, "source_dir")) {
+    readingSourceDir = String(state.source_dir || "");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "output_root")) {
+    const outputRoot = String(state.output_root || "");
+    if (outputRoot && $("reading_output_root")) {
+      $("reading_output_root").value = outputRoot;
+      if (outputRoot === $("run_output_root").value.trim()) {
+        lastSyncedRunOutputRoot = outputRoot;
+      }
+      applied = true;
+    }
+  }
+  return applied;
+}
+
+function applyStoredGraphTargetState() {
+  const state = readStoredGraphTargetState();
+  let applied = false;
+  if (Object.prototype.hasOwnProperty.call(state, "source_dir")) {
+    graphSourceDir = String(state.source_dir || "");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "output_root")) {
+    const outputRoot = String(state.output_root || "");
+    if (outputRoot && $("graph_output_root")) {
+      $("graph_output_root").value = outputRoot;
+      if (
+        outputRoot === $("reading_output_root").value.trim() ||
+        outputRoot === $("run_output_root").value.trim()
+      ) {
+        lastSyncedGraphOutputRoot = outputRoot;
+      }
+      applied = true;
+    }
+  }
+  return applied;
+}
+
+function applyStoredRagTargetState() {
+  const state = readStoredRagTargetState();
+  let applied = false;
+  if (Object.prototype.hasOwnProperty.call(state, "source_dir")) {
+    ragSourceDir = String(state.source_dir || "");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "output_root")) {
+    const outputRoot = String(state.output_root || "");
+    if (outputRoot && $("rag_output_root")) {
+      $("rag_output_root").value = outputRoot;
+      if (
+        outputRoot === $("reading_output_root").value.trim() ||
+        outputRoot === $("run_output_root").value.trim()
+      ) {
+        lastSyncedRagOutputRoot = outputRoot;
+      }
+      applied = true;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "vector_store_type") && $("rag_vector_store_type")) {
+    $("rag_vector_store_type").value = String(state.vector_store_type || "local_jsonl");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "vector_store_url") && $("rag_vector_store_url")) {
+    $("rag_vector_store_url").value = String(state.vector_store_url || "");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "vector_store_collection") && $("rag_vector_store_collection")) {
+    $("rag_vector_store_collection").value = String(state.vector_store_collection || "");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "categories") && $("rag_categories")) {
+    setSelectedValues("rag_categories", state.categories);
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "redaction_panel_open") && $("rag_advanced_panel")) {
+    $("rag_advanced_panel").open = !!state.redaction_panel_open;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "redaction_enabled") && $("rag_redaction_enabled")) {
+    $("rag_redaction_enabled").checked = !!state.redaction_enabled;
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "redact_drop_matched_documents") && $("rag_redact_drop_matched_documents")) {
+    $("rag_redact_drop_matched_documents").checked = !!state.redact_drop_matched_documents;
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "redact_placeholder") && $("rag_redact_placeholder")) {
+    $("rag_redact_placeholder").value = String(state.redact_placeholder || "[REDACTED]");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "redact_terms") && $("rag_redact_terms")) {
+    $("rag_redact_terms").value = String(state.redact_terms || "");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "redact_mappings") && $("rag_redact_mappings")) {
+    $("rag_redact_mappings").value = String(state.redact_mappings || "");
+    applied = true;
+  }
+  syncVectorStoreInputs();
+  syncRagRedactionInputs();
+  return applied;
+}
+
+function applyStoredAnydocsTargetState() {
+  const state = readStoredAnydocsTargetState();
+  let applied = false;
+  if (Object.prototype.hasOwnProperty.call(state, "source_dir")) {
+    anydocsSourceDir = String(state.source_dir || "");
+    applied = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "output_root")) {
+    const outputRoot = String(state.output_root || "");
+    if (outputRoot && $("anydocs_output_root")) {
+      $("anydocs_output_root").value = outputRoot;
+      if (
+        outputRoot === $("graph_output_root").value.trim() ||
+        outputRoot === $("run_output_root").value.trim()
+      ) {
+        lastSyncedAnydocsOutputRoot = outputRoot;
+      }
+      applied = true;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "anydocs_url") && $("anydocs_url")) {
+    $("anydocs_url").value = String(state.anydocs_url || DEFAULT_ANYDOCS_URL);
+    applied = true;
+  }
+  refreshAnydocsBundlePath();
+  return applied;
+}
+
+function setReadingTarget(sourceDir, outputRoot, {persist = true} = {}) {
+  readingSourceDir = String(sourceDir || "");
+  if ($("reading_output_root")) $("reading_output_root").value = String(outputRoot || "");
+  if (String(outputRoot || "") === $("run_output_root").value.trim()) {
+    lastSyncedRunOutputRoot = String(outputRoot || "");
+  }
+  if (persist) saveReadingTargetState();
+  syncGraphTargetFrom(sourceDir, outputRoot, {force: true});
+  syncRagTargetFrom(sourceDir, outputRoot, {force: true});
+  syncAnydocsTargetFrom(sourceDir, outputRoot, {force: true});
+}
+
+function setGraphTarget(sourceDir, outputRoot, {persist = true} = {}) {
+  graphSourceDir = String(sourceDir || "");
+  if ($("graph_output_root")) $("graph_output_root").value = String(outputRoot || "");
+  if (
+    String(outputRoot || "") === $("reading_output_root").value.trim() ||
+    String(outputRoot || "") === $("run_output_root").value.trim()
+  ) {
+    lastSyncedGraphOutputRoot = String(outputRoot || "");
+  }
+  if (persist) saveGraphTargetState();
+  syncAnydocsTargetFrom(sourceDir, outputRoot, {force: true});
+}
+
+function currentGraphTargetState() {
+  return {
+    source_dir: graphSourceDir,
+    output_root: $("graph_output_root").value.trim()
+  };
+}
+
+function setRagTarget(sourceDir, outputRoot, {persist = true} = {}) {
+  ragSourceDir = String(sourceDir || "");
+  if ($("rag_output_root")) $("rag_output_root").value = String(outputRoot || "");
+  if (
+    String(outputRoot || "") === $("reading_output_root").value.trim() ||
+    String(outputRoot || "") === $("run_output_root").value.trim()
+  ) {
+    lastSyncedRagOutputRoot = String(outputRoot || "");
+  }
+  if (persist) saveRagTargetState();
+}
+
+function setAnydocsTarget(sourceDir, outputRoot, {persist = true} = {}) {
+  anydocsSourceDir = String(sourceDir || "");
+  if ($("anydocs_output_root")) $("anydocs_output_root").value = String(outputRoot || "");
+  if (
+    String(outputRoot || "") === $("graph_output_root").value.trim() ||
+    String(outputRoot || "") === $("run_output_root").value.trim()
+  ) {
+    lastSyncedAnydocsOutputRoot = String(outputRoot || "");
+  }
+  refreshAnydocsBundlePath();
+  if (persist) saveAnydocsTargetState();
+}
+
+function currentAnydocsTargetState() {
+  return {
+    source_dir: anydocsSourceDir,
+    output_root: $("anydocs_output_root") ? $("anydocs_output_root").value.trim() : "",
+    anydocs_url: $("anydocs_url") ? $("anydocs_url").value.trim() : DEFAULT_ANYDOCS_URL
+  };
+}
+
+function currentRagTargetState() {
+  return {
+    source_dir: ragSourceDir,
+    output_root: $("rag_output_root").value.trim(),
+    vector_store_type: $("rag_vector_store_type") ? $("rag_vector_store_type").value : "local_jsonl",
+    vector_store_url: $("rag_vector_store_url") ? $("rag_vector_store_url").value.trim() : "",
+    vector_store_collection: $("rag_vector_store_collection") ? $("rag_vector_store_collection").value.trim() : "",
+    categories: selectedValues("rag_categories"),
+    redaction_panel_open: $("rag_advanced_panel") ? $("rag_advanced_panel").open : false,
+    redaction_enabled: $("rag_redaction_enabled") ? $("rag_redaction_enabled").checked : false,
+    redact_drop_matched_documents: $("rag_redact_drop_matched_documents") ? $("rag_redact_drop_matched_documents").checked : false,
+    redact_placeholder: $("rag_redact_placeholder") ? $("rag_redact_placeholder").value : "[REDACTED]",
+    redact_terms: $("rag_redact_terms") ? $("rag_redact_terms").value : "",
+    redact_mappings: $("rag_redact_mappings") ? $("rag_redact_mappings").value : ""
+  };
+}
+
+function syncGraphTargetFrom(sourceDir, outputRoot, {force = false, syncAnydocs = true} = {}) {
+  const outputText = String(outputRoot || "").trim();
+  if (!outputText) return;
+  const currentGraphOutput = $("graph_output_root").value.trim();
+  const shouldSync = force || !currentGraphOutput || currentGraphOutput === lastSyncedGraphOutputRoot;
+  if (!shouldSync) return;
+  graphSourceDir = String(sourceDir || "");
+  $("graph_output_root").value = outputText;
+  lastSyncedGraphOutputRoot = outputText;
+  saveGraphTargetState();
+  if (syncAnydocs) syncAnydocsTargetFrom(sourceDir, outputRoot, {force});
+}
+
+function syncGraphTargetFromReadingOutput({force = false, syncAnydocs = true} = {}) {
+  const paths = readingPathPayload();
+  syncGraphTargetFrom(paths.source_dir, paths.output_root, {force, syncAnydocs});
+}
+
+function syncRagTargetFrom(sourceDir, outputRoot, {force = false} = {}) {
+  const outputText = String(outputRoot || "").trim();
+  if (!outputText) return;
+  const currentRagOutput = $("rag_output_root").value.trim();
+  const shouldSync = force || !currentRagOutput || currentRagOutput === lastSyncedRagOutputRoot;
+  if (!shouldSync) return;
+  ragSourceDir = String(sourceDir || "");
+  $("rag_output_root").value = outputText;
+  lastSyncedRagOutputRoot = outputText;
+  saveRagTargetState();
+}
+
+function syncAnydocsTargetFrom(sourceDir, outputRoot, {force = false} = {}) {
+  const outputText = String(outputRoot || "").trim();
+  if (!outputText || !$("anydocs_output_root")) return;
+  const currentOutput = $("anydocs_output_root").value.trim();
+  const shouldSync = force || !currentOutput || currentOutput === lastSyncedAnydocsOutputRoot;
+  if (!shouldSync) return;
+  anydocsSourceDir = String(sourceDir || "");
+  $("anydocs_output_root").value = outputText;
+  lastSyncedAnydocsOutputRoot = outputText;
+  refreshAnydocsBundlePath();
+  saveAnydocsTargetState();
+}
+
+function syncAnydocsTargetFromGraphOutput({force = false} = {}) {
+  const paths = graphPathPayload();
+  syncAnydocsTargetFrom(paths.source_dir, paths.output_root, {force});
+}
+
+function syncRagTargetFromReadingOutput({force = false} = {}) {
+  const paths = readingPathPayload();
+  syncRagTargetFrom(paths.source_dir, paths.output_root, {force});
+}
+
+function syncReadingTargetFromRunOutput({force = false, syncGraph = true, syncAnydocs = true} = {}) {
+  const sourceDir = $("run_source_dir").value.trim();
+  const outputRoot = $("run_output_root").value.trim();
+  if (!outputRoot) return;
+  const currentReadingOutput = $("reading_output_root").value.trim();
+  const shouldSync = force || !currentReadingOutput || currentReadingOutput === lastSyncedRunOutputRoot;
+  if (!shouldSync) return;
+  readingSourceDir = sourceDir;
+  $("reading_output_root").value = outputRoot;
+  lastSyncedRunOutputRoot = outputRoot;
+  saveReadingTargetState();
+  if (syncGraph) syncGraphTargetFrom(sourceDir, outputRoot, {force, syncAnydocs});
+  syncRagTargetFrom(sourceDir, outputRoot, {force});
+}
+
+function syncReadingSourceFromRunIfLinked() {
+  const runOutputRoot = $("run_output_root").value.trim();
+  const readingOutputRoot = $("reading_output_root").value.trim();
+  if (readingOutputRoot && readingOutputRoot !== runOutputRoot && readingOutputRoot !== lastSyncedRunOutputRoot) return;
+  readingSourceDir = $("run_source_dir").value.trim();
+  saveReadingTargetState();
+  syncGraphTargetFrom(readingSourceDir, readingOutputRoot || runOutputRoot);
+  syncRagTargetFrom(readingSourceDir, readingOutputRoot || runOutputRoot);
+  syncAnydocsTargetFrom(readingSourceDir, readingOutputRoot || runOutputRoot);
+}
+
+function applyStoredRunFormState() {
+  const state = readStoredRunFormState();
+  const applyCheckboxState = Number(state._version || 0) === RUN_FORM_STORAGE_VERSION;
+  for (const id of RUN_FORM_VALUE_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(state, id)) continue;
+    const element = $(id);
+    if (!element) continue;
+    const value = String(state[id] ?? "");
+    if (!value && !RUN_FORM_ALLOW_EMPTY_FIELDS.has(id)) continue;
+    element.value = value;
+  }
+  if (!applyCheckboxState) return;
+  for (const id of RUN_FORM_CHECKBOX_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(state, id)) continue;
+    const element = $(id);
+    if (element) element.checked = !!state[id];
+  }
+}
+
+function initRunFormPersistence() {
+  for (const id of [...RUN_FORM_VALUE_FIELDS, ...RUN_FORM_SECRET_FIELDS, ...RUN_FORM_CHECKBOX_FIELDS]) {
+    const element = $(id);
+    if (!element) continue;
+    const eventName = element.tagName === "INPUT" && element.type !== "checkbox" ? "input" : "change";
+    element.addEventListener(eventName, () => {
+      if (id === "run_output_root") syncReadingTargetFromRunOutput({force: true});
+      if (id === "run_source_dir") syncReadingSourceFromRunIfLinked();
+      saveRunFormState();
+    });
+  }
+  for (const id of ["run_source_dir", "run_output_root"]) {
+    const element = $(id);
+    if (element) element.addEventListener("blur", () => autoApplyPaths());
+  }
+}
+
+function initReadingTargetPersistence() {
+  const element = $("reading_output_root");
+  if (!element) return;
+  element.addEventListener("input", () => {
+    readingSourceDir = "";
+    saveReadingTargetState();
+    syncGraphTargetFrom("", element.value.trim(), {force: true});
+    syncRagTargetFrom("", element.value.trim(), {force: true});
+  });
+  element.addEventListener("blur", () => autoApplyReadingOutput());
+}
+
+function initGraphTargetPersistence() {
+  const element = $("graph_output_root");
+  if (!element) return;
+  element.addEventListener("input", () => {
+    graphSourceDir = "";
+    saveGraphTargetState();
+  });
+  element.addEventListener("blur", () => autoApplyGraphOutput());
+}
+
+function initRagTargetPersistence() {
+  const outputElement = $("rag_output_root");
+  if (outputElement) {
+    outputElement.addEventListener("input", () => {
+      ragSourceDir = "";
+      saveRagTargetState();
+    });
+  }
+  const typeElement = $("rag_vector_store_type");
+  if (typeElement) {
+    typeElement.addEventListener("change", () => {
+      syncVectorStoreInputs();
+      saveRagTargetState();
+    });
+  }
+  for (const id of ["rag_vector_store_url", "rag_vector_store_collection"]) {
+    const element = $(id);
+    if (!element) continue;
+    element.addEventListener("input", () => saveRagTargetState());
+  }
+  const categoriesElement = $("rag_categories");
+  if (categoriesElement) {
+    categoriesElement.addEventListener("change", () => saveRagTargetState());
+  }
+  const advancedPanel = $("rag_advanced_panel");
+  if (advancedPanel) advancedPanel.addEventListener("toggle", () => saveRagTargetState());
+  const redactionEnabled = $("rag_redaction_enabled");
+  if (redactionEnabled) {
+    redactionEnabled.addEventListener("change", () => {
+      syncRagRedactionInputs();
+      saveRagTargetState();
+    });
+  }
+  for (const id of ["rag_redact_drop_matched_documents", "rag_redact_placeholder", "rag_redact_terms", "rag_redact_mappings"]) {
+    const element = $(id);
+    if (!element) continue;
+    const eventName = element.type === "checkbox" ? "change" : "input";
+    element.addEventListener(eventName, () => saveRagTargetState());
+  }
+  syncVectorStoreInputs();
+  syncRagRedactionInputs();
+}
+
+function initAnydocsTargetPersistence() {
+  const outputElement = $("anydocs_output_root");
+  if (outputElement) {
+    outputElement.addEventListener("input", () => {
+      anydocsSourceDir = "";
+      refreshAnydocsBundlePath();
+      saveAnydocsTargetState();
+    });
+  }
+  const urlElement = $("anydocs_url");
+  if (urlElement) {
+    urlElement.addEventListener("input", () => saveAnydocsTargetState());
+  }
+}
+
+function setUiLanguage(language) {
+  uiLanguage = I18N[language] ? language : "zh-CN";
+  localStorage.setItem("doctriage_ui_language", uiLanguage);
+  applyI18n();
+}
+
+function applyI18n() {
+  document.documentElement.lang = uiLanguage;
+  if ($("ui_language")) $("ui_language").value = uiLanguage;
+  document.querySelectorAll("[data-i18n]").forEach(item => {
+    item.textContent = tr(item.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach(item => {
+    item.setAttribute("placeholder", tr(item.dataset.i18nPlaceholder));
+  });
+  document.querySelectorAll("[data-i18n-tip]").forEach(item => {
+    item.dataset.tip = tr(item.dataset.i18nTip);
+  });
+  if ($("reading_scope")) $("reading_scope").value = readingScope;
+  renderStatsFromRows(filteredRows, allRows.length);
+  renderPager();
+  renderRows(currentRows);
+  if (hasGraphPayload()) {
+    renderGraphStats(graphMeta);
+    renderGraphTaskStats(graphMeta);
+    if (graphClusterData) renderGraphCluster();
+    else if (filteredGraphClusters.length) renderGraphClusterList();
+    else renderGraphEmptyState();
+  } else {
+    renderClearedGraphState();
+  }
+  if (hasRagPayload()) {
+    renderRagStatus(ragMeta);
+    if (ragSearchPayload) renderRagResults(ragSearchPayload);
+  }
+  renderAnydocsStats();
+}
+
+function switchTab(name) {
+  for (const id of ["analysis", "reading", "graph", "rag", "agents"]) {
+    $("tab-" + id).classList.toggle("active", id === name);
+    $("section-" + id).classList.toggle("active", id === name);
+  }
+  if (name === "analysis") loadAnalysis();
+  if (name === "reading") loadReadingRowsIfReady();
+  if (name === "graph") {
+    if (graphPathPayload().output_root) loadGraph();
+    else clearGraphState("graph_need_paths");
+  }
+  if (name === "rag") {
+    if (ragPathPayload().output_root) loadRagStatus();
+    else clearRagState("rag_need_output");
+  }
+  if (name === "agents") {
+    refreshAnydocsBundlePath();
+  }
+  localStorage.setItem("doctriage_tab", name);
+}
+
+function loadReadingRowsIfReady() {
+  if (!$("section-reading").classList.contains("active")) return;
+  if (readingPathPayload().output_root) loadRows();
+}
+
+async function loadConfig() {
+  const response = await fetch("/api/config");
+  const payload = await response.json();
+  if (!response.ok) return;
+  capabilities = payload.capabilities || {};
+  configuredEmbeddingEndpoint = payload.embedding_endpoint || DEFAULT_EMBEDDING_ENDPOINT;
+  $("run_source_dir").value = payload.source_dir || "";
+  $("run_output_root").value = payload.output_root || "";
+  $("reading_output_root").value = payload.output_root || "";
+  $("graph_output_root").value = payload.output_root || "";
+  $("rag_output_root").value = payload.output_root || "";
+  $("anydocs_output_root").value = payload.output_root || "";
+  readingSourceDir = payload.source_dir || "";
+  lastSyncedRunOutputRoot = payload.output_root || "";
+  lastAppliedRunPathKey = runPathKey(payload.source_dir || "", payload.output_root || "");
+  graphSourceDir = payload.source_dir || "";
+  lastSyncedGraphOutputRoot = payload.output_root || "";
+  ragSourceDir = payload.source_dir || "";
+  lastSyncedRagOutputRoot = payload.output_root || "";
+  anydocsSourceDir = payload.source_dir || "";
+  lastSyncedAnydocsOutputRoot = payload.output_root || "";
+  applyStoredRunFormState();
+  const readingApplied = applyStoredReadingTargetState();
+  const graphApplied = applyStoredGraphTargetState();
+  const ragApplied = applyStoredRagTargetState();
+  const anydocsApplied = applyStoredAnydocsTargetState();
+  if (!readingApplied) syncReadingTargetFromRunOutput({force: true, syncGraph: !graphApplied, syncAnydocs: !anydocsApplied});
+  if (!graphApplied) syncGraphTargetFromReadingOutput({force: true, syncAnydocs: !anydocsApplied});
+  if (!ragApplied) syncRagTargetFromReadingOutput({force: true});
+  if (!anydocsApplied) syncAnydocsTargetFromGraphOutput({force: true});
+  for (const id of ["pick_source_btn", "pick_output_btn", "pick_reading_output_btn", "pick_graph_output_btn", "pick_rag_output_btn", "pick_anydocs_output_btn"]) {
+    if ($(id)) {
+      $(id).disabled = capabilities.folder_picker === false;
+      $(id).title = capabilities.folder_picker === false ? tr("folder_picker_unavailable") : "";
+    }
+  }
+  if (capabilities.headless_hint) {
+    showToast(capabilities.headless_hint);
+  }
+  applyI18n();
+  loadAnalysis();
+  loadReadingRowsIfReady();
+}
+
+async function pickFolder(targetId) {
+  const response = await fetch("/api/pick-folder", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({target: targetId})
+  });
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("pick_failed"));
+  if (payload.path) $(targetId).value = payload.path;
+  if (targetId === "run_output_root") syncReadingTargetFromRunOutput({force: true});
+  if (targetId === "run_source_dir") syncReadingSourceFromRunIfLinked();
+  if (targetId.startsWith("run_")) saveRunFormState();
+  if (targetId === "run_source_dir" || targetId === "run_output_root") autoApplyPaths();
+  if (targetId === "reading_output_root") {
+    readingSourceDir = "";
+    saveReadingTargetState();
+    syncGraphTargetFrom("", payload.path || "", {force: true});
+    await applyReadingOutput();
+  }
+  if (targetId === "graph_output_root") {
+    graphSourceDir = "";
+    saveGraphTargetState();
+    await applyGraphOutput();
+  }
+  if (targetId === "rag_output_root") {
+    ragSourceDir = "";
+    saveRagTargetState();
+  }
+  if (targetId === "anydocs_output_root") {
+    anydocsSourceDir = "";
+    refreshAnydocsBundlePath();
+    saveAnydocsTargetState();
+  }
+}
+
+function runPathKey(sourceDir, outputRoot) {
+  return `${String(sourceDir || "").trim()}\n${String(outputRoot || "").trim()}`;
+}
+
+async function autoApplyPaths() {
+  const sourceDir = $("run_source_dir").value.trim();
+  const outputRoot = $("run_output_root").value.trim();
+  if (!sourceDir || !outputRoot) return;
+  const key = runPathKey(sourceDir, outputRoot);
+  if (key === lastAppliedRunPathKey) return;
+  await applyPaths({showSuccess: false});
+}
+
+async function applyPaths({showSuccess = true} = {}) {
+  saveRunFormState();
+  const sourceDir = $("run_source_dir").value.trim();
+  const outputRoot = $("run_output_root").value.trim();
+  const response = await fetch("/api/paths", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      source_dir: sourceDir,
+      output_root: outputRoot
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("paths_apply_failed"));
+  lastAppliedRunPathKey = runPathKey(sourceDir, outputRoot);
+  syncReadingTargetFromRunOutput({force: true});
+  if (showSuccess) showToast(tr("paths_applied"));
+  loadAnalysis();
+  loadRows();
+  if ($("section-graph").classList.contains("active")) loadGraph();
+  if ($("section-rag").classList.contains("active")) loadRagStatus();
+}
+
+async function autoApplyReadingOutput() {
+  const outputRoot = $("reading_output_root").value.trim();
+  if (!outputRoot) {
+    readingSourceDir = "";
+    saveReadingTargetState();
+    syncGraphTargetFrom("", "", {force: true});
+    syncRagTargetFrom("", "", {force: true});
+    renderReadingError(tr("need_reading_output"));
+    return null;
+  }
+  return applyReadingOutput();
+}
+
+async function applyReadingOutput() {
+  const outputRoot = $("reading_output_root").value.trim();
+  if (!outputRoot) {
+    renderReadingError(tr("need_reading_output"));
+    return null;
+  }
+  const response = await fetch("/api/reading-output", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({output_root: outputRoot})
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    const message = payload.error || tr("reading_output_apply_failed");
+    showToast(message);
+    renderReadingError(message);
+    return null;
+  }
+  setReadingTarget(payload.source_dir || "", payload.output_root || outputRoot);
+  await loadRows();
+  if ($("section-graph").classList.contains("active")) loadGraph();
+  if ($("section-rag").classList.contains("active")) loadRagStatus();
+  return payload;
+}
+
+async function autoApplyGraphOutput() {
+  const outputRoot = $("graph_output_root").value.trim();
+  if (!outputRoot) {
+    graphSourceDir = "";
+    saveGraphTargetState();
+    clearGraphState("graph_need_paths");
+    return null;
+  }
+  return applyGraphOutput();
+}
+
+async function applyGraphOutput() {
+  const outputRoot = $("graph_output_root").value.trim();
+  if (!outputRoot) {
+    clearGraphState("graph_need_paths");
+    return null;
+  }
+  const response = await fetch("/api/graph-output", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({output_root: outputRoot})
+  });
+  const payload = await response.json();
+  if (!response.ok) {
+    const message = payload.error || tr("graph_output_apply_failed");
+    showToast(message);
+    renderGraphError(message);
+    return null;
+  }
+  setGraphTarget(payload.source_dir || "", payload.output_root || outputRoot);
+  return loadGraph();
+}
+
+function runPayload() {
+  const llmEndpoint = $("run_llm_endpoint").value.trim();
+  return {
+    source_dir: $("run_source_dir").value.trim(),
+    output_root: $("run_output_root").value.trim(),
+    llm_endpoint: llmEndpoint,
+    llm_model: $("run_llm_model").value.trim(),
+    llm_api_key: $("run_llm_api_key") ? $("run_llm_api_key").value.trim() : "",
+    output_language: $("run_output_language").value,
+    embedding_endpoint: inferEmbeddingEndpoint(llmEndpoint),
+    embedding_model: $("run_embedding_model").value.trim(),
+    embedding_api_key: $("run_embedding_api_key") ? $("run_embedding_api_key").value.trim() : "",
+    concurrency: $("run_concurrency").value,
+    limit: $("run_limit").value,
+    max_file_size_mb: $("run_max_file_size_mb").value,
+    quality_threshold: $("run_quality_threshold").value,
+    timeout_seconds: $("run_timeout_seconds").value,
+    document_summary: $("run_document_summary").checked,
+    plan_only: $("run_plan_only").checked,
+    ocr_enabled: $("run_ocr_enabled").checked,
+    no_ocr: !$("run_ocr_enabled").checked,
+    manifest_analysis: $("run_manifest_analysis").checked,
+    skip_manifest_analysis: !$("run_manifest_analysis").checked,
+    force_reprocess: false,
+    content_hash: false,
+    mine_relationships: $("run_mine_relationships").checked,
+    relationship_use_text_citations: $("run_relationship_text").checked,
+    relationship_use_embeddings: $("run_relationship_embeddings").checked
+  };
+}
+
+function earlyRelationshipPayload() {
+  const payload = runPayload();
+  payload.embedding_model = $("run_embedding_model").value.trim();
+  payload.mine_relationships = true;
+  payload.relationship_use_text_citations = true;
+  return payload;
+}
+
+function validateEmbeddingModelSelection(payload) {
+  if (!payload || !payload.relationship_use_embeddings) return true;
+  if (String(payload.embedding_model || "").trim()) return true;
+  showToast(tr("embedding_model_required"));
+  return false;
+}
+
+function confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(payload) {
+  if (!payload || payload.relationship_use_embeddings) return true;
+  if (String(payload.embedding_model || "").trim()) return true;
+  return window.confirm(tr("early_relationships_without_embedding_confirm"));
+}
+
+function inferEmbeddingEndpoint(llmEndpoint) {
+  const endpoint = String(llmEndpoint || "").trim();
+  const configured = String(configuredEmbeddingEndpoint || "").trim();
+  if (configured && configured !== DEFAULT_EMBEDDING_ENDPOINT) return configured;
+  if (/\/api\/(generate|chat)\/?$/i.test(endpoint)) {
+    return endpoint.replace(/\/api\/(generate|chat)\/?$/i, "/api/embeddings");
+  }
+  if (/\/v1\/chat\/completions\/?$/i.test(endpoint)) {
+    return endpoint.replace(/\/v1\/chat\/completions\/?$/i, "/v1/embeddings");
+  }
+  if (/\/api\/(embed|embeddings)\/?$/i.test(endpoint)) {
+    return endpoint;
+  }
+  if (/\/v1\/embeddings\/?$/i.test(endpoint)) {
+    return endpoint;
+  }
+  return configuredEmbeddingEndpoint || DEFAULT_EMBEDDING_ENDPOINT;
+}
+
+function formatLlmCheckMessage(payload) {
+  if (!payload) return tr("llm_check_failed");
+  const parts = [];
+  if (payload.provider) parts.push(String(payload.provider));
+  if (payload.status_code) parts.push(`HTTP ${payload.status_code}`);
+  if (payload.message) parts.push(String(payload.message));
+  return parts.join(" · ") || tr("llm_check_failed");
+}
+
+async function ensureEndpointReady(_requestPayload, {role = "analysis", endpoint = "", model = ""} = {}) {
+  const probePayload = {
+    role,
+    endpoint,
+    model
+  };
+  if (role === "embedding" && _requestPayload && _requestPayload.embedding_api_key) {
+    probePayload.embedding_api_key = _requestPayload.embedding_api_key;
+  }
+  if (_requestPayload && _requestPayload.llm_api_key) {
+    probePayload.llm_api_key = _requestPayload.llm_api_key;
+  }
+  const response = await fetch("/api/test/llm", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(probePayload)
+  });
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    showToast(formatLlmCheckMessage(payload));
+    return false;
+  }
+  return true;
+}
+
+function renderVectorStoreTestStats(payload) {
+  const parts = [
+    payload.ok ? tr("vector_store_ok") : tr("vector_store_unavailable"),
+    payload.reachable ? tr("vector_store_reachable") : "",
+    payload.store_type ? String(payload.store_type) : "",
+    payload.status_code ? `HTTP ${payload.status_code}` : "",
+    payload.collection_checked
+      ? (payload.collection_exists ? tr("vector_store_collection_exists") : tr("vector_store_collection_missing"))
+      : "",
+    payload.vector_count !== undefined ? `${tr("vector_store_vectors")} ${Number(payload.vector_count || 0)}` : "",
+    payload.message ? String(payload.message) : ""
+  ].filter(Boolean);
+  $("vectorStoreTestStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+}
+
+async function testVectorStore() {
+  const requestPayload = vectorStorePayload();
+  if (requestPayload.store_type === "local_jsonl" && !requestPayload.output_root) {
+    return showToast(tr("rag_need_output"));
+  }
+  saveRagTargetState();
+  $("test_vector_store_btn").disabled = true;
+  $("vectorStoreTestStats").innerHTML = `<span class="pill">${escapeHtml(tr("testing_vector_store"))}</span>`;
+  const response = await fetch("/api/test/vector-store", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(requestPayload)
+  });
+  const payload = await response.json();
+  $("test_vector_store_btn").disabled = false;
+  if (!response.ok) {
+    $("vectorStoreTestStats").innerHTML = "";
+    return showToast(payload.error || tr("vector_store_test_failed"));
+  }
+  renderVectorStoreTestStats(payload);
+}
+
+function pathPayload() {
+  return {
+    source_dir: $("run_source_dir").value.trim(),
+    output_root: $("run_output_root").value.trim()
+  };
+}
+
+function readingPathPayload() {
+  const sourceDir = readingSourceDir;
+  const outputRoot = $("reading_output_root").value.trim() || $("run_output_root").value.trim();
+  return {
+    source_dir: sourceDir,
+    output_root: outputRoot
+  };
+}
+
+function graphPathPayload() {
+  const sourceDir = graphSourceDir;
+  const outputRoot = $("graph_output_root").value.trim();
+  return {
+    source_dir: sourceDir,
+    output_root: outputRoot
+  };
+}
+
+function ragPathPayload() {
+  const sourceDir = ragSourceDir;
+  const outputRoot = $("rag_output_root").value.trim();
+  return {
+    source_dir: sourceDir,
+    output_root: outputRoot
+  };
+}
+
+function anydocsPathPayload() {
+  const outputRoot = $("anydocs_output_root").value.trim() || $("graph_output_root").value.trim() || $("run_output_root").value.trim();
+  let sourceDir = anydocsSourceDir;
+  if (!sourceDir && outputRoot) {
+    if (outputRoot === $("graph_output_root").value.trim()) sourceDir = graphSourceDir;
+    else if (outputRoot === $("reading_output_root").value.trim()) sourceDir = readingSourceDir;
+    else if (outputRoot === $("run_output_root").value.trim()) sourceDir = $("run_source_dir").value.trim();
+  }
+  return {
+    source_dir: sourceDir,
+    output_root: outputRoot
+  };
+}
+
+function anydocsBundlePath() {
+  const outputRoot = anydocsPathPayload().output_root;
+  if (!outputRoot) return "";
+  const separator = outputRoot.includes("/") && !outputRoot.includes("\\") ? "/" : "\\";
+  return outputRoot.replace(/[\\\/]+$/, "") + separator + "_relationships" + separator + "doctriage_bundle.json";
+}
+
+function refreshAnydocsBundlePath() {
+  if ($("anydocs_bundle_path")) $("anydocs_bundle_path").value = anydocsBundlePath();
+  renderAnydocsStats();
+}
+
+function anydocsUrl(autoPlan = false) {
+  const base = ($("anydocs_url") ? $("anydocs_url").value.trim() : "") || DEFAULT_ANYDOCS_URL;
+  const url = new URL(base, window.location.href);
+  url.hash = "view-planner";
+  const bundlePath = anydocsBundlePath();
+  if (bundlePath) url.searchParams.set("doctriage_bundle_path", bundlePath);
+  if (autoPlan) url.searchParams.set("autoplan", "1");
+  return url.toString();
+}
+
+function ragPayload() {
+  return {
+    ...runPayload(),
+    ...ragPathPayload(),
+    embedding_endpoint: inferEmbeddingEndpoint($("run_llm_endpoint").value.trim()),
+    embedding_model: $("rag_embedding_model").value.trim(),
+    rag_min_quality: $("rag_min_quality").value,
+    rag_categories: selectedValues("rag_categories").join(","),
+    rag_limit: $("rag_limit").value,
+    rag_chunk_max_chars: $("rag_chunk_max_chars").value,
+    rag_chunk_overlap_chars: $("rag_chunk_overlap_chars").value,
+    rag_redaction_enabled: $("rag_redaction_enabled") ? $("rag_redaction_enabled").checked : false,
+    rag_redact_drop_matched_documents: $("rag_redact_drop_matched_documents") ? $("rag_redact_drop_matched_documents").checked : false,
+    rag_redact_placeholder: $("rag_redact_placeholder") ? $("rag_redact_placeholder").value.trim() : "",
+    rag_redact_terms: $("rag_redact_terms") ? $("rag_redact_terms").value.trim() : "",
+    rag_redact_mappings: $("rag_redact_mappings") ? $("rag_redact_mappings").value.trim() : ""
+  };
+}
+
+function selectedValues(id) {
+  const element = $(id);
+  if (!element) return [];
+  if (element.multiple) {
+    return Array.from(element.selectedOptions).map(option => option.value).filter(Boolean);
+  }
+  const value = String(element.value || "").trim();
+  return value ? [value] : [];
+}
+
+function setSelectedValues(id, values) {
+  const element = $(id);
+  if (!element) return;
+  const selected = new Set(
+    Array.isArray(values)
+      ? values.map(value => String(value))
+      : String(values || "").split(",").map(value => value.trim()).filter(Boolean)
+  );
+  for (const option of Array.from(element.options || [])) {
+    option.selected = selected.has(option.value);
+  }
+}
+
+function vectorStorePayload() {
+  return {
+    ...ragPathPayload(),
+    store_type: $("rag_vector_store_type") ? $("rag_vector_store_type").value : "local_jsonl",
+    url: $("rag_vector_store_url") ? $("rag_vector_store_url").value.trim() : "",
+    collection: $("rag_vector_store_collection") ? $("rag_vector_store_collection").value.trim() : ""
+  };
+}
+
+function syncVectorStoreInputs() {
+  const typeElement = $("rag_vector_store_type");
+  const urlElement = $("rag_vector_store_url");
+  const collectionElement = $("rag_vector_store_collection");
+  const isLocal = !typeElement || typeElement.value === "local_jsonl";
+  if (urlElement) urlElement.disabled = isLocal;
+  if (collectionElement) collectionElement.disabled = isLocal;
+}
+
+function syncRagRedactionInputs() {
+  const enabled = !!($("rag_redaction_enabled") && $("rag_redaction_enabled").checked);
+  for (const id of ["rag_redact_drop_matched_documents", "rag_redact_placeholder", "rag_redact_terms", "rag_redact_mappings"]) {
+    const element = $(id);
+    if (element) element.disabled = !enabled;
+  }
+}
+
+function validateRagRedactionPayload(payload) {
+  if (!payload || !payload.rag_redaction_enabled) return true;
+  if (String(payload.rag_redact_terms || "").trim() || String(payload.rag_redact_mappings || "").trim()) {
+    return true;
+  }
+  showToast(tr("rag_redaction_rules_required"));
+  return false;
+}
+
+function pathQuery() {
+  const query = new URLSearchParams(pathPayload());
+  return query.toString();
+}
+
+function graphQuery() {
+  const query = new URLSearchParams(graphPathPayload());
+  return query.toString();
+}
+
+function ragQuery() {
+  const query = new URLSearchParams(ragPathPayload());
+  return query.toString();
+}
+
+async function refreshAnalysisStatus() {
+  const query = pathQuery();
+  const response = await fetch("/api/analysis/status" + (query ? "?" + query : ""));
+  const payload = await response.json();
+  if (!response.ok) {
+    showToast(payload.error || tr("status_load_failed"));
+    return null;
+  }
+  renderAnalysis(payload);
+  return payload;
+}
+
+async function toggleAnalysis() {
+  if (analysisActionBusy) return;
+  analysisActionBusy = true;
+  updateAnalysisButtons(lastAnalysisPayload || {});
+  try {
+    const payload = await refreshAnalysisStatus();
+    if (!payload) return;
+    if (payload.running) await stopAnalysis();
+    else await startAnalysis(payload);
+  } finally {
+    analysisActionBusy = false;
+    updateAnalysisButtons(lastAnalysisPayload || {});
+  }
+}
+
+async function startAnalysis(currentPayload = null) {
+  saveRunFormState();
+  const requestPayload = runPayload();
+  requestPayload.preempt_relationships = true;
+  if (!validateEmbeddingModelSelection(requestPayload)) return;
+  const preemptRelationships = shouldPreemptRelationshipsForAnalysis(currentPayload);
+  if (preemptRelationships) {
+    showToast(tr("analysis_preempting_relationships"));
+    const stopResult = await requestStopRelationships(requestPayload, {showToastMessage: false, refresh: false});
+    if (!stopResult.ok || (stopResult.payload && stopResult.payload.running)) {
+      loadAnalysis();
+      return showToast((stopResult.payload && stopResult.payload.error) || tr("relationship_stop_failed"));
+    }
+    if (currentPayload) {
+      currentPayload = {
+        ...currentPayload,
+        relationship_task: {
+          ...((currentPayload && currentPayload.relationship_task) || {}),
+          running: false,
+          pid: null
+        }
+      };
+    }
+  }
+  clearRelationshipLaunchPendingState();
+  updateAnalysisButtons(currentPayload || lastAnalysisPayload || {});
+  $("analysisStats").innerHTML = `<span class="pill">${escapeHtml(tr("testing_llm"))}</span>`;
+  const endpointReady = await ensureEndpointReady(requestPayload, {
+    role: "analysis",
+    endpoint: requestPayload.llm_endpoint,
+    model: requestPayload.llm_model
+  });
+  if (!endpointReady) {
+    loadAnalysis();
+    return;
+  }
+  if (requestPayload.relationship_use_embeddings) {
+    const embeddingReady = await ensureEndpointReady(requestPayload, {
+      role: "embedding",
+      endpoint: requestPayload.embedding_endpoint,
+      model: requestPayload.embedding_model
+    });
+    if (!embeddingReady) {
+      loadAnalysis();
+      return;
+    }
+  }
+  const response = await fetch("/api/analysis/start", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(requestPayload)
+  });
+  const responsePayload = await response.json();
+  if (!response.ok) {
+    return showToast(responsePayload.error || tr("analysis_start_failed"));
+  }
+  showToast(tr("analysis_started"));
+  loadAnalysis();
+}
+
+function shouldPreemptRelationshipsForAnalysis(payload = null) {
+  const relationshipTask = effectiveRelationshipTaskForPayload(payload || lastAnalysisPayload);
+  const graphTask = (graphMeta && graphMeta.task) || {};
+  return !!relationshipTask.running || !!graphTask.running || !!relationshipLaunchPending;
+}
+
+function effectiveRelationshipTaskForPayload(payload = null) {
+  const currentPayload = payload || {};
+  const relationshipTask = currentPayload.relationship_task || {};
+  if (relationshipStopPending) return relationshipStopPending;
+  return relationshipTask.running ? relationshipTask : (pendingRelationshipTask() || relationshipTask);
+}
+
+function isInlineRelationshipTask(task) {
+  return !!(task && task.running && task.inline);
+}
+
+async function toggleRelationships() {
+  if (relationshipActionBusy && !relationshipLaunchPending) return;
+  relationshipActionBusy = true;
+  updateAnalysisButtons(lastAnalysisPayload || {});
+  try {
+    const payload = await refreshAnalysisStatus();
+    if (!payload) return;
+    const relationshipTask = effectiveRelationshipTaskForPayload(payload);
+    if (relationshipTask.running || relationshipLaunchPending) await stopRelationships();
+    else await startEarlyRelationships(payload);
+  } finally {
+    relationshipActionBusy = false;
+    updateAnalysisButtons(lastAnalysisPayload || {});
+  }
+}
+
+async function startEarlyRelationships(currentPayload = null) {
+  saveRunFormState();
+  const requestPayload = earlyRelationshipPayload();
+  if (!validateEmbeddingModelSelection(requestPayload)) return;
+  if (!confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(requestPayload)) return;
+  const token = relationshipLaunchToken + 1;
+  relationshipLaunchToken = token;
+  showRelationshipLaunchPending(requestPayload);
+  if (requestPayload.relationship_use_embeddings) {
+    const endpointReady = await ensureEndpointReady(requestPayload, {
+      role: "embedding",
+      endpoint: requestPayload.embedding_endpoint,
+      model: requestPayload.embedding_model
+    });
+    if (!endpointReady) {
+      clearRelationshipLaunchPending(token);
+      return;
+    }
+  }
+  if (token !== relationshipLaunchToken) return;
+  const response = await fetch("/api/analysis/early-relationships", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(requestPayload)
+  });
+  const responsePayload = await response.json();
+  if (!response.ok) {
+    clearRelationshipLaunchPending(token);
+    return showToast(responsePayload.error || tr("early_relationships_failed"));
+  }
+  syncReadingTargetFromRunOutput({force: true});
+  showToast(tr("early_relationships_started"));
+  loadAnalysis();
+  if ($("section-graph").classList.contains("active")) loadGraph();
+}
+
+function showRelationshipLaunchPending(payload) {
+  relationshipLaunchPending = {
+    useEmbeddings: !!(payload && payload.relationship_use_embeddings),
+    startedAt: Date.now()
+  };
+  if (lastAnalysisPayload) {
+    renderAnalysis(lastAnalysisPayload);
+    return;
+  }
+  const task = pendingRelationshipTask();
+  $("analysisStats").innerHTML = `<span class="pill">${escapeHtml(relationshipTaskPillText(task))}</span>`;
+  renderEmbeddingProgress(pendingEmbeddingProgress(), task);
+  updateAnalysisButtons(lastAnalysisPayload || {});
+  $("reset_analysis_btn").disabled = true;
+}
+
+function clearRelationshipLaunchPending(token = null) {
+  if (token !== null && token !== relationshipLaunchToken) return;
+  relationshipLaunchPending = null;
+  if (lastAnalysisPayload) renderAnalysis(lastAnalysisPayload);
+  else renderEmbeddingProgress({}, {});
+}
+
+function pendingRelationshipTask() {
+  if (!relationshipLaunchPending) return null;
+  return {
+    running: true,
+    pending: true,
+    kind: "mine",
+    command: relationshipLaunchPending.useEmbeddings ? ["--use-embeddings"] : []
+  };
+}
+
+function pendingEmbeddingProgress() {
+  return {
+    enabled: true,
+    phase: "ready",
+    percent: 0
+  };
+}
+
+async function stopAnalysis() {
+  updateAnalysisButtons({...lastAnalysisPayload, running: true});
+  const response = await fetch("/api/analysis/stop", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(pathPayload())
+  });
+  const payload = await response.json();
+  showToast(response.ok ? tr("stop_requested") : (payload.error || tr("stop_failed")));
+  loadAnalysis();
+}
+
+async function stopRelationships() {
+  const targetPayload = relationshipStopPayload();
+  return requestStopRelationships(targetPayload);
+}
+
+function relationshipStopPayload() {
+  const graphPaths = graphPathPayload();
+  if ($("section-graph").classList.contains("active") && graphPaths.output_root) {
+    return {...runPayload(), ...graphPaths};
+  }
+  const relationshipTask = effectiveRelationshipTaskForPayload(lastAnalysisPayload || {});
+  if (relationshipTask && relationshipTask.output_root) {
+    return {
+      ...runPayload(),
+      source_dir: relationshipTask.source_dir || (lastAnalysisPayload && lastAnalysisPayload.source_dir) || $("run_source_dir").value.trim(),
+      output_root: relationshipTask.output_root
+    };
+  }
+  if (lastAnalysisPayload && lastAnalysisPayload.output_root) {
+    return {
+      ...runPayload(),
+      source_dir: lastAnalysisPayload.source_dir || $("run_source_dir").value.trim(),
+      output_root: lastAnalysisPayload.output_root
+    };
+  }
+  return runPayload();
+}
+
+async function requestStopRelationships(targetPayload, options = {}) {
+  const showToastMessage = options.showToastMessage !== false;
+  const refresh = options.refresh !== false;
+  const pendingTask = effectiveRelationshipTaskForPayload(lastAnalysisPayload || {});
+  if (pendingTask && pendingTask.running) relationshipStopPending = {...pendingTask, stopping: true};
+  clearRelationshipLaunchPendingState();
+  updateAnalysisButtons(lastAnalysisPayload || {});
+  const response = await fetch("/api/relationships/stop", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(targetPayload || {})
+  });
+  const payload = await response.json();
+  if (showToastMessage) {
+    showToast(response.ok ? tr("relationship_stop_requested") : (payload.error || tr("relationship_stop_failed")));
+  }
+  if (refresh) {
+    const refreshed = await loadAnalysis();
+    if (!(payload && payload.running)) {
+      relationshipStopPending = null;
+      if (refreshed) renderAnalysis(refreshed);
+    }
+    if ($("section-graph").classList.contains("active")) loadGraph();
+  }
+  return {ok: response.ok, payload};
+}
+
+function clearRelationshipLaunchPendingState() {
+  relationshipLaunchToken += 1;
+  relationshipLaunchPending = null;
+}
+
+function setActionButtonState(id, key, tone, disabled) {
+  const button = $(id);
+  if (!button) return;
+  button.dataset.i18n = key;
+  button.textContent = tr(key);
+  button.classList.toggle("primary", tone === "primary");
+  button.classList.toggle("danger", tone === "danger");
+  button.disabled = !!disabled;
+}
+
+function updateAnalysisButtons(payload) {
+  const currentPayload = payload || {};
+  const effectiveRelationshipTask = effectiveRelationshipTaskForPayload(currentPayload);
+  const relationshipActive = !!(effectiveRelationshipTask && effectiveRelationshipTask.running);
+  const inlineRelationshipActive = relationshipActive && isInlineRelationshipTask(effectiveRelationshipTask);
+  const analysisActive = !!currentPayload.running && !inlineRelationshipActive;
+  const decisionCount = Number(((currentPayload.activity || {}).state_counts || {}).decisions || 0);
+  setActionButtonState(
+    "start_analysis_btn",
+    analysisActive ? "stop_analysis" : "start_analysis",
+    analysisActive ? "danger" : "primary",
+    analysisActionBusy || inlineRelationshipActive
+  );
+  setActionButtonState(
+    "early_relationships_btn",
+    relationshipActive ? "stop_relationships" : "early_relationships",
+    relationshipActive ? "danger" : "primary",
+    relationshipActive
+      ? (!!relationshipActionBusy && !relationshipLaunchPending)
+      : (decisionCount <= 0 || relationshipActionBusy || analysisActionBusy)
+  );
+  if ($("reset_analysis_btn")) {
+    $("reset_analysis_btn").disabled = !!currentPayload.running || relationshipActive || analysisActionBusy || relationshipActionBusy;
+  }
+  if ($("reset_relationships_btn")) {
+    $("reset_relationships_btn").disabled = !!currentPayload.running || relationshipActive || analysisActionBusy || relationshipActionBusy;
+  }
+}
+
+function clearReadingRows() {
+  allRows = [];
+  filteredRows = [];
+  currentRows = [];
+  populateFacetOptions([]);
+  renderStatsFromRows([], 0);
+  renderPager();
+  renderSortMarks();
+  renderRows([]);
+}
+
+function renderReadingError(message) {
+  const text = String(message || tr("rows_load_failed"));
+  allRows = [];
+  filteredRows = [];
+  currentRows = [];
+  populateFacetOptions([]);
+  $("stats").innerHTML = `<span class="pill status-failed">${escapeHtml(text)}</span>`;
+  $("pagerTop").innerHTML = "";
+  $("pagerBottom").innerHTML = "";
+  renderSortMarks();
+  $("rows").innerHTML = `<tr><td colspan="10" class="status-failed">${escapeHtml(text)}</td></tr>`;
+}
+
+function hasGraphPayload() {
+  return !!(graphMeta && Object.keys(graphMeta).length);
+}
+
+function renderClearedGraphState() {
+  const message = tr(graphClearMessageKey || "empty_graph");
+  $("graphStats").innerHTML = `<span class="pill">${escapeHtml(message)}</span>`;
+  $("graphTaskStats").innerHTML = "";
+  renderGraphProgress({});
+  $("graphClusters").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
+  $("graphClusterTitle").innerHTML = "";
+  $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
+  $("graphEdges").innerHTML = "";
+  $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
+  updateGraphButtons({});
+}
+
+function renderGraphError(message) {
+  const text = String(message || tr("graph_load_failed"));
+  graphMeta = {};
+  graphClusters = [];
+  filteredGraphClusters = [];
+  graphSelectedClusterId = null;
+  graphClusterData = null;
+  graphSelectedDocPath = "";
+  $("graphStats").innerHTML = `<span class="pill status-failed">${escapeHtml(text)}</span>`;
+  $("graphTaskStats").innerHTML = "";
+  renderGraphProgress({});
+  $("graphClusters").innerHTML = `<div class="graph-empty">${escapeHtml(text)}</div>`;
+  $("graphClusterTitle").innerHTML = "";
+  $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(text)}</div>`;
+  $("graphEdges").innerHTML = "";
+  $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(text)}</div>`;
+  updateGraphButtons({});
+}
+
+function clearGraphState(messageKey = "empty_graph") {
+  graphClearMessageKey = messageKey;
+  graphMeta = {};
+  graphClusters = [];
+  filteredGraphClusters = [];
+  graphSelectedClusterId = null;
+  graphClusterData = null;
+  graphSelectedDocPath = "";
+  renderClearedGraphState();
+}
+
+function hasRagPayload() {
+  return !!(ragMeta && Object.keys(ragMeta).length);
+}
+
+function clearRagState(messageKey = "rag_no_index") {
+  ragMeta = {};
+  ragSearchPayload = null;
+  const message = tr(messageKey);
+  $("ragTaskStats").innerHTML = `<span class="pill">${escapeHtml(message)}</span>`;
+  $("ragBar").style.width = "0%";
+  $("ragLog").textContent = "";
+  $("ragResultStats").innerHTML = "";
+  $("ragResults").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
+  updateRagButtons({task: {running: false}});
+}
+
+async function resetAnalysis() {
+  const sourceDir = $("run_source_dir").value.trim();
+  const outputRoot = $("run_output_root").value.trim();
+  if (!sourceDir || !outputRoot) return showToast(tr("need_source_output"));
+  if (!window.confirm(trf("reset_confirm", {output: outputRoot}))) return;
+  const response = await fetch("/api/analysis/reset", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source_dir: sourceDir, output_root: outputRoot})
+  });
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("reset_failed"));
+  clearReadingRows();
+  clearGraphState("output_reset");
+  showToast(tr("output_reset"));
+  loadAnalysis();
+}
+
+async function resetRelationships() {
+  const sourceDir = $("run_source_dir").value.trim();
+  const outputRoot = $("run_output_root").value.trim();
+  if (!sourceDir || !outputRoot) return showToast(tr("need_source_output"));
+  const payload = await refreshAnalysisStatus();
+  if (!payload) return;
+  const relationshipTask = effectiveRelationshipTaskForPayload(payload);
+  const relationshipActive = !!(relationshipTask && relationshipTask.running) || !!relationshipLaunchPending;
+  if (payload.running || relationshipActive) {
+    updateAnalysisButtons(payload);
+    return showToast(relationshipActive ? tr("reset_relationships_blocked_relationships") : tr("reset_relationships_blocked_analysis"));
+  }
+  if (!window.confirm(trf("reset_relationships_confirm", {output: outputRoot}))) return;
+  const response = await fetch("/api/relationships/reset", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source_dir: sourceDir, output_root: outputRoot})
+  });
+  const responsePayload = await response.json();
+  if (!response.ok) return showToast(responsePayload.error || tr("relationship_reset_failed"));
+  clearGraphState("relationships_reset");
+  showToast(tr("relationships_reset"));
+  loadAnalysis();
+  if ($("section-graph").classList.contains("active")) loadGraph();
+}
+
+async function loadAnalysis() {
+  return refreshAnalysisStatus();
+}
+
+function renderAnalysis(payload) {
+  lastAnalysisPayload = payload;
+  syncReadingTarget(payload);
+  const progress = payload.progress || {};
+  const activity = payload.activity || {};
+  const latest = activity.latest_activity || {};
+  const lock = payload.run_lock || {};
+  const summary = payload.run_summary || {};
+  const unresolvedFailures = Number(summary.unresolved_failures ?? progress.failed ?? 0);
+  const retryAttempted = Number(summary.retry_attempted || 0);
+  const retrySucceeded = Number(summary.retry_succeeded || 0);
+  const phaseText = localizedPhase(payload.phase);
+  const rateReady = !!progress.rate_window_active && Number(progress.rate_window_completed || 0) > 0;
+  const relationshipTask = payload.relationship_task || {};
+  if (relationshipTask.running || relationshipTask.return_code !== null) relationshipLaunchPending = null;
+  const effectiveRelationshipTask = effectiveRelationshipTaskForPayload(payload);
+  const inlineRelationshipActive = isInlineRelationshipTask(effectiveRelationshipTask);
+  const showAnalysisProgress = !inlineRelationshipActive;
+  const parts = [
+    phaseText,
+    payload.plan_only ? tr("plan_only_pill") : "",
+    inlineRelationshipActive ? "" : (payload.running ? tr("running_pill") : tr("not_running_pill")),
+    relationshipTaskPillText(effectiveRelationshipTask),
+    payload.pid ? "PID " + payload.pid : "",
+    payload.effective_concurrency ? `${tr("concurrency_pill")} ${payload.effective_concurrency}` : "",
+    showAnalysisProgress && progress.percent !== undefined ? `${tr("progress_pill")} ${progress.percent}%` : "",
+    showAnalysisProgress && progress.completed !== undefined ? `${tr("completed_pill")} ${progress.completed}/${progress.total || 0}` : "",
+    showAnalysisProgress && rateReady && progress.eta_human && progress.eta_human !== "unknown" ? `ETA ${progress.eta_human}` : (showAnalysisProgress && payload.running ? tr("eta_waiting_pill") : ""),
+    showAnalysisProgress && rateReady && progress.files_per_minute !== undefined && Number(progress.files_per_minute) > 0 ? `${tr("speed_pill")} ${progress.files_per_minute}/min` : (showAnalysisProgress && payload.running ? tr("speed_waiting_pill") : ""),
+    unresolvedFailures > 0 ? `${tr("unresolved_failures_pill")} ${unresolvedFailures}` : "",
+    retryAttempted > 0 ? `${tr("retry_recovered_pill")} ${retrySucceeded}/${retryAttempted}` : "",
+    lock.exists && !lock.active && lock.pid ? `${tr("stale_lock_pid_pill")} ${lock.pid}` : "",
+    activityPillText(latest)
+  ].filter(Boolean);
+  $("analysisStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+  $("analysisBar").style.width = Math.max(0, Math.min(100, Number(progress.percent || 0))) + "%";
+  $("analysisLog").textContent = payload.log_tail || "";
+  const decisionCount = Number((activity.state_counts || {}).decisions || 0);
+  const embeddingProgress = effectiveRelationshipTask.pending ? pendingEmbeddingProgress() : (payload.embedding_progress || {});
+  const embeddingPhase = String((embeddingProgress && embeddingProgress.phase) || "").toLowerCase();
+  const keepEmbeddingTask = !effectiveRelationshipTask.running && embeddingProgress && embeddingProgress.enabled && embeddingPhase !== "complete" && embeddingPhase !== "error"
+    ? (lastEmbeddingTask || effectiveRelationshipTask || {})
+    : effectiveRelationshipTask;
+  renderEmbeddingProgress(embeddingProgress, keepEmbeddingTask);
+  updateAnalysisButtons(payload);
+}
+
+function renderEmbeddingProgress(progress, task) {
+  const command = task && Array.isArray(task.command) ? task.command : [];
+  const embeddingTask = command.includes("--use-embeddings") || command.includes("--relationship-use-embeddings");
+  const progressActive = !!(progress && progress.enabled && String(progress.phase || "").toLowerCase() !== "complete" && String(progress.phase || "").toLowerCase() !== "error");
+  const activeEmbeddingTask = !!(task && (task.running || task.stopping) && embeddingTask);
+  const visible = (activeEmbeddingTask || progressActive) && (!!(progress && progress.enabled) || !!(task && task.pending) || !progress || Object.keys(progress).length === 0);
+  $("embeddingProgressWrap").style.display = visible ? "block" : "none";
+  if (!visible) {
+    $("embeddingProgressStats").innerHTML = "";
+    $("embeddingProgressBar").style.width = "0%";
+    return;
+  }
+  lastEmbeddingProgress = progress || {};
+  lastEmbeddingTask = task || {};
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  const total = Number(progress.total || 0);
+  const phase = localizedEmbeddingPhase(progress.phase || "ready");
+  const itemsPerMinute = Number(progress.items_per_minute || 0);
+  const etaHuman = String(progress.eta_human || "");
+  const finishTime = formatEpochTime(progress.eta_finish_epoch);
+  const speedReady = itemsPerMinute > 0;
+  const progressPhase = String(progress.phase || "").toLowerCase();
+  const progressComplete = progressPhase === "complete";
+  const parts = [
+    `${tr("embedding_progress_pill")} ${percent}%`,
+    phase,
+    total > 0 ? `${tr("completed_pill")} ${Number(progress.completed || 0)}/${total}` : "",
+    speedReady ? `${tr("speed_pill")} ${itemsPerMinute}/min` : tr("embedding_speed_waiting_pill"),
+    !progressComplete && speedReady && etaHuman && etaHuman !== "unknown" ? `ETA ${etaHuman}` : (!progressComplete ? tr("embedding_eta_waiting_pill") : ""),
+    finishTime ? `${tr("eta_finish_pill")} ${finishTime}` : "",
+    !progressComplete && progress.workers ? `${tr("concurrency_pill")} ${progress.workers}` : ""
+  ].filter(Boolean);
+  $("embeddingProgressStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+  $("embeddingProgressBar").style.width = percent + "%";
+}
+
+function formatEpochTime(epochSeconds) {
+  const epoch = Number(epochSeconds || 0);
+  if (!Number.isFinite(epoch) || epoch <= 0) return "";
+  return new Date(epoch * 1000).toLocaleString(uiLanguage === "zh-CN" ? "zh-CN" : "en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function relationshipTaskPillText(task) {
+  if (!task || !task.running) return "";
+  return trf("graph_task_running", {task: graphTaskKindLabel(task.kind || "mine")});
+}
+
+function localizedEmbeddingPhase(phase) {
+  const key = {
+    loading_cache: "embedding_phase_loading_cache",
+    embedding: "embedding_phase_embedding",
+    complete: "embedding_phase_complete",
+    ready: "embedding_phase_ready"
+  }[phase];
+  return key ? tr(key) : (phase || "");
+}
+
+function activityPillText(latest) {
+  if (!latest || !latest.label) return "";
+  const label = localizedActivityLabel(latest.label);
+  const detail = localizedActivityDetail(latest.detail || "").trim();
+  return detail ? `${label}: ${detail}` : label;
+}
+
+function localizedPhase(phase) {
+  if (phase === "文档评分中") return "";
+  const key = {
+    "未启动": "phase_not_started",
+    "关系挖掘中": "phase_relationship_mining",
+    "续传准备中": "phase_resume_preparing",
+    "续传跳过中": "phase_resume_skipping",
+    "扫描准备中": "phase_scanning",
+    "分析完成，仍有失败": "phase_completed_with_failures",
+    "分析完成，关系已生成": "phase_completed_relationships",
+    "分析完成，关系未生成": "phase_completed_no_relationships",
+    "分析完成": "phase_completed",
+    "已停止，可续传": "phase_stopped_resume"
+  }[phase];
+  return key ? tr(key) : (phase || "");
+}
+
+function localizedActivityLabel(label) {
+  return label || "";
+}
+
+function localizedActivityDetail(detail) {
+  return detail || "";
+}
+
+async function loadRows() {
+  syncReadingScopeControls();
+  const response = await fetch("/api/state?" + readingParams());
+  const payload = await response.json();
+  if (!response.ok) {
+    const message = payload.error || tr("rows_load_failed");
+    showToast(message);
+    renderReadingError(message);
+    return null;
+  }
+  allRows = payload.rows || [];
+  populateFacetOptions(allRows);
+  currentPage = 1;
+  applyClientFilters();
+  return payload;
+}
+
+function syncReadingScopeControls() {
+  if ($("reading_scope")) $("reading_scope").value = readingScope;
+  const disabled = readingScope === "source";
+  for (const id of ["min_quality", "categories", "topic_tags", "max_sensitivity_risk", "min_public_writing_suitability"]) {
+    const element = $(id);
+    if (element) element.disabled = disabled;
+  }
+}
+
+function syncReadingTarget(payload) {
+  if (!payload) return;
+  let changed = false;
+  if (payload.source_dir && $("run_source_dir").value !== payload.source_dir) {
+    $("run_source_dir").value = payload.source_dir;
+    changed = true;
+  }
+  if (payload.output_root && $("run_output_root").value !== payload.output_root) {
+    $("run_output_root").value = payload.output_root;
+    changed = true;
+  }
+  if (changed) {
+    lastAppliedRunPathKey = runPathKey($("run_source_dir").value, $("run_output_root").value);
+    syncReadingTargetFromRunOutput();
+    saveRunFormState();
+  } else if (!$("reading_output_root").value.trim()) {
+    syncReadingTargetFromRunOutput();
+  }
+}
+
+async function loadGraph(preserveSelection = true) {
+  if (!graphPathPayload().output_root) {
+    clearGraphState("graph_need_paths");
+    return null;
+  }
+  const query = graphQuery();
+  const response = await fetch("/api/relationships" + (query ? "?" + query : ""));
+  const payload = await response.json();
+  if (!response.ok) {
+    const message = payload.error || tr("graph_load_failed");
+    showToast(message);
+    renderGraphError(message);
+    return null;
+  }
+  graphMeta = payload;
+  graphClusters = payload.clusters || [];
+  renderGraphStats(payload);
+  renderGraphTaskStats(payload);
+  applyGraphFilters(preserveSelection);
+  return payload;
+}
+
+async function loadRagStatus() {
+  if (!ragPathPayload().output_root) {
+    clearRagState("rag_need_output");
+    return;
+  }
+  const query = ragQuery();
+  const response = await fetch("/api/rag" + (query ? "?" + query : ""));
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("rag_load_failed"));
+  ragMeta = payload;
+  renderRagStatus(payload);
+}
+
+function renderRagStatus(payload) {
+  const progress = payload.progress || {};
+  const manifest = payload.manifest || {};
+  const task = payload.task || {};
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  const parts = [];
+  if (task.running) parts.push(tr("rag_task_running"));
+  if (task.pid) parts.push(`PID ${task.pid}`);
+  if (progress.phase) parts.push(localizedRagPhase(progress.phase));
+  if (progress.total_documents !== undefined) parts.push(`${tr("rag_documents_pill")} ${Number(progress.indexed_documents || 0)}/${Number(progress.total_documents || 0)}`);
+  if (progress.total_chunks !== undefined) parts.push(`${tr("rag_chunks_pill")} ${Number(progress.total_chunks || 0)}`);
+  if (progress.embedded_chunks !== undefined) parts.push(`${tr("rag_vectors_pill")} ${Number(progress.embedded_chunks || 0)}`);
+  if (Number(progress.failed_documents || manifest.failed_documents || 0) > 0) parts.push(`${tr("rag_failed_pill")} ${Number(progress.failed_documents || manifest.failed_documents || 0)}`);
+  if (!payload.available && !task.running) parts.push(tr("rag_no_index"));
+  $("ragTaskStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+  $("ragBar").style.width = percent + "%";
+  $("ragLog").textContent = payload.log_tail || "";
+  updateRagButtons(payload);
+}
+
+function updateRagButtons(payload) {
+  const task = (payload || {}).task || {};
+  const running = !!task.running;
+  setActionButtonState(
+    "start_rag_btn",
+    running ? "stop_rag" : "build_rag",
+    running ? "danger" : "primary",
+    ragActionBusy
+  );
+}
+
+function localizedRagPhase(phase) {
+  const key = {
+    loading_decisions: "rag_phase_loading_decisions",
+    extracting_text: "rag_phase_extracting_text",
+    chunking: "rag_phase_chunking",
+    embedding: "rag_phase_embedding",
+    complete: "rag_phase_complete",
+    error: "rag_phase_error"
+  }[phase];
+  return key ? tr(key) : (phase || "");
+}
+
+async function startRagIndex() {
+  if (!ragPathPayload().output_root) return showToast(tr("rag_need_output"));
+  const requestPayload = ragPayload();
+  if (!validateRagRedactionPayload(requestPayload)) return;
+  updateRagButtons({task: {running: false}});
+  $("ragTaskStats").innerHTML = `<span class="pill">${escapeHtml(tr("rag_task_running"))}</span>`;
+  $("ragBar").style.width = "0%";
+  const response = await fetch("/api/rag/build", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(requestPayload)
+  });
+  const responsePayload = await response.json();
+  if (!response.ok) {
+    updateRagButtons(ragMeta || {});
+    return showToast(responsePayload.error || tr("rag_start_failed"));
+  }
+  showToast(tr("rag_started"));
+  await loadRagStatus();
+}
+
+async function toggleRagIndex() {
+  if (ragActionBusy) return;
+  ragActionBusy = true;
+  updateRagButtons(ragMeta || {});
+  try {
+    if (!ragPathPayload().output_root) return showToast(tr("rag_need_output"));
+    await loadRagStatus();
+    const task = (ragMeta || {}).task || {};
+    if (task.running) await stopRagIndex();
+    else await startRagIndex();
+  } finally {
+    ragActionBusy = false;
+    updateRagButtons(ragMeta || {});
+  }
+}
+
+async function stopRagIndex() {
+  const response = await fetch("/api/rag/stop", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(ragPathPayload())
+  });
+  const payload = await response.json();
+  showToast(response.ok ? tr("rag_stop_requested") : (payload.error || tr("rag_stop_failed")));
+  await loadRagStatus();
+}
+
+async function searchRag() {
+  const query = $("rag_query").value.trim();
+  if (!query) return showToast(tr("rag_query_required"));
+  const response = await fetch("/api/rag/search", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      ...ragPayload(),
+      query,
+      top_k: $("rag_top_k").value
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("rag_search_failed"));
+  ragSearchPayload = payload;
+  renderRagResults(payload);
+}
+
+function renderRagResults(payload) {
+  const results = payload.results || [];
+  const mode = payload.mode === "vector" ? tr("rag_mode_vector") : tr("rag_mode_lexical");
+  $("ragResultStats").innerHTML = [
+    `<span class="pill">${escapeHtml(mode)}</span>`,
+    `<span class="pill">${tr("rag_result_count")} ${results.length}</span>`
+  ].join("");
+  if (!results.length) {
+    $("ragResults").innerHTML = `<div class="graph-empty">${escapeHtml(tr("rag_no_results"))}</div>`;
+    return;
+  }
+  $("ragResults").innerHTML = results.map(item => `
+    <div class="rag-result-item">
+      <div class="rag-result-title">${escapeHtml(item.title || item.relative_path || item.source_path || item.chunk_id)}</div>
+      <div class="rag-result-meta">${escapeHtml(item.relative_path || "")} · ${escapeHtml(item.category || "")} · score=${escapeHtml(item.score)} · q=${escapeHtml(item.quality)}</div>
+      <div class="rag-result-excerpt">${escapeHtml(item.excerpt || "")}</div>
+    </div>
+  `).join("");
+}
+
+function renderGraphStats(payload) {
+  const parts = [];
+  if (payload.cluster_count !== undefined) parts.push(`${tr("cluster")} ${payload.cluster_count}`);
+  if (payload.relations_exists) parts.push(tr("graph_relations_exists"));
+  if (payload.clusters_exists) parts.push(tr("graph_clusters_exists"));
+  if (payload.decisions_exists) parts.push(tr("graph_decisions_exists"));
+  if (!payload.available) parts.push(tr("empty_graph"));
+  $("graphStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+}
+
+function graphTaskKindLabel(kind) {
+  return {
+    mine: tr("graph_task_mine"),
+    export_graph: tr("graph_task_export_graph"),
+    export_bundle: tr("graph_task_export_bundle")
+  }[kind] || kind || "";
+}
+
+function localGraphTaskLabel(label, taskName = "") {
+  const reverse = {
+    "关系结果生成": "graph_task_mine",
+    "图谱生成": "graph_task_mine",
+    "知识图谱导出": "graph_task_export_graph",
+    "Bundle 导出": "graph_task_export_bundle"
+  };
+  if (label && reverse[label]) return tr(reverse[label]);
+  return graphTaskKindLabel(taskName || label);
+}
+
+function renderGraphTaskStats(payload) {
+  const task = payload.task || {};
+  const parts = [];
+  if (task.running) parts.push(trf("graph_task_running", {task: graphTaskKindLabel(task.kind)}));
+  if (task.pid) parts.push(`PID ${task.pid}`);
+  if (!payload.decisions_exists) {
+    parts.push(tr("graph_need_analysis_once"));
+  }
+  $("graphTaskStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+  renderGraphProgress(payload);
+  updateGraphButtons(payload);
+}
+
+function renderGraphProgress(payload) {
+  const task = (payload && payload.task) || {};
+  const progress = (payload && payload.progress) || {};
+  const phase = String(progress.phase || "").toLowerCase();
+  const visible = !!(task.running && (!task.kind || task.kind === "mine")) || !!(phase && phase !== "complete");
+  const wrap = $("graphProgressWrap");
+  if (!wrap) return;
+  wrap.style.display = visible ? "block" : "none";
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  $("graphProgressBar").style.width = `${percent}%`;
+  if (!visible) {
+    $("graphProgressBar").style.width = "0%";
+    $("graphProgressStats").innerHTML = "";
+    return;
+  }
+  const parts = [
+    `${tr("progress_pill")} ${percent}%`,
+    localizedGraphPhase(progress.phase || (task.running ? "scoring_relationships" : "")),
+    progress.total_records !== undefined ? `${tr("graph_records_pill")} ${Number(progress.total_records || 0)}` : "",
+    progress.candidate_relations !== undefined ? `${tr("graph_candidates_pill")} ${Number(progress.candidate_relations || 0)}` : "",
+    progress.embedded_records !== undefined ? `${tr("graph_embedded_pill")} ${Number(progress.embedded_records || 0)}` : "",
+    progress.elapsed_seconds !== undefined ? `${tr("elapsed_pill")} ${formatDurationShort(Number(progress.elapsed_seconds || 0))}` : "",
+    progress.message ? String(progress.message) : ""
+  ].filter(Boolean);
+  $("graphProgressStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+}
+
+function localizedGraphPhase(phase) {
+  const key = {
+    loading_decisions: "graph_phase_loading_decisions",
+    records_loaded: "graph_phase_records_loaded",
+    preparing_embeddings: "graph_phase_preparing_embeddings",
+    scoring_relationships: "graph_phase_scoring_relationships",
+    writing_relations: "graph_phase_writing_relations",
+    clustering: "graph_phase_clustering",
+    complete: "graph_phase_complete",
+    error: "graph_phase_error"
+  }[String(phase || "").toLowerCase()];
+  return key ? tr(key) : "";
+}
+
+function formatDurationShort(seconds) {
+  const value = Math.max(0, Math.floor(Number(seconds || 0)));
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const secs = value % 60;
+  if (hours) return `${hours}h${String(minutes).padStart(2, "0")}m`;
+  if (minutes) return `${minutes}m${String(secs).padStart(2, "0")}s`;
+  return `${secs}s`;
+}
+
+function updateGraphButtons(payload) {
+  const currentPayload = payload || {};
+  const task = currentPayload.task || {};
+  const runningAny = !!task.running;
+  const runningMine = !!(task.running && (!task.kind || task.kind === "mine"));
+  const canMine = !!currentPayload.decisions_exists;
+  setActionButtonState(
+    "graph_mine_btn",
+    runningMine ? "stop_relationships" : "generate_relationships",
+    runningMine ? "danger" : "primary",
+    graphActionBusy || (!runningMine && (runningAny || !canMine))
+  );
+  $("graph_export_graph_btn").disabled = runningAny || !currentPayload.relations_exists;
+  $("graph_export_bundle_btn").disabled = runningAny || !currentPayload.relations_exists;
+}
+
+async function startGraphTask(taskName) {
+  if (!graphPathPayload().output_root) {
+    return showToast(tr("graph_need_paths"));
+  }
+  const requestPayload = {...runPayload(), ...graphPathPayload()};
+  if (taskName === "mine" && !validateEmbeddingModelSelection(requestPayload)) return;
+  const response = await fetch(`/api/relationships/${taskName.replace("_", "-")}`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(requestPayload)
+  });
+  const responsePayload = await response.json();
+  if (!response.ok) return showToast(responsePayload.error || tr("graph_task_start_failed"));
+  showToast(trf("graph_task_started", {task: localGraphTaskLabel(responsePayload.label, taskName)}));
+  await loadGraph();
+}
+
+async function toggleGraphRelationships() {
+  if (graphActionBusy) return;
+  graphActionBusy = true;
+  updateGraphButtons(graphMeta || {});
+  try {
+    if (!graphPathPayload().output_root) {
+      return showToast(tr("graph_need_paths"));
+    }
+    const payload = await loadGraph();
+    if (!payload) return;
+    const task = payload.task || {};
+    if (task.running && (!task.kind || task.kind === "mine")) {
+      await stopRelationships();
+      return;
+    }
+    if (task.running) return;
+    await startGraphTask("mine");
+  } finally {
+    graphActionBusy = false;
+    updateGraphButtons(graphMeta || {});
+  }
+}
+
+function renderAnydocsStats() {
+  if (!$("anydocsStats")) return;
+  const bundlePath = anydocsBundlePath();
+  const parts = [];
+  if (bundlePath) parts.push(`${tr("anydocs_bundle_path")}: ${bundlePath}`);
+  parts.push(tr("anydocs_optional"));
+  $("anydocsStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+}
+
+async function exportAnydocsBundle() {
+  const paths = anydocsPathPayload();
+  if (!paths.output_root) return showToast(tr("graph_need_paths"));
+  saveAnydocsTargetState();
+  const response = await fetch("/api/integrations/anydocs/export-bundle", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      ...runPayload(),
+      ...paths
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("anydocs_export_failed"));
+  if ($("anydocs_bundle_path")) $("anydocs_bundle_path").value = payload.bundle_path || anydocsBundlePath();
+  showToast(tr("anydocs_exported"));
+  renderAnydocsStats();
+}
+
+async function openAnyDocs(autoPlan = false) {
+  const paths = anydocsPathPayload();
+  if (!paths.output_root) return showToast(tr("graph_need_paths"));
+  saveAnydocsTargetState();
+  const response = await fetch("/api/integrations/anydocs/open", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      ...runPayload(),
+      ...paths,
+      anydocs_url: $("anydocs_url").value.trim() || DEFAULT_ANYDOCS_URL,
+      auto_plan: !!autoPlan,
+      export_bundle: true
+    })
+  });
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("anydocs_open_failed"));
+  if ($("anydocs_bundle_path")) $("anydocs_bundle_path").value = payload.bundle_path || anydocsBundlePath();
+  showToast(tr("anydocs_opened"));
+  renderAnydocsStats();
+}
+
+function renderGraphEmptyState() {
+  const message = graphEmptyMessage(graphMeta);
+  $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
+  $("graphEdges").innerHTML = "";
+  $("graphClusterTitle").innerHTML = "";
+  $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(graphDetailEmptyMessage(graphMeta))}</div>`;
+}
+
+function graphMatchesFilters(cluster) {
+  const minSize = Number($("graph_min_size").value || 2);
+  if (Number(cluster.size || 0) < minSize) return false;
+  const q = $("graph_q").value.trim().toLowerCase();
+  if (!q) return true;
+  const haystack = [
+    ...(cluster.categories || []),
+    ...(cluster.preview_paths || [])
+  ].join(" ").toLowerCase();
+  return haystack.includes(q);
+}
+
+function applyGraphFilters(preserveSelection = true) {
+  filteredGraphClusters = graphClusters.filter(graphMatchesFilters);
+  renderGraphClusterList();
+  if (!filteredGraphClusters.length) {
+    graphSelectedClusterId = null;
+    graphClusterData = null;
+    graphSelectedDocPath = "";
+    if (graphClusters.length) {
+      $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(tr("graph_no_match"))}</div>`;
+      $("graphEdges").innerHTML = "";
+      $("graphClusterTitle").innerHTML = "";
+      $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(graphDetailEmptyMessage(graphMeta))}</div>`;
+    } else {
+      renderGraphEmptyState();
+    }
+    return;
+  }
+  const hasSelection = preserveSelection && filteredGraphClusters.some(item => item.cluster_id === graphSelectedClusterId);
+  if (hasSelection) {
+    renderGraphClusterList();
+    if (graphClusterData && graphClusterData.cluster_id === graphSelectedClusterId) {
+      renderGraphCluster();
+      return;
+    }
+  }
+  loadGraphCluster(filteredGraphClusters[0].cluster_id, false);
+}
+
+async function loadGraphCluster(clusterId, preserveDocSelection = true) {
+  graphSelectedClusterId = clusterId;
+  renderGraphClusterList();
+  const query = new URLSearchParams(graphPathPayload());
+  query.set("cluster", String(clusterId));
+  const response = await fetch("/api/relationships?" + query.toString());
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("graph_cluster_load_failed"));
+  graphClusterData = payload.selected_cluster;
+  if (!graphClusterData) {
+    graphSelectedDocPath = "";
+  } else if (!preserveDocSelection || !graphClusterData.files.some(item => item.relative_path === graphSelectedDocPath)) {
+    graphSelectedDocPath = graphClusterData.files[0] ? graphClusterData.files[0].relative_path : "";
+  }
+  renderGraphCluster();
+}
+
+function renderGraphClusterList() {
+  if (!filteredGraphClusters.length) {
+    $("graphClusters").innerHTML = `<div class="graph-empty">${escapeHtml(graphEmptyMessage(graphMeta))}</div>`;
+    return;
+  }
+  $("graphClusters").innerHTML = filteredGraphClusters.map(cluster => `
+    <button class="graph-cluster-item ${cluster.cluster_id === graphSelectedClusterId ? "active" : ""}" onclick="loadGraphCluster(${cluster.cluster_id}, false)">
+      <div class="graph-cluster-title">${tr("cluster")} ${cluster.cluster_id + 1} · ${cluster.size} ${tr("documents_unit")}</div>
+      <div class="graph-cluster-preview">${escapeHtml((cluster.categories || []).join(", ") || tr("uncategorized"))}</div>
+      <div class="graph-cluster-preview">${escapeHtml((cluster.preview_paths || []).join(" / ") || tr("no_preview_path"))}</div>
+    </button>
+  `).join("");
+}
+
+function renderGraphCluster() {
+  if (!graphClusterData) {
+    $("graphClusterTitle").innerHTML = "";
+    $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(graphEmptyMessage(graphMeta))}</div>`;
+    $("graphEdges").innerHTML = "";
+    $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(graphDetailEmptyMessage(graphMeta))}</div>`;
+    return;
+  }
+  const categories = (graphClusterData.categories || []).join(", ") || tr("uncategorized");
+  $("graphClusterTitle").innerHTML = [
+    `<span class="pill">${tr("cluster")} ${graphClusterData.cluster_id + 1}</span>`,
+    `<span class="pill">${graphClusterData.size} ${tr("documents_unit")}</span>`,
+    `<span class="pill">${graphClusterData.edge_count} ${tr("edges_unit")}</span>`,
+    `<span class="pill">${escapeHtml(categories)}</span>`
+  ].join("");
+  renderGraphCanvas();
+  renderGraphEdges();
+  renderGraphDetail();
+}
+
+function graphDisplayName(relativePath) {
+  const value = String(relativePath || "");
+  const parts = value.split(/[\\\\/]/);
+  return parts[parts.length - 1] || value;
+}
+
+function graphShortLabel(relativePath, maxLength = 18) {
+  const name = graphDisplayName(relativePath).replace(/\.[^.]+$/, "");
+  return name.length <= maxLength ? name : name.slice(0, maxLength - 1) + "…";
+}
+
+function graphColorForCategory(category) {
+  const value = String(category || "Unknown");
+  let hash = 0;
+  for (const ch of value) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${hash}, 68%, 55%)`;
+}
+
+function graphNodePositionMap(files, selectedPath) {
+  const width = 760;
+  const height = 460;
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const positions = {};
+  const ordered = files.map(item => item.relative_path);
+  const anchor = selectedPath && ordered.includes(selectedPath) ? selectedPath : ordered[0];
+  if (!anchor) return {width, height, positions};
+  positions[anchor] = {x: centerX, y: centerY};
+  const others = ordered.filter(path => path !== anchor);
+  const radius = Math.min(width, height) * 0.34;
+  others.forEach((path, index) => {
+    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / Math.max(others.length, 1);
+    positions[path] = {
+      x: centerX + radius * Math.cos(angle),
+      y: centerY + radius * Math.sin(angle),
+    };
+  });
+  return {width, height, positions};
+}
+
+function renderGraphCanvas() {
+  const files = graphClusterData.files || [];
+  if (!files.length) {
+    $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(tr("graph_no_docs"))}</div>`;
+    return;
+  }
+  const selectedPath = graphSelectedDocPath || files[0].relative_path;
+  const layout = graphNodePositionMap(files, selectedPath);
+  const edges = (graphClusterData.edges || []).map(edge => {
+    const left = layout.positions[edge.left_path];
+    const right = layout.positions[edge.right_path];
+    if (!left || !right) return "";
+    const active = edge.left_path === selectedPath || edge.right_path === selectedPath;
+    const stroke = active ? "#2563eb" : "#94a3b8";
+    const opacity = active ? 0.9 : 0.45;
+    const width = Math.max(1.5, Number(edge.relation_score || 0) * 3);
+    const title = `${edge.left_path} ↔ ${edge.right_path} | score=${edge.relation_score} | ${(edge.signals || []).join(", ")}`;
+    return `<line x1="${left.x}" y1="${left.y}" x2="${right.x}" y2="${right.y}" stroke="${stroke}" stroke-width="${width}" opacity="${opacity}"><title>${escapeHtml(title)}</title></line>`;
+  }).join("");
+  const nodes = files.map(file => {
+    const point = layout.positions[file.relative_path];
+    const selected = file.relative_path === selectedPath;
+    const radius = selected ? 22 : 18;
+    const fill = graphColorForCategory(file.category);
+    const stroke = selected ? "#172033" : "#ffffff";
+    const title = `${file.relative_path} | ${file.category} | q=${file.quality} | ${labelStatus(file.status)}`;
+    return `
+      <g onclick='selectGraphDoc(${JSON.stringify(file.relative_path)})' style="cursor:pointer">
+        <circle cx="${point.x}" cy="${point.y}" r="${radius}" fill="${fill}" stroke="${stroke}" stroke-width="${selected ? 3 : 2}"><title>${escapeHtml(title)}</title></circle>
+        <text x="${point.x}" y="${point.y + radius + 16}" text-anchor="middle" font-size="11" fill="#172033">${escapeHtml(graphShortLabel(file.relative_path))}</text>
+      </g>
+    `;
+  }).join("");
+  $("graphCanvas").innerHTML = `<svg class="graph-svg" viewBox="0 0 ${layout.width} ${layout.height}" preserveAspectRatio="xMidYMid meet">${edges}${nodes}</svg>`;
+}
+
+function selectGraphDoc(relativePath) {
+  graphSelectedDocPath = relativePath;
+  renderGraphCanvas();
+  renderGraphEdges();
+  renderGraphDetail();
+}
+
+function renderGraphEdges() {
+  if (!graphClusterData) {
+    $("graphEdges").innerHTML = "";
+    return;
+  }
+  const selectedPath = graphSelectedDocPath;
+  let edges = graphClusterData.edges || [];
+  if (selectedPath) {
+    edges = edges.filter(edge => edge.left_path === selectedPath || edge.right_path === selectedPath);
+  }
+  edges = [...edges].sort((a, b) => Number(b.relation_score || 0) - Number(a.relation_score || 0)).slice(0, 18);
+  if (!edges.length) {
+    $("graphEdges").innerHTML = `<div class="graph-empty">${escapeHtml(tr("graph_no_edges"))}</div>`;
+    return;
+  }
+  $("graphEdges").innerHTML = edges.map(edge => {
+    const title = `${graphDisplayName(edge.left_path)} ↔ ${graphDisplayName(edge.right_path)}`;
+    const signals = (edge.signals || []).join(", ") || tr("no_explicit_signal");
+    return `
+      <div class="graph-edge-item">
+        <div class="graph-cluster-title">${escapeHtml(title)}</div>
+        <div class="muted">score ${edge.relation_score} · ${escapeHtml(signals)}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+function graphNeighborPath(edge, relativePath) {
+  return edge.left_path === relativePath ? edge.right_path : edge.left_path;
+}
+
+function graphEmptyMessage(payload) {
+  const task = (payload && payload.task) || {};
+  if (task.running) return trf("graph_task_running_refresh", {task: graphTaskKindLabel(task.kind)});
+  if (payload && !payload.decisions_exists) return tr("graph_need_analysis_before_graph");
+  if (payload && payload.decisions_exists && !payload.relations_exists) return tr("graph_no_relationships_generate");
+  return tr("empty_graph");
+}
+
+function graphDetailEmptyMessage(payload) {
+  const task = (payload && payload.task) || {};
+  if (task.running) return tr("graph_task_running_detail");
+  if (payload && payload.decisions_exists && !payload.relations_exists) return tr("graph_generate_then_detail");
+  return tr("graph_select_cluster");
+}
+
+async function graphMarkDoc(relativePath, status) {
+  await markDoc(relativePath, status);
+  if (graphSelectedClusterId !== null) {
+    await loadGraphCluster(graphSelectedClusterId, true);
+  }
+}
+
+function renderGraphDetail() {
+  if (!graphClusterData || !graphClusterData.files || !graphClusterData.files.length) {
+    $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(tr("graph_select_cluster"))}</div>`;
+    return;
+  }
+  const selected = graphClusterData.files.find(item => item.relative_path === graphSelectedDocPath) || graphClusterData.files[0];
+  graphSelectedDocPath = selected.relative_path;
+  const relatedEdges = (graphClusterData.edges || [])
+    .filter(edge => edge.left_path === selected.relative_path || edge.right_path === selected.relative_path)
+    .sort((a, b) => Number(b.relation_score || 0) - Number(a.relation_score || 0));
+  $("graphDocDetail").innerHTML = `
+    <div class="graph-detail-card">
+      <div class="graph-cluster-title">${escapeHtml(graphDisplayName(selected.relative_path))}</div>
+      <div class="muted">${escapeHtml(selected.relative_path)}</div>
+      <div class="stats">
+        <span class="pill">${escapeHtml(labelStatus(selected.status))}</span>
+        <span class="pill">q ${selected.quality}</span>
+        <span class="pill">${escapeHtml(selected.category)}</span>
+        <span class="pill">${escapeHtml(selected.document_kind || "Unknown")}</span>
+      </div>
+      <div class="stats">
+        <span class="pill">${tr("sensitive")} ${selected.sensitivity_risk}</span>
+        <span class="pill">${tr("public_label")} ${selected.public_writing_suitability}</span>
+      </div>
+      <p class="muted">${escapeHtml(selected.summary || tr("no_summary"))}</p>
+      <div class="graph-actions">
+        <button ${capabilities.open_file === false ? "disabled" : ""} onclick='openDoc(${JSON.stringify(selected.relative_path)})'>${tr("open")}</button>
+        <button ${capabilities.reveal_file === false ? "disabled" : ""} onclick='revealDoc(${JSON.stringify(selected.relative_path)})'>${tr("reveal")}</button>
+        <button onclick='graphMarkDoc(${JSON.stringify(selected.relative_path)}, "reading")'>${tr("mark_reading")}</button>
+        <button onclick='graphMarkDoc(${JSON.stringify(selected.relative_path)}, "read")'>${tr("mark_read")}</button>
+        <button onclick='graphMarkDoc(${JSON.stringify(selected.relative_path)}, "deferred")'>${tr("mark_deferred")}</button>
+      </div>
+    </div>
+    <div class="graph-detail-card">
+      <div class="graph-cluster-title">${tr("related_documents")}</div>
+      ${relatedEdges.length ? relatedEdges.map(edge => {
+        const neighbor = graphNeighborPath(edge, selected.relative_path);
+        return `
+          <div style="display:grid; gap:4px; margin-top:8px;">
+            <button class="graph-cluster-item" style="padding:8px;" onclick='selectGraphDoc(${JSON.stringify(neighbor)})'>
+              <div class="graph-cluster-title">${escapeHtml(graphDisplayName(neighbor))}</div>
+              <div class="muted">score ${edge.relation_score} · ${escapeHtml((edge.signals || []).join(", ") || tr("no_explicit_signal"))}</div>
+            </button>
+          </div>
+        `;
+      }).join("") : `<div class="muted" style="margin-top:8px;">${escapeHtml(tr("no_related_edges"))}</div>`}
+    </div>
+  `;
+}
+
+function applyClientFilters() {
+  filteredRows = sortRowsClient(allRows.filter(rowMatchesFilters), sortKey);
+  const pageCount = pageCountFor(filteredRows.length);
+  currentPage = Math.min(Math.max(currentPage, 1), pageCount);
+  renderStatsFromRows(filteredRows, allRows.length);
+  renderPager();
+  renderSortMarks();
+  renderPageRows();
+}
+
+function renderPageRows() {
+  const start = (currentPage - 1) * pageSize;
+  currentRows = filteredRows.slice(start, start + pageSize);
+  renderRows(currentRows);
+}
+
+function renderStatsFromRows(rows, totalCount) {
+  const counts = countStatus(rows);
+  const parts = [`${tr("match_prefix")} ${rows.length} / ${tr("all_prefix")} ${totalCount}`];
+  for (const key of ["failed","unread","reading","read","reread_needed","skipped","deferred"]) {
+    if (counts[key]) parts.push(`${labelStatus(key)} ${counts[key]}`);
+  }
+  $("stats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
+}
+
+function renderPager() {
+  const pageCount = pageCountFor(filteredRows.length);
+  const start = filteredRows.length ? ((currentPage - 1) * pageSize + 1) : 0;
+  const end = Math.min(currentPage * pageSize, filteredRows.length);
+  const html = `
+    <span class="muted">${start}-${end} / ${filteredRows.length}</span>
+    <button onclick="setPage(1)" ${currentPage <= 1 ? "disabled" : ""}>${tr("first_page")}</button>
+    <button onclick="setPage(${currentPage - 1})" ${currentPage <= 1 ? "disabled" : ""}>${tr("previous_page")}</button>
+    <span>${tr("page_label")} <input value="${currentPage}" onchange="setPage(Number(this.value))" /> / ${pageCount} ${tr("page_suffix")}</span>
+    <button onclick="setPage(${currentPage + 1})" ${currentPage >= pageCount ? "disabled" : ""}>${tr("next_page")}</button>
+    <button onclick="setPage(${pageCount})" ${currentPage >= pageCount ? "disabled" : ""}>${tr("last_page")}</button>
+    <label style="display:inline-flex; align-items:center; gap:4px;">${tr("page_size_label")} <input value="${pageSize}" min="1" onchange="setPageSize(Number(this.value))" /></label>`;
+  $("pagerTop").innerHTML = html;
+  $("pagerBottom").innerHTML = html;
+}
+
+function rowMatchesFilters(row) {
+  const status = $("status").value;
+  if (status && row.status !== status) return false;
+  const q = $("q").value.trim().toLowerCase();
+  if (readingScope === "source" || row.source_only || row.status === "failed") {
+    return !q || rowMatchesSearch(row, q);
+  }
+  const minQuality = Number($("min_quality").value || 0);
+  if (Number(row.quality || 0) < minQuality) return false;
+  const maxSensitivity = $("max_sensitivity_risk").value.trim();
+  if (maxSensitivity && Number(row.sensitivity_risk || 0) > Number(maxSensitivity)) return false;
+  const minPublic = $("min_public_writing_suitability").value.trim();
+  if (minPublic && Number(row.public_writing_suitability || 0) < Number(minPublic)) return false;
+
+  const selectedCategories = selectedValues("categories");
+  if (selectedCategories.length && selectedCategories.length < $("categories").options.length && !selectedCategories.includes(row.category)) return false;
+
+  const selectedTags = selectedValues("topic_tags");
+  if (selectedTags.length && selectedTags.length < $("topic_tags").options.length) {
+    const rowTags = row.topic_tags || [];
+    if (!selectedTags.some(tag => rowTags.includes(tag))) return false;
+  }
+
+  if (q && !rowMatchesSearch(row, q)) return false;
+  return true;
+}
+
+function rowMatchesSearch(row, q) {
+  const haystack = [
+    row.relative_path || "",
+    row.source_path || "",
+    row.category || "",
+    row.document_kind || "",
+    row.summary || "",
+    row.reason || "",
+    row.failure_stage || "",
+    row.failure_reason || "",
+    row.failure_error || "",
+    (row.topic_tags || []).join(" "),
+    row.note || ""
+  ].join(" ").toLowerCase();
+  return haystack.includes(q);
+}
+
+function exportFilteredRows(format) {
+  const rows = filteredRows || [];
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const extension = format === "jsonl" ? "jsonl" : "csv";
+  const filename = `doctriage-${readingScope}-${timestamp}.${extension}`;
+  const content = format === "jsonl" ? rowsToJsonl(rows) : rowsToCsv(rows);
+  const mime = format === "jsonl" ? "application/x-ndjson;charset=utf-8" : "text/csv;charset=utf-8";
+  downloadText(filename, content, mime);
+  showToast(`${tr("exported_rows")} ${rows.length}`);
+}
+
+function exportRow(row) {
+  return {
+    relative_path: row.relative_path || "",
+    source_path: row.source_path || "",
+    status: row.status || "",
+    quality: row.quality ?? "",
+    category: row.category || "",
+    document_kind: row.document_kind || "",
+    topic_tags: (row.topic_tags || []).join(", "),
+    sensitivity_risk: row.sensitivity_risk ?? "",
+    public_writing_suitability: row.public_writing_suitability ?? "",
+    source_mtime: row.source_mtime || "",
+    source_size_bytes: row.source_size_bytes ?? "",
+    summary: row.summary || "",
+    reason: row.reason || "",
+    knowledge_density: row.knowledge_density ?? "",
+    implementation_specificity: row.implementation_specificity ?? "",
+    logical_structure: row.logical_structure ?? "",
+    evidence_richness: row.evidence_richness ?? "",
+    actionability: row.actionability ?? "",
+    strategic_value: row.strategic_value ?? "",
+    freshness: row.freshness ?? "",
+    uniqueness: row.uniqueness ?? "",
+    note: row.note || "",
+    attempts: row.attempts ?? "",
+    failure_stage: row.failure_stage || "",
+    failure_reason: row.failure_reason || "",
+    failure_error: row.failure_error || ""
+  };
+}
+
+function rowsToJsonl(rows) {
+  return rows.map(row => JSON.stringify(exportRow(row))).join("\n") + (rows.length ? "\n" : "");
+}
+
+function rowsToCsv(rows) {
+  const headers = [
+    "relative_path",
+    "source_path",
+    "status",
+    "quality",
+    "category",
+    "document_kind",
+    "topic_tags",
+    "sensitivity_risk",
+    "public_writing_suitability",
+    "source_mtime",
+    "source_size_bytes",
+    "summary",
+    "reason",
+    "knowledge_density",
+    "implementation_specificity",
+    "logical_structure",
+    "evidence_richness",
+    "actionability",
+    "strategic_value",
+    "freshness",
+    "uniqueness",
+    "note",
+    "attempts",
+    "failure_stage",
+    "failure_reason",
+    "failure_error"
+  ];
+  const lines = [headers.join(",")];
+  for (const row of rows) {
+    const item = exportRow(row);
+    lines.push(headers.map(header => csvCell(item[header])).join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadText(filename, content, mime) {
+  const blob = new Blob([content], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function populateFacetOptions(rows) {
+  const categories = Array.from(new Set(rows.map(row => row.category).filter(Boolean))).sort();
+  const tags = Array.from(new Set(rows.flatMap(row => row.topic_tags || []).filter(Boolean))).sort();
+  populateMultiSelect("categories", categories);
+  populateMultiSelect("topic_tags", tags);
+}
+
+function populateMultiSelect(id, values) {
+  const select = $(id);
+  const selected = new Set(selectedValues(id));
+  select.innerHTML = values.map(value =>
+    `<option value="${escapeAttrValue(value)}" ${selected.has(value) ? "selected" : ""}>${escapeHtml(value)}</option>`
+  ).join("");
+}
+
+function selectMulti(id, checked) {
+  Array.from($(id).options).forEach(option => option.selected = checked);
+  currentPage = 1;
+  applyClientFilters();
+}
+
+function invertMulti(id) {
+  Array.from($(id).options).forEach(option => option.selected = !option.selected);
+  currentPage = 1;
+  applyClientFilters();
+}
+
+function countStatus(rows) {
+  const counts = {};
+  rows.forEach(row => counts[row.status] = (counts[row.status] || 0) + 1);
+  return counts;
+}
+
+function setSort(field) {
+  const next = {
+    quality: sortKey === "quality_desc" ? "quality_asc" : "quality_desc",
+    path: sortKey === "source_path_asc" || sortKey === "path_asc" ? "source_path_desc" : "source_path_asc",
+    source_mtime: sortKey === "source_mtime_desc" ? "source_mtime_asc" : "source_mtime_desc",
+    category: sortKey === "category_asc" ? "category_desc" : "category_asc",
+    status: sortKey === "status_asc" ? "status_desc" : "status_asc",
+    document_kind: sortKey === "kind_asc" ? "kind_desc" : "kind_asc",
+    sensitivity: sortKey === "sensitivity_asc" ? "sensitivity_desc" : "sensitivity_asc",
+    public: sortKey === "public_desc" ? "public_asc" : "public_desc"
+  };
+  sortKey = next[field] || defaultSortForScope(readingScope);
+  localStorage.setItem(sortStorageKey(readingScope), sortKey);
+  currentPage = 1;
+  applyClientFilters();
+}
+
+function sortRowsClient(rows, key) {
+  const sorted = [...rows];
+  const text = value => String(value || "").toLowerCase();
+  const num = value => Number(value || 0);
+  const sourcePath = row => text(row.source_path || row.relative_path);
+  const sourceMtime = row => Number(row.source_mtime_epoch || 0);
+  const comparators = {
+    quality_desc: (a, b) => num(b.quality) - num(a.quality) || text(a.relative_path).localeCompare(text(b.relative_path)),
+    quality_asc: (a, b) => num(a.quality) - num(b.quality) || text(a.relative_path).localeCompare(text(b.relative_path)),
+    path_asc: (a, b) => sourcePath(a).localeCompare(sourcePath(b)),
+    path_desc: (a, b) => sourcePath(b).localeCompare(sourcePath(a)),
+    source_path_asc: (a, b) => sourcePath(a).localeCompare(sourcePath(b)),
+    source_path_desc: (a, b) => sourcePath(b).localeCompare(sourcePath(a)),
+    source_mtime_desc: (a, b) => sourceMtime(b) - sourceMtime(a) || sourcePath(a).localeCompare(sourcePath(b)),
+    source_mtime_asc: (a, b) => sourceMtime(a) - sourceMtime(b) || sourcePath(a).localeCompare(sourcePath(b)),
+    category_asc: (a, b) => text(a.category).localeCompare(text(b.category)) || num(b.quality) - num(a.quality),
+    category_desc: (a, b) => text(b.category).localeCompare(text(a.category)) || num(b.quality) - num(a.quality),
+    status_asc: (a, b) => text(a.status).localeCompare(text(b.status)) || num(b.quality) - num(a.quality),
+    status_desc: (a, b) => text(b.status).localeCompare(text(a.status)) || num(b.quality) - num(a.quality),
+    kind_asc: (a, b) => text(a.document_kind).localeCompare(text(b.document_kind)) || num(b.quality) - num(a.quality),
+    kind_desc: (a, b) => text(b.document_kind).localeCompare(text(a.document_kind)) || num(b.quality) - num(a.quality),
+    sensitivity_asc: (a, b) => num(a.sensitivity_risk) - num(b.sensitivity_risk) || num(b.quality) - num(a.quality),
+    sensitivity_desc: (a, b) => num(b.sensitivity_risk) - num(a.sensitivity_risk) || num(b.quality) - num(a.quality),
+    public_desc: (a, b) => num(b.public_writing_suitability) - num(a.public_writing_suitability) || num(b.quality) - num(a.quality),
+    public_asc: (a, b) => num(a.public_writing_suitability) - num(b.public_writing_suitability) || num(b.quality) - num(a.quality)
+  };
+  sorted.sort(comparators[key] || comparators.quality_desc);
+  return sorted;
+}
+
+function renderSortMarks() {
+  document.querySelectorAll("[data-sort-mark]").forEach(item => item.textContent = "");
+  const map = {
+    quality_desc: ["quality", "↓"],
+    quality_asc: ["quality", "↑"],
+    path_asc: ["path", "↑"],
+    path_desc: ["path", "↓"],
+    source_path_asc: ["path", "↑"],
+    source_path_desc: ["path", "↓"],
+    source_mtime_desc: ["source_mtime", "↓"],
+    source_mtime_asc: ["source_mtime", "↑"],
+    category_asc: ["category", "↑"],
+    category_desc: ["category", "↓"],
+    status_asc: ["status", "↑"],
+    status_desc: ["status", "↓"],
+    kind_asc: ["document_kind", "↑"],
+    kind_desc: ["document_kind", "↓"],
+    sensitivity_asc: ["sensitivity", "↑"],
+    sensitivity_desc: ["sensitivity", "↓"],
+    public_desc: ["sensitivity", tr("sort_public_desc")],
+    public_asc: ["sensitivity", tr("sort_public_asc")]
+  };
+  const mark = map[sortKey];
+  if (!mark) return;
+  const target = document.querySelector(`[data-sort-mark="${mark[0]}"]`);
+  if (target) target.textContent = mark[1];
+}
+
+function pageCountFor(total) {
+  return Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
+}
+
+function setPage(page) {
+  if (!Number.isFinite(page)) return;
+  currentPage = Math.min(Math.max(Math.floor(page), 1), pageCountFor(filteredRows.length));
+  renderPager();
+  renderPageRows();
+}
+
+function setPageSize(value) {
+  if (!Number.isFinite(value) || value < 1) return;
+  pageSize = Math.max(1, Math.floor(value));
+  localStorage.setItem("doctriage_page_size", String(pageSize));
+  currentPage = 1;
+  renderPager();
+  renderPageRows();
+}
+
+function rowExplanation(row) {
+  const parts = [];
+  const summary = String(row.summary || "").trim();
+  const reason = String(row.reason || "").trim();
+  if (summary) parts.push(`${tr("explain_summary")}: ${summary}`);
+  if (reason) parts.push(`${tr("explain_reason")}: ${reason}`);
+  const dimensions = EXPLANATION_DIMENSIONS
+    .map(([field, labelKey]) => {
+      const value = Number(row[field]);
+      if (!Number.isFinite(value) || value <= 0) return "";
+      return `${tr(labelKey)} ${value}`;
+    })
+    .filter(Boolean);
+  if (dimensions.length) parts.push(`${tr("explain_dimensions")}: ${dimensions.join(" / ")}`);
+  if (row.failure) {
+    const failureParts = [];
+    if (row.failure_stage) failureParts.push(`${tr("explain_failure_stage")} ${row.failure_stage}`);
+    if (row.failure_reason) failureParts.push(`${tr("explain_failure_reason")} ${row.failure_reason}`);
+    if (row.attempts) failureParts.push(`${tr("explain_failure_attempts")} ${row.attempts}`);
+    if (row.failure_error && row.failure_error !== summary) {
+      failureParts.push(`${tr("explain_failure_error")} ${row.failure_error}`);
+    }
+    if (failureParts.length) parts.push(`${tr("explain_failure")}: ${failureParts.join(" / ")}`);
+  }
+  return parts.join("\n");
+}
+
+function renderRows(rows) {
+  $("rows").innerHTML = rows.map(row => {
+    const explanation = rowExplanation(row);
+    return `
+    <tr>
+      <td>${isPureFailureRow(row) ? "" : `<input type="checkbox" class="rowcheck" value="${escapeHtml(row.relative_path)}" />`}</td>
+      <td class="status-${escapeAttr(row.status)}">${labelStatus(row.status)}</td>
+      <td>${formatQuality(row)}</td>
+      <td>${escapeHtml(displayCategory(row))}</td>
+      <td>${escapeHtml(displayKind(row))}</td>
+      <td>${formatSensitivityPublic(row)}</td>
+      <td class="name">
+        <span class="doc-name ${explanation ? "has-summary" : ""}" tabindex="${explanation ? "0" : "-1"}" data-tip="${escapeAttrValue(explanation)}">${escapeHtml(row.relative_path || "")}</span>
+        ${row.source_path ? `<span class="doc-path">${escapeHtml(row.source_path)}</span>` : ""}
+        ${row.note ? `<br><span class="muted">${escapeHtml(row.note)}</span>` : ""}
+      </td>
+      <td>${escapeHtml(row.source_mtime_label || "")}${row.source_size_label ? `<br><span class="muted">${escapeHtml(row.source_size_label)}</span>` : ""}</td>
+      <td>${escapeHtml((row.topic_tags || []).join(", "))}</td>
+      <td class="actions">${renderRowActions(row)}</td>
+    </tr>`;
+  }).join("");
+  bindSummaryTooltips();
+}
+
+function isPureFailureRow(row) {
+  return row.failure && !row.source_scope;
+}
+
+function formatQuality(row) {
+  return Number.isFinite(Number(row.quality)) && row.quality !== null && row.quality !== undefined ? escapeHtml(row.quality) : "—";
+}
+
+function displayCategory(row) {
+  if (row.category) return row.category;
+  return row.source_only ? tr("scope_source_unscored") : "";
+}
+
+function displayKind(row) {
+  if (row.document_kind && row.document_kind !== "Unscored") return row.document_kind;
+  return row.source_only ? tr("scope_source_unscored") : (row.document_kind || "");
+}
+
+function formatSensitivityPublic(row) {
+  if (row.failure && !row.source_scope) return "—";
+  if (row.sensitivity_risk === null || row.sensitivity_risk === undefined || row.public_writing_suitability === null || row.public_writing_suitability === undefined) return "—";
+  return `${row.sensitivity_risk} / ${row.public_writing_suitability}`;
+}
+
+function renderRowActions(row) {
+  if (isPureFailureRow(row)) {
+    const missing = row.exists === false;
+    const missingTitle = missing ? ` title='${escapeAttrValue(tr("missing_source_title"))}'` : "";
+    return `
+      <button ${missing || capabilities.open_file === false ? `disabled${missingTitle || ` title='${escapeAttrValue(tr("disabled_open_title"))}'`}` : ""} onclick='openFailure(${JSON.stringify(row.source_path)})'>${tr("open")}</button>
+      <button ${missing || capabilities.reveal_file === false ? `disabled${missingTitle || ` title='${escapeAttrValue(tr("disabled_reveal_title"))}'`}` : ""} onclick='revealFailure(${JSON.stringify(row.source_path)})'>${tr("reveal")}</button>
+    `;
+  }
+  const missing = row.exists === false;
+  const missingTitle = missing ? ` title='${escapeAttrValue(tr("missing_source_title"))}'` : "";
+  return `
+    <button ${missing || capabilities.open_file === false ? `disabled${missingTitle || ` title='${escapeAttrValue(tr("disabled_open_title"))}'`}` : ""} onclick='openDoc(${JSON.stringify(row.relative_path)})'>${tr("open")}</button>
+    <button ${missing || capabilities.reveal_file === false ? `disabled${missingTitle || ` title='${escapeAttrValue(tr("disabled_reveal_title"))}'`}` : ""} onclick='revealDoc(${JSON.stringify(row.relative_path)})'>${tr("reveal")}</button>
+    <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "reading")'>${tr("mark_reading")}</button>
+    <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "read")'>${tr("mark_read")}</button>
+    <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "deferred")'>${tr("mark_deferred")}</button>
+    <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "skipped")'>${tr("mark_skipped")}</button>
+    <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "unread")'>${tr("mark_unread")}</button>
+  `;
+}
+
+async function markDoc(relativePath, status) {
+  const note = status === "read" ? "" : "";
+  const response = await fetch("/api/mark", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({relative_path: relativePath, status, note, ...readingPathPayload()})
+  });
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("mark_failed"));
+  showToast(trf("marked_status", {status: labelStatus(status)}));
+  loadRows();
+}
+
+function selectedPaths() {
+  return Array.from(document.querySelectorAll(".rowcheck:checked")).map(item => item.value);
+}
+
+function toggleAllRows(checked) {
+  document.querySelectorAll(".rowcheck").forEach(item => item.checked = checked);
+}
+
+async function bulkMark(status) {
+  const paths = selectedPaths();
+  if (!paths.length) return showToast(tr("select_documents_first"));
+  const response = await fetch("/api/mark-batch", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({relative_paths: paths, status, ...readingPathPayload()})
+  });
+  const payload = await response.json();
+  if (!response.ok) return showToast(payload.error || tr("bulk_mark_failed"));
+  showToast(trf("bulk_marked", {count: payload.count || 0}));
+  loadRows();
+}
+
+function openNextVisible() {
+  const row = currentRows.find(item => item.status === "unread" || item.status === "reread_needed") || currentRows[0];
+  if (!row) return showToast(tr("current_list_empty"));
+  openDoc(row.relative_path);
+}
+
+async function openDoc(relativePath) {
+  await postAction("/api/open", relativePath, tr("requested_open"));
+}
+
+async function revealDoc(relativePath) {
+  await postAction("/api/reveal", relativePath, tr("requested_reveal"));
+}
+
+async function openFailure(sourcePath) {
+  await postSourceAction("/api/open-failure", sourcePath, tr("requested_open"));
+}
+
+async function revealFailure(sourcePath) {
+  await postSourceAction("/api/reveal-failure", sourcePath, tr("requested_reveal"));
+}
+
+async function postAction(url, relativePath, okText) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({relative_path: relativePath, ...readingPathPayload()})
+  });
+  const payload = await response.json();
+  showToast(response.ok ? okText : (payload.error || tr("operation_failed")));
+}
+
+async function postSourceAction(url, sourcePath, okText) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({source_path: sourcePath, ...readingPathPayload()})
+  });
+  const payload = await response.json();
+  showToast(response.ok ? okText : (payload.error || tr("operation_failed")));
+}
+
+function labelStatus(status) {
+  return {
+    unread: tr("status_unread"),
+    reading: tr("status_reading"),
+    read: tr("status_read"),
+    reread_needed: tr("status_reread_needed"),
+    failed: tr("status_failed"),
+    skipped: tr("status_skipped"),
+    deferred: tr("status_deferred")
+  }[status] || status;
+}
+
+function showToast(text) {
+  const toast = $("toast");
+  toast.textContent = text;
+  toast.style.display = "block";
+  setTimeout(() => toast.style.display = "none", 2600);
+}
+
+function hideHelpTooltip() {
+  tooltipTarget = null;
+  $("tooltip").style.display = "none";
+}
+
+function positionHelpTooltip(target) {
+  const tooltip = $("tooltip");
+  const tip = target && target.dataset ? String(target.dataset.tip || "") : "";
+  if (!tip) {
+    hideHelpTooltip();
+    return;
+  }
+  tooltip.textContent = tip;
+  tooltip.style.display = "block";
+  tooltip.style.visibility = "hidden";
+  const margin = 12;
+  tooltip.style.maxWidth = Math.min(320, Math.max(180, window.innerWidth - margin * 2)) + "px";
+  const targetRect = target.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const left = Math.min(
+    Math.max(margin, targetRect.left + targetRect.width / 2 - tooltipRect.width / 2),
+    window.innerWidth - tooltipRect.width - margin
+  );
+  const top = Math.max(margin, targetRect.top - tooltipRect.height - 10);
+  tooltip.style.left = left + "px";
+  tooltip.style.top = top + "px";
+  tooltip.style.visibility = "visible";
+}
+
+function showHelpTooltip(target) {
+  tooltipTarget = target;
+  positionHelpTooltip(target);
+}
+
+function refreshHelpTooltip() {
+  if (tooltipTarget) positionHelpTooltip(tooltipTarget);
+}
+
+function bindSummaryTooltips(root = document) {
+  root.querySelectorAll("[data-tip]").forEach(item => {
+    if (item.dataset.tooltipBound === "1") return;
+    item.dataset.tooltipBound = "1";
+    item.addEventListener("mouseenter", () => showHelpTooltip(item));
+    item.addEventListener("mouseleave", hideHelpTooltip);
+    item.addEventListener("focus", () => showHelpTooltip(item));
+    item.addEventListener("blur", hideHelpTooltip);
+  });
+}
+
+function initHelpTooltips() {
+  bindSummaryTooltips();
+  window.addEventListener("scroll", hideHelpTooltip, true);
+  window.addEventListener("resize", refreshHelpTooltip);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function escapeAttr(value) {
+  return String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function escapeAttrValue(value) {
+  return escapeHtml(value);
+}
+
+function initReadingControls() {
+  const scopeSelect = $("reading_scope");
+  if (scopeSelect) {
+    scopeSelect.value = readingScope;
+    scopeSelect.addEventListener("change", () => {
+      const previousScope = readingScope;
+      readingScope = scopeSelect.value || "analysis";
+      localStorage.setItem("doctriage_reading_scope", readingScope);
+      sortKey = localStorage.getItem(sortStorageKey(readingScope)) || defaultSortForScope(readingScope);
+      currentPage = 1;
+      loadRows();
+    });
+  }
+  for (const id of ["status","min_quality","q","max_sensitivity_risk","min_public_writing_suitability","categories","topic_tags"]) {
+    const element = $(id);
+    if (!element) continue;
+    element.addEventListener("change", () => {
+      currentPage = 1;
+      applyClientFilters();
+    });
+  }
+  $("q").addEventListener("input", () => {
+    currentPage = 1;
+    applyClientFilters();
+  });
+}
+
+function initGraphControls() {
+  for (const id of ["graph_q", "graph_min_size"]) {
+    const element = $(id);
+    if (!element) continue;
+    const eventName = id === "graph_q" ? "input" : "change";
+    element.addEventListener(eventName, () => applyGraphFilters(true));
+  }
+}
+
+initReadingControls();
+initGraphControls();
+initRunFormPersistence();
+initReadingTargetPersistence();
+initGraphTargetPersistence();
+initRagTargetPersistence();
+initAnydocsTargetPersistence();
+initHelpTooltips();
+applyStoredRunFormState();
+const readingApplied = applyStoredReadingTargetState();
+const graphApplied = applyStoredGraphTargetState();
+const ragApplied = applyStoredRagTargetState();
+const anydocsApplied = applyStoredAnydocsTargetState();
+if (!readingApplied) syncReadingTargetFromRunOutput({force: true, syncGraph: !graphApplied, syncAnydocs: !anydocsApplied});
+if (!graphApplied) syncGraphTargetFromReadingOutput({force: true, syncAnydocs: !anydocsApplied});
+if (!ragApplied) syncRagTargetFromReadingOutput({force: true});
+if (!anydocsApplied) syncAnydocsTargetFromGraphOutput({force: true});
+clearGraphState("empty_graph");
+clearRagState("rag_no_index");
+applyI18n();
+loadConfig();
+switchTab(localStorage.getItem("doctriage_tab") || "analysis");
+setInterval(() => {
+  if ($("section-analysis").classList.contains("active")) loadAnalysis();
+  if ($("section-graph").classList.contains("active") && graphMeta && graphMeta.task && graphMeta.task.running) loadGraph();
+  if ($("section-rag").classList.contains("active")) loadRagStatus();
+}, 3000);

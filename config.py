@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     RELATIONSHIP_USE_EMBEDDINGS: bool = Field(default=False)
     RELATIONSHIP_USE_TEXT_CITATIONS: bool = Field(default=False)
     RELATIONSHIP_WORKERS: int | None = Field(default=None, ge=1, le=64)
+    RELATIONSHIP_WORKER_MAX_TASKS: int = Field(default=200, ge=1, le=10000)
     RELATIONSHIP_MIN_SCORE: float = Field(default=0.72, ge=0.0, le=1.0)
     RELATIONSHIP_CLUSTER_MIN_SCORE: float = Field(default=0.88, ge=0.0, le=1.0)
     RELATIONSHIP_MAX_RECORDS: int | None = Field(default=None, ge=1)
@@ -116,9 +117,15 @@ class Settings(BaseSettings):
     RELATIONSHIP_EMBEDDING_LLM_UNLOAD_POLL_SECONDS: float = Field(default=1.0, ge=0.1, le=60.0)
     EMBEDDING_ENDPOINT: str = Field(default="http://localhost:11434/api/embeddings")
     EMBEDDING_MODEL: str | None = Field(default=None)
+    EMBEDDING_API_KEY: str | None = Field(default=None)
     EMBEDDING_TIMEOUT_SECONDS: int = Field(default=120, ge=5, le=1800)
     EMBEDDING_TEXT_MAX_CHARS: int = Field(default=1200, ge=100, le=8000)
     EMBEDDING_CACHE_ENABLED: bool = Field(default=True)
+    RAG_CHUNK_MAX_CHARS: int = Field(default=1400, ge=200, le=12000)
+    RAG_CHUNK_OVERLAP_CHARS: int = Field(default=180, ge=0, le=4000)
+    RAG_MIN_QUALITY: int = Field(default=75, ge=0, le=100)
+    RAG_MAX_DOCUMENTS: int | None = Field(default=None, ge=1)
+    RAG_MAX_SEARCH_RESULTS: int = Field(default=10, ge=1, le=100)
 
     CATEGORY_MAP: dict[str, str] = Field(
         default_factory=lambda: DEFAULT_CATEGORY_MAP.copy()
@@ -214,8 +221,40 @@ class Settings(BaseSettings):
         return self.relationship_dir / "embedding_cache.jsonl"
 
     @property
+    def embedding_store_path(self) -> Path:
+        return self.relationship_dir / "embedding_store.sqlite3"
+
+    @property
     def embedding_progress_path(self) -> Path:
         return self.relationship_dir / "embedding_progress.json"
+
+    @property
+    def relationship_progress_path(self) -> Path:
+        return self.relationship_dir / "progress.json"
+
+    @property
+    def rag_dir(self) -> Path:
+        return self.OUTPUT_ROOT / "_rag"
+
+    @property
+    def rag_documents_path(self) -> Path:
+        return self.rag_dir / "documents.jsonl"
+
+    @property
+    def rag_chunks_path(self) -> Path:
+        return self.rag_dir / "chunks.jsonl"
+
+    @property
+    def rag_vectors_path(self) -> Path:
+        return self.rag_dir / "vectors.jsonl"
+
+    @property
+    def rag_manifest_path(self) -> Path:
+        return self.rag_dir / "manifest.json"
+
+    @property
+    def rag_progress_path(self) -> Path:
+        return self.rag_dir / "progress.json"
 
 
 @lru_cache(maxsize=1)

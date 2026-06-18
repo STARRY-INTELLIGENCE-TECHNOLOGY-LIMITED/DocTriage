@@ -9,19 +9,28 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config import DEFAULT_SUPPORTED_EXTENSIONS
+RAG_REDACTION_TERMS_ENV = "DOCTRIAGE_RAG_REDACT_TERMS"
+RAG_REDACTION_MAPPINGS_ENV = "DOCTRIAGE_RAG_REDACT_MAPPINGS"
+RAG_REDACTION_PLACEHOLDER_ENV = "DOCTRIAGE_RAG_REDACT_PLACEHOLDER"
+RAG_REDACTION_DROP_ENV = "DOCTRIAGE_RAG_REDACT_DROP_MATCHED_DOCUMENTS"
+
+from config import DEFAULT_SUPPORTED_EXTENSIONS, Settings
+from bundle_exporter import BundleSelection, export_bundle
 from runtime_encoding import (
     configure_utf8_runtime,
     decode_process_output,
@@ -38,6 +47,16 @@ from reading_tracker import (
     materialized_target_path,
     parse_categories,
 )
+from ollama_runtime import models_are_same, resolve_ollama_runtime_endpoint
+
+
+@dataclass(slots=True)
+class ManagedProcessTask:
+    process: subprocess.Popen
+    command: list[str] | None
+    kind: str | None = None
+    started_epoch: float | None = None
+    cleanup_started: bool = False
 
 
 @dataclass(slots=True)
@@ -45,2757 +64,57 @@ class AppState:
     paths: ReadingPaths | None = None
     process: subprocess.Popen | None = None
     process_command: list[str] | None = None
+    process_started_epoch: float | None = None
     relationship_process: subprocess.Popen | None = None
     relationship_process_kind: str | None = None
     relationship_process_command: list[str] | None = None
+    rag_process: subprocess.Popen | None = None
+    rag_process_kind: str | None = None
+    rag_process_command: list[str] | None = None
+    analysis_tasks: dict[str, ManagedProcessTask] = field(default_factory=dict)
+    relationship_tasks: dict[str, ManagedProcessTask] = field(default_factory=dict)
+    rag_tasks: dict[str, ManagedProcessTask] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 SOURCE_FILE_SCAN_CACHE_TTL_SECONDS = 2.0
 _SOURCE_FILE_SCAN_CACHE: dict[Path, tuple[float, list[Path]]] = {}
 _SOURCE_FILE_SCAN_CACHE_LOCK = threading.Lock()
+DEFAULT_LLM_ENDPOINT = "http://localhost:11434/api/generate"
+DEFAULT_EMBEDDING_ENDPOINT = "http://localhost:11434/api/embeddings"
+DEFAULT_ANYDOCS_URL = "http://127.0.0.1:8000/"
+HTTP_PROBE_TIMEOUT_SECONDS = 5.0
+HTTP_PROBE_MAX_BYTES = 1024 * 1024
+SUBPROCESS_POPEN_TYPE = subprocess.Popen
+COMPLETED_TASK_PROCESS_GRACE_SECONDS = 30.0
+TASK_WATCH_POLL_SECONDS = 2.0
 
+if os.name == "nt":
+    MANAGED_PROCESS_CREATIONFLAGS = subprocess.CREATE_NO_WINDOW
+else:
+    MANAGED_PROCESS_CREATIONFLAGS = 0
 
-HTML_PAGE = r"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DocTriage Console</title>
-  <style>
-    :root { color-scheme: light; --line:#d7dde8; --muted:#5f6b7a; --bg:#f6f8fb; --text:#172033; --blue:#1d4ed8; --green:#15803d; --red:#b91c1c; --orange:#c2410c; }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; color: var(--text); background: var(--bg); }
-    header { padding: 16px 20px; background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
-    .header-top { display: flex; align-items: center; gap: 12px; padding-right: 132px; }
-    .ui-language-switch { position: absolute; top: 14px; right: 20px; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
-    .ui-language-switch .language-icon { color: var(--muted); font-size: 12px; font-weight: 600; line-height: 1; }
-    .ui-language-switch select { width: 74px; height: 24px; border: 0; padding: 0 2px; background: transparent; font-size: 12px; }
-    h1 { margin: 0 0 12px; font-size: 20px; }
-    .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
-    .tab { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-    .tab.active { background: var(--blue); border-color: var(--blue); color: #fff; }
-    .filters, .run-grid { display: grid; grid-template-columns: repeat(8, minmax(96px, 1fr)); gap: 8px; align-items: end; }
-    .run-grid { grid-template-columns: repeat(6, minmax(120px, 1fr)); }
-    .run-toolbar { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    .relationship-toolbar { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: flex-start; min-width: 0; }
-    .relationship-options { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; min-width: 0; }
-    .relationship-option { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
-    .relationship-option input[type=checkbox] { flex: 0 0 auto; }
-    .relationship-embedding-row { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; min-width: 0; }
-    .embedding-option input[type=text] { width: min(280px, 34vw); min-width: 180px; }
-    .relationship-actions { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    .reading-filters { grid-template-columns: minmax(120px, 150px) minmax(110px, 140px) minmax(100px, 120px) minmax(190px, 1fr) minmax(190px, 1fr) minmax(160px, 1fr) minmax(100px, 120px) minmax(120px, 140px) auto; align-items: start; }
-    .reading-target { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto minmax(220px, 1fr); gap: 8px; align-items: end; }
-    label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
-    .label-row { display: inline-flex; align-items: center; gap: 4px; min-height: 16px; }
-    .help { display: inline-grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); background: #fff; font-size: 11px; line-height: 1; cursor: help; position: relative; }
-    .floating-tip { position: fixed; left: 0; top: 0; display: none; max-width: 320px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #172033; color: #fff; font-size: 12px; line-height: 1.45; white-space: pre-line; z-index: 20; box-shadow: 0 8px 20px rgba(15, 23, 42, 0.18); }
-    input, select, button { height: 32px; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 0 8px; font: inherit; }
-    select[multiple] { height: 72px; padding: 4px 6px; min-width: 0; }
-    input[type=checkbox] { width: 18px; height: 18px; }
-    button { cursor: pointer; color: var(--text); }
-    button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-    button.danger { background: var(--red); border-color: var(--red); color: #fff; }
-    .toggle-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .toggle-inline > input[type=text] { flex: 1 1 220px; min-width: 0; }
-    main { padding: 16px 20px; }
-    section { display: none; }
-    section.active { display: block; }
-    .panel { background: #fff; border: 1px solid var(--line); padding: 12px; margin-bottom: 12px; }
-    .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-    .stats .pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-    .summary-bar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
-    .summary-bar .stats { margin-bottom: 0; }
-    .graph-layout { display: grid; grid-template-columns: minmax(260px, 320px) minmax(460px, 1.6fr) minmax(280px, 0.9fr); gap: 12px; align-items: start; }
-    .graph-toolbar { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto minmax(220px, 1fr) minmax(120px, 150px) auto; gap: 8px; align-items: end; }
-    .graph-clusters { display: grid; gap: 8px; max-height: calc(100vh - 280px); overflow: auto; }
-    .graph-cluster-item { width: 100%; height: auto; text-align: left; padding: 10px; display: grid; gap: 6px; }
-    .graph-cluster-item.active { border-color: var(--blue); box-shadow: inset 0 0 0 1px var(--blue); background: #eef4ff; }
-    .graph-cluster-title { font-size: 13px; font-weight: 600; color: var(--text); }
-    .graph-cluster-preview { font-size: 12px; color: var(--muted); word-break: break-word; }
-    .graph-canvas { min-height: 460px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfe; overflow: auto; }
-    .graph-svg { width: 100%; height: 460px; display: block; }
-    .graph-edge-list { display: grid; gap: 8px; margin-top: 10px; max-height: 220px; overflow: auto; }
-    .graph-edge-item { border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: #fff; font-size: 12px; }
-    .graph-detail { display: grid; gap: 10px; }
-    .graph-detail-card { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: #fff; }
-    .graph-detail-card p { margin: 0; }
-    .graph-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-    .graph-actions button { height: 28px; padding: 0 8px; font-size: 12px; }
-    .graph-empty { display: grid; place-items: center; min-height: 180px; color: var(--muted); font-size: 13px; text-align: center; }
-    .pager { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; font-size: 13px; }
-    .pager input { width: 64px; }
-    .pager button { height: 28px; padding: 0 7px; }
-    .multi-actions { display: flex; gap: 4px; }
-    .multi-actions button { height: 24px; padding: 0 6px; font-size: 12px; }
-    .pill { background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; font-size: 13px; }
-    .progress { height: 12px; border: 1px solid var(--line); background: #eef2f7; border-radius: 999px; overflow: hidden; margin: 8px 0; }
-    .progress > div { height: 100%; width: 0%; background: var(--green); }
-    .progress.embedding > div { background: var(--orange); }
-    .embedding-progress-wrap { display: none; margin-top: 10px; }
-    pre { background: #101827; color: #e5e7eb; padding: 12px; overflow: auto; max-height: 360px; border-radius: 6px; white-space: pre-wrap; }
-    .table-wrap { background: #fff; border: 1px solid var(--line); overflow: auto; max-height: calc(100vh - 250px); }
-    table { width: 100%; border-collapse: collapse; min-width: 1200px; }
-    th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; font-size: 13px; }
-    th { background: #f2f5fa; position: sticky; top: 0; z-index: 3; }
-    .th-sort { display: inline-flex; align-items: center; gap: 4px; height: auto; padding: 0; border: 0; background: transparent; color: inherit; font-weight: 600; cursor: pointer; }
-    .sort-mark { color: var(--blue); font-size: 11px; min-width: 10px; }
-    td.name { max-width: 420px; word-break: break-word; }
-    .doc-name { display: inline; font-weight: 600; color: var(--text); }
-    .doc-name.has-summary { cursor: help; text-decoration: underline dotted var(--muted); text-underline-offset: 3px; }
-    .doc-path { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; user-select: text; }
-    .muted { color: var(--muted); }
-    .actions { display: flex; gap: 4px; flex-wrap: wrap; min-width: 300px; }
-    .actions button { height: 28px; font-size: 12px; padding: 0 6px; }
-    .status-unread { color: #b45309; font-weight: 600; }
-    .status-reading { color: #1d4ed8; font-weight: 600; }
-    .status-read { color: #15803d; font-weight: 600; }
-    .status-reread_needed { color: #be123c; font-weight: 600; }
-    .status-failed { color: var(--red); font-weight: 600; }
-    .toast { position: fixed; right: 16px; bottom: 16px; background: #172033; color: #fff; padding: 10px 12px; border-radius: 6px; display: none; max-width: 520px; }
-    @media (max-width: 1200px) { .graph-layout { grid-template-columns: 1fr; } }
-    @media (max-width: 1000px) { .filters, .run-grid, .reading-filters, .reading-target, .graph-toolbar { grid-template-columns: repeat(2, minmax(120px, 1fr)); } .summary-bar { align-items: stretch; flex-direction: column; } }
-  </style>
-</head>
-<body>
-  <header>
-    <div class="header-top">
-      <h1 data-i18n="app_title">DocTriage 控制台</h1>
-    </div>
-    <div class="ui-language-switch" title="UI language">
-      <span class="language-icon" aria-hidden="true">A/文</span>
-      <select id="ui_language" onchange="setUiLanguage(this.value)" aria-label="UI language">
-        <option value="zh-CN">中文</option>
-        <option value="en">EN</option>
-      </select>
-    </div>
-    <div class="tabs">
-      <button id="tab-analysis" class="tab active" onclick="switchTab('analysis')" data-i18n="tab_analysis">分析执行</button>
-      <button id="tab-reading" class="tab" onclick="switchTab('reading')" data-i18n="tab_reading">阅读台</button>
-      <button id="tab-graph" class="tab" onclick="switchTab('graph')" data-i18n="tab_graph">关系图谱</button>
-    </div>
-  </header>
-  <main>
-    <section id="section-analysis" class="active">
-      <div class="panel">
-        <div class="run-grid">
-          <label><span class="label-row"><span data-i18n="source_dir">源目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_source_dir" data-tip="待分析的原始文档目录。程序会递归扫描其下支持的文件类型。不要把输出目录放到这个目录里面。">?</span></span><input id="run_source_dir" placeholder="请选择源文档目录" data-i18n-placeholder="ph_source_dir" /></label>
-          <button id="pick_source_btn" onclick="pickFolder('run_source_dir')" data-i18n="pick_source_dir">选择源目录</button>
-          <label><span class="label-row"><span data-i18n="output_dir">输出目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_dir" data-tip="写入进度、日志、评分结果和可选复制结果的目录。同一输出目录会自动续跑；同一时间只允许一个分析进程写入。">?</span></span><input id="run_output_root" placeholder="请选择输出目录" data-i18n-placeholder="ph_output_dir" /></label>
-          <button id="pick_output_btn" onclick="pickFolder('run_output_root')" data-i18n="pick_output_dir">选择输出目录</button>
-          <label><span class="label-row">LLM Endpoint <span class="help" tabindex="0" data-i18n-tip="tip_llm_endpoint" data-tip="文档评分调用的文本模型接口。Ollama 默认是 /api/generate；如果你切换服务地址，这里要一起改。">?</span></span><input id="run_llm_endpoint" value="http://localhost:11434/api/generate" /></label>
-          <label><span class="label-row"><span data-i18n="model">模型</span> <span class="help" tabindex="0" data-i18n-tip="tip_model" data-tip="用于文档分类、打分和摘要理解的模型名。Embedding 关系需要单独填写向量模型，不会自动沿用这里的模型。">?</span></span><input id="run_llm_model" value="gemma4:e4b" /></label>
-          <label><span class="label-row"><span data-i18n="output_language">输出语言</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_language" data-tip="摘要和原因的输出语言。自动会根据文档主体语言推断；也可以强制指定一种语言。">?</span></span>
-            <select id="run_output_language">
-              <option value="auto" data-i18n="lang_auto">自动</option>
-              <option value="zh-CN" data-i18n="lang_zh">中文</option>
-              <option value="en" data-i18n="lang_en">English</option>
-              <option value="ja" data-i18n="lang_ja">日本語</option>
-              <option value="ko" data-i18n="lang_ko">한국어</option>
-              <option value="de" data-i18n="lang_de">Deutsch</option>
-              <option value="fr" data-i18n="lang_fr">Français</option>
-              <option value="es" data-i18n="lang_es">Español</option>
-            </select>
-          </label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="concurrency">并发</span> <span class="help" tabindex="0" data-i18n-tip="tip_concurrency" data-tip="同时向 LLM 发起的请求数。大目录和本地模型首跑建议 1；模型空闲且显存足够时再逐步上调。">?</span></span><input id="run_concurrency" type="number" value="1" min="1" max="64" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="limit">数量上限</span> <span class="help" tabindex="0" data-i18n-tip="tip_limit" data-tip="只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。">?</span></span><input id="run_limit" type="number" min="1" placeholder="空为全量" data-i18n-placeholder="ph_limit" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="max_mb">最大 MB</span> <span class="help" tabindex="0" data-i18n-tip="tip_max_mb" data-tip="跳过超过这个体积的候选文件，避免极大 PDF 或 Office 文档拖慢首轮筛选。">?</span></span><input id="run_max_file_size_mb" type="number" value="80" min="1" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="quality_threshold">质量阈值</span> <span class="help" tabindex="0" data-i18n-tip="tip_quality_threshold" data-tip="达到这个分数的文档会被视为高价值候选。仅评分模式下用于评分分层和后续筛选，不生成分类目录。">?</span></span><input id="run_quality_threshold" type="number" value="75" min="0" max="100" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="timeout_seconds">超时秒</span> <span class="help" tabindex="0" data-i18n-tip="tip_timeout_seconds" data-tip="单个 LLM 请求最长等待时间。模型较慢或文档较大时可以调高；过高会让失败请求卡更久。">?</span></span><input id="run_timeout_seconds" type="number" value="240" min="5" /></label>
-          <label class="advanced-run relationship-option"><input id="run_document_summary" type="checkbox" /><span class="label-row"><span data-i18n="summary">摘要</span> <span class="help" tabindex="0" data-i18n-tip="tip_summary" data-tip="把本地短摘要写入 decisions.jsonl，后续做关系挖掘、公开写作筛选和人工复核时更有用。会多占一点状态文件空间。">?</span></span></label>
-          <label class="advanced-run relationship-option"><input id="run_plan_only" type="checkbox" /><span class="label-row"><span data-i18n="plan_only">仅评分</span> <span class="help" tabindex="0" data-i18n-tip="tip_plan_only" data-tip="只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。">?</span></span></label>
-          <label class="advanced-run relationship-option"><input id="run_ocr_enabled" type="checkbox" /><span class="label-row"><span data-i18n="ocr_enabled">开启OCR</span> <span class="help" tabindex="0" data-i18n-tip="tip_ocr_enabled" data-tip="启用 OCR 解析纯图片或扫描版 PDF。会明显增加处理时间；普通带文本层的 PDF 和 Office 文档通常不需要。">?</span></span></label>
-          <label class="advanced-run relationship-option"><input id="run_manifest_analysis" type="checkbox" /><span class="label-row"><span data-i18n="manifest_analysis">开启目录分析</span> <span class="help" tabindex="0" data-i18n-tip="tip_manifest_analysis" data-tip="启用目录级系列/集合分析，再进入文件级评分。适合需要识别同一目录下系列资料的场景；大目录首轮可以先不勾选。">?</span></span></label>
-          <label class="advanced-run relationship-option"><input id="run_force_reprocess" type="checkbox" /><span class="label-row"><span data-i18n="force_reprocess">强制重跑</span> <span class="help" tabindex="0" data-i18n-tip="tip_force_reprocess" data-tip="忽略已处理记录，按当前参数重新处理匹配文件。适合你调整模型、阈值或提示词后重算。">?</span></span></label>
-          <label class="advanced-run relationship-option"><input id="run_content_hash" type="checkbox" /><span class="label-row"><span data-i18n="content_hash">内容 Hash</span> <span class="help" tabindex="0" data-i18n-tip="tip_content_hash" data-tip="变更检测除了时间和大小，还计算文件内容哈希。更准，但大目录和大文件会更慢。">?</span></span></label>
-        </div>
-        <div class="run-toolbar">
-          <button id="start_analysis_btn" class="primary" onclick="startAnalysis()" data-i18n="start_analysis">开始分析</button>
-          <button id="stop_analysis_btn" class="danger" onclick="stopAnalysis()" data-i18n="stop_analysis">停止分析</button>
-          <button id="reset_analysis_btn" class="danger" onclick="resetAnalysis()" data-i18n="reset_analysis">重置分析</button>
-          <div class="relationship-toolbar">
-            <div class="relationship-options">
-              <label class="relationship-option"><input id="run_mine_relationships" type="checkbox" /><span class="label-row"><span data-i18n="mine_relationships">挖掘关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_mine_relationships" data-tip="在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。">?</span></span></label>
-              <label class="relationship-option"><input id="run_relationship_text" type="checkbox" /><span class="label-row"><span data-i18n="title_citations">标题引用</span> <span class="help" tabindex="0" data-i18n-tip="tip_title_citations" data-tip="启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。">?</span></span></label>
-              <div class="relationship-embedding-row">
-                <label class="relationship-option embedding-option"><input id="run_relationship_embeddings" type="checkbox" /><span class="label-row"><span data-i18n="embedding_relationships">Embedding 关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_embedding_relationships" data-tip="给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。必须填写向量模型；更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。">?</span></span><input id="run_embedding_model" type="text" placeholder="填写向量模型后才能启用" data-i18n-placeholder="ph_embedding_model" /></label>
-                <span class="relationship-actions">
-                  <button id="early_relationships_btn" class="primary" onclick="startEarlyRelationships()" data-i18n="early_relationships">提前生成关系</button>
-                  <button id="stop_relationships_btn" class="danger" onclick="stopRelationships()" data-i18n="stop_relationships">停止生成关系</button>
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="panel">
-        <div id="analysisStats" class="stats"></div>
-        <div class="progress"><div id="analysisBar"></div></div>
-        <div id="embeddingProgressWrap" class="embedding-progress-wrap">
-          <div id="embeddingProgressStats" class="stats"></div>
-          <div class="progress embedding"><div id="embeddingProgressBar"></div></div>
-        </div>
-        <pre id="analysisLog"></pre>
-      </div>
-    </section>
-    <section id="section-reading">
-      <div class="panel reading-target">
-        <label><span data-i18n="reading_output_root">阅读目标输出目录</span> <input id="reading_output_root" placeholder="选择或输入已分析输出目录" data-i18n-placeholder="ph_reading_output_root" /></label>
-        <button id="pick_reading_output_btn" onclick="pickFolder('reading_output_root')" data-i18n="pick_folder">选择目录</button>
-        <button onclick="applyReadingOutput()" data-i18n="apply_reading_output">应用阅读目录</button>
-        <span class="muted" data-i18n="reading_target_hint">分析输出目录会单向回填这里；切换阅读目录不会影响分析执行。</span>
-      </div>
-      <div class="panel filters reading-filters">
-        <label><span data-i18n="reading_scope">阅读范围</span>
-          <select id="reading_scope">
-            <option value="analysis" data-i18n="scope_analysis">分析结果</option>
-            <option value="source" data-i18n="scope_source">全部源文件</option>
-          </select>
-        </label>
-        <label><span data-i18n="status">状态</span>
-          <select id="status">
-            <option value="" data-i18n="status_all">全部</option>
-            <option value="unread" data-i18n="status_unread">未读</option>
-            <option value="reading" data-i18n="status_reading">在读</option>
-            <option value="read" data-i18n="status_read">已读</option>
-            <option value="reread_needed" data-i18n="status_reread_needed">需重读</option>
-            <option value="failed" data-i18n="status_failed">失败</option>
-            <option value="skipped" data-i18n="status_skipped">跳过</option>
-            <option value="deferred" data-i18n="status_deferred">稍后</option>
-          </select>
-        </label>
-        <label><span data-i18n="min_quality">最低质量</span> <input id="min_quality" type="number" value="80" min="0" max="100" /></label>
-        <label><span data-i18n="category">分类</span>
-          <select id="categories" multiple></select>
-          <span class="multi-actions"><button onclick="selectMulti('categories', true)" data-i18n="select_all">全选</button><button onclick="invertMulti('categories')" data-i18n="invert">反选</button></span>
-        </label>
-        <label><span data-i18n="keywords">关键词</span>
-          <select id="topic_tags" multiple></select>
-          <span class="multi-actions"><button onclick="selectMulti('topic_tags', true)" data-i18n="select_all">全选</button><button onclick="invertMulti('topic_tags')" data-i18n="invert">反选</button></span>
-        </label>
-        <label><span data-i18n="search">搜索</span> <input id="q" placeholder="名称/路径/备注" data-i18n-placeholder="ph_text_search" /></label>
-        <label><span data-i18n="max_sensitivity">最高敏感</span> <input id="max_sensitivity_risk" type="number" min="0" max="100" /></label>
-        <label><span data-i18n="min_public">最低公开适配</span> <input id="min_public_writing_suitability" type="number" min="0" max="100" /></label>
-        <button class="primary" onclick="loadRows()" data-i18n="refresh">刷新</button>
-      </div>
-      <div class="summary-bar">
-        <div id="stats" class="stats"></div>
-        <div id="pagerTop" class="pager"></div>
-      </div>
-      <div class="panel" style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button onclick="toggleAllRows(true)" data-i18n="select_current_page">全选当前页</button>
-        <button onclick="toggleAllRows(false)" data-i18n="clear_selection">取消选择</button>
-        <button onclick="bulkMark('reading')" data-i18n="bulk_reading">批量在读</button>
-        <button onclick="bulkMark('read')" data-i18n="bulk_read">批量已读</button>
-        <button onclick="bulkMark('deferred')" data-i18n="bulk_deferred">批量稍后</button>
-        <button onclick="bulkMark('skipped')" data-i18n="bulk_skipped">批量跳过</button>
-        <button onclick="bulkMark('unread')" data-i18n="bulk_unread">批量未读</button>
-        <button class="primary" onclick="openNextVisible()" data-i18n="open_next">打开下一篇</button>
-        <button onclick="exportFilteredRows('csv')" data-i18n="export_filtered_csv">导出当前筛选 CSV</button>
-        <button onclick="exportFilteredRows('jsonl')" data-i18n="export_filtered_jsonl">导出当前筛选 JSONL</button>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th data-i18n="table_select">选择</th>
-              <th><button class="th-sort" onclick="setSort('status')"><span data-i18n="status">状态</span> <span class="sort-mark" data-sort-mark="status"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('quality')"><span data-i18n="table_quality">质量</span> <span class="sort-mark" data-sort-mark="quality"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('category')"><span data-i18n="category">分类</span> <span class="sort-mark" data-sort-mark="category"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('document_kind')"><span data-i18n="table_type">类型</span> <span class="sort-mark" data-sort-mark="document_kind"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('sensitivity')"><span data-i18n="table_sensitivity_public">敏感/公开</span> <span class="sort-mark" data-sort-mark="sensitivity"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('path')"><span data-i18n="table_name">名称</span> <span class="sort-mark" data-sort-mark="path"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('source_mtime')"><span data-i18n="table_modified">修改时间</span> <span class="sort-mark" data-sort-mark="source_mtime"></span></button></th>
-              <th data-i18n="table_tags">标签</th>
-              <th data-i18n="table_actions">操作</th>
-            </tr>
-          </thead>
-          <tbody id="rows"></tbody>
-        </table>
-      </div>
-      <div id="pagerBottom" class="pager" style="margin-top:10px;"></div>
-    </section>
-    <section id="section-graph">
-      <div class="panel">
-        <div class="graph-toolbar">
-          <label><span data-i18n="graph_output_root">图谱分析目录</span> <input id="graph_output_root" placeholder="选择或输入已分析输出目录" data-i18n-placeholder="ph_graph_output_root" /></label>
-          <button id="pick_graph_output_btn" onclick="pickFolder('graph_output_root')" data-i18n="pick_folder">选择目录</button>
-          <button onclick="applyGraphOutput()" data-i18n="apply_graph_output">应用图谱目录</button>
-          <label><span data-i18n="graph_search">簇搜索</span> <input id="graph_q" placeholder="路径/分类/标签" data-i18n-placeholder="ph_graph_search" /></label>
-          <label><span data-i18n="graph_min_size">最小簇大小</span> <input id="graph_min_size" type="number" min="2" value="2" /></label>
-          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-            <button id="graph_mine_btn" class="primary" onclick="startGraphTask('mine')" data-i18n="generate_relationships">生成关系结果</button>
-            <button id="graph_stop_relationships_btn" class="danger" onclick="stopRelationships()" data-i18n="stop_relationships">停止生成关系</button>
-            <button id="graph_export_graph_btn" onclick="startGraphTask('export_graph')" data-i18n="export_kg">导出知识图谱</button>
-            <button id="graph_export_bundle_btn" onclick="startGraphTask('export_bundle')" data-i18n="export_bundle">导出 Bundle</button>
-            <button onclick="loadGraph()" data-i18n="refresh_graph">刷新图谱</button>
-          </div>
-        </div>
-        <div id="graphTaskStats" class="stats" style="margin-top:10px;"></div>
-      </div>
-      <div class="graph-layout">
-        <div class="panel">
-          <div id="graphStats" class="stats"></div>
-          <div id="graphClusters" class="graph-clusters"></div>
-        </div>
-        <div class="panel">
-          <div id="graphClusterTitle" class="stats"></div>
-          <div id="graphCanvas" class="graph-canvas"></div>
-          <div id="graphEdges" class="graph-edge-list"></div>
-        </div>
-        <div class="panel">
-          <div id="graphDocDetail" class="graph-detail"></div>
-        </div>
-      </div>
-    </section>
-  </main>
-  <div id="tooltip" class="floating-tip"></div>
-  <div id="toast" class="toast"></div>
-  <script>
-    const $ = (id) => document.getElementById(id);
-    const I18N = {
-      "zh-CN": {
-        app_title: "DocTriage 控制台",
-        tab_analysis: "分析执行",
-        tab_reading: "阅读台",
-        tab_graph: "关系图谱",
-        source_dir: "源目录",
-        output_dir: "输出目录",
-        pick_source_dir: "选择源目录",
-        pick_output_dir: "选择输出目录",
-        model: "模型",
-        output_language: "输出语言",
-        lang_auto: "自动",
-        lang_zh: "中文",
-        lang_en: "English",
-        lang_ja: "日本語",
-        lang_ko: "한국어",
-        lang_de: "Deutsch",
-        lang_fr: "Français",
-        lang_es: "Español",
-        start_analysis: "开始分析",
-        early_relationships: "提前生成关系",
-        stop_analysis: "停止分析",
-        stop_relationships: "停止生成关系",
-        reset_analysis: "重置分析",
-        reading_output_root: "阅读目标输出目录",
-        graph_output_root: "图谱分析目录",
-        pick_folder: "选择目录",
-        apply_reading_output: "应用阅读目录",
-        apply_graph_output: "应用图谱目录",
-        reading_target_hint: "分析输出目录会单向回填这里；切换阅读目录不会影响分析执行。",
-        reading_scope: "阅读范围",
-        scope_analysis: "分析结果",
-        scope_source: "全部源文件",
-        scope_source_unscored: "未分析",
-        status: "状态",
-        min_quality: "最低质量",
-        category: "分类",
-        keywords: "关键词",
-        search: "搜索",
-        max_sensitivity: "最高敏感",
-        min_public: "最低公开适配",
-        refresh: "刷新",
-        select_all: "全选",
-        invert: "反选",
-        select_current_page: "全选当前页",
-        clear_selection: "取消选择",
-        bulk_reading: "批量在读",
-        bulk_read: "批量已读",
-        bulk_deferred: "批量稍后",
-        bulk_skipped: "批量跳过",
-        bulk_unread: "批量未读",
-        open_next: "打开下一篇",
-        export_filtered_csv: "导出当前筛选 CSV",
-        export_filtered_jsonl: "导出当前筛选 JSONL",
-        open: "打开",
-        reveal: "定位",
-        mark_reading: "在读",
-        mark_read: "已读",
-        mark_deferred: "稍后",
-        mark_skipped: "跳过",
-        mark_unread: "未读",
-        disabled_open_title: "当前环境不支持调用系统默认阅读器",
-        disabled_reveal_title: "当前环境不支持文件管理器定位",
-        missing_source_title: "源文件不存在，无法打开或定位",
-        table_select: "选择",
-        table_quality: "质量",
-        table_type: "类型",
-        table_sensitivity_public: "敏感/公开",
-        table_name: "名称",
-        table_modified: "修改时间",
-        table_tags: "标签",
-        table_actions: "操作",
-        graph_search: "簇搜索",
-        graph_min_size: "最小簇大小",
-        generate_relationships: "生成关系结果",
-        export_kg: "导出知识图谱",
-        export_bundle: "导出 Bundle",
-        refresh_graph: "刷新图谱",
-        concurrency: "并发",
-        limit: "数量上限",
-        max_mb: "最大 MB",
-        quality_threshold: "质量阈值",
-        timeout_seconds: "超时秒",
-        summary: "摘要",
-        plan_only: "仅评分",
-        ocr_enabled: "开启OCR",
-        manifest_analysis: "开启目录分析",
-        force_reprocess: "强制重跑",
-        content_hash: "内容 Hash",
-        mine_relationships: "挖掘关系",
-        title_citations: "标题引用",
-        embedding_relationships: "Embedding 关系",
-        status_unread: "未读",
-        status_reading: "在读",
-        status_read: "已读",
-        status_reread_needed: "需重读",
-        status_failed: "失败",
-        status_skipped: "跳过",
-        status_deferred: "稍后",
-        status_all: "全部",
-        no_summary: "无摘要",
-        empty_graph: "暂无关系结果",
-        graph_need_paths: "请先选择图谱分析目录",
-        graph_no_match: "没有匹配的关系簇",
-        graph_select_cluster: "选择一个关系簇查看文档详情",
-        graph_no_docs: "这个关系簇没有可展示的文档",
-        graph_no_edges: "当前文档没有可展示的关系边",
-        related_documents: "关联文档",
-        no_related_edges: "当前文档没有命中的关系边",
-        no_explicit_signal: "无显式信号",
-        uncategorized: "未分类",
-        no_preview_path: "无预览路径",
-        cluster: "簇",
-        documents_unit: "篇",
-        edges_unit: "条边",
-        sensitive: "敏感",
-        public_label: "公开",
-        match_prefix: "匹配",
-        all_prefix: "全部",
-        first_page: "首页",
-        previous_page: "上一页",
-        next_page: "下一页",
-        last_page: "末页",
-        page_label: "第",
-        page_suffix: "页",
-        page_size_label: "数量",
-        requested_open: "已请求打开",
-        requested_reveal: "已请求定位",
-        exported_rows: "已导出当前筛选",
-        pick_failed: "选择失败",
-        paths_apply_failed: "路径应用失败",
-        paths_applied: "路径已应用",
-        need_reading_output: "请先输入阅读目标输出目录",
-        need_graph_output: "请先输入图谱分析目录",
-        reading_output_apply_failed: "阅读目录应用失败",
-        reading_output_applied: "阅读目录已应用",
-        graph_output_apply_failed: "图谱目录应用失败",
-        graph_output_applied: "图谱目录已应用",
-        analysis_start_failed: "启动失败",
-        analysis_started: "已启动分析",
-        early_relationships_failed: "提前生成关系失败",
-        early_relationships_started: "已停止分析并开始生成关系",
-        analysis_preempting_relationships: "正在停止生成关系并准备开始分析",
-        embedding_model_required: "已勾选 Embedding 关系，请先填写 Embedding 模型。",
-        early_relationships_without_embedding_confirm: "未勾选 Embedding 关系且未填写 Embedding 模型。\n\n本次将只生成关系挖掘和标题引用，不生成 Embedding 向量。确认继续？\n\n取消后请勾选 Embedding 关系并填写模型名称，再重新点击提前生成关系。",
-        stop_requested: "已请求停止",
-        stop_failed: "停止失败",
-        relationship_stop_requested: "已请求停止生成关系",
-        relationship_stop_failed: "停止生成关系失败",
-        need_source_output: "请先应用源目录和输出目录",
-        reset_confirm: "将清空输出目录中的日志、状态和关系结果：\n{output}\n\n如果该目录中存在已复制的分类文件，也会一并清理。该操作不可恢复，确认继续？",
-        reset_failed: "重置失败",
-        output_reset: "输出目录已重置",
-        status_load_failed: "状态加载失败",
-        rows_load_failed: "加载失败",
-        graph_load_failed: "图谱加载失败",
-        graph_relations_exists: "存在 relations.jsonl",
-        graph_clusters_exists: "存在 clusters.json",
-        graph_decisions_exists: "存在 decisions.jsonl",
-        graph_task_mine: "关系结果生成",
-        graph_task_export_graph: "知识图谱导出",
-        graph_task_export_bundle: "Bundle 导出",
-        graph_task_running: "{task}中",
-        graph_need_analysis_once: "先完成至少一次文档分析",
-        graph_can_generate_relationships: "可直接生成关系结果",
-        graph_task_start_failed: "关系任务启动失败",
-        graph_task_started: "已启动{task}",
-        graph_cluster_load_failed: "关系簇加载失败",
-        graph_task_running_refresh: "{task}中，请稍后刷新",
-        graph_need_analysis_before_graph: "先完成一次文档分析，再生成关系图谱",
-        graph_no_relationships_generate: "还没有关系结果，可点击“生成关系结果”",
-        graph_task_running_detail: "后台任务运行中，完成后这里会显示局部图和证据。",
-        graph_generate_then_detail: "生成关系结果后，这里会显示局部图、证据和文档详情。",
-        mark_failed: "标记失败",
-        marked_status: "已标记：{status}",
-        select_documents_first: "请先选择文档",
-        bulk_mark_failed: "批量标记失败",
-        bulk_marked: "已批量标记 {count} 篇",
-        current_list_empty: "当前列表为空",
-        sort_public_desc: "公开↓",
-        sort_public_asc: "公开↑",
-        plan_only_pill: "仅评分：只记录评分与阅读标记，不复制文件",
-        running_pill: "运行中",
-        not_running_pill: "未运行",
-        progress_pill: "进度",
-        embedding_progress_pill: "Embedding 向量",
-        embedding_phase_loading_cache: "读取缓存",
-        embedding_phase_embedding: "生成中",
-        embedding_phase_complete: "完成",
-        embedding_phase_ready: "准备",
-        embedding_cached_pill: "已缓存",
-        embedding_generated_pill: "本次生成",
-        embedding_missing_pill: "剩余",
-        completed_pill: "完成",
-        concurrency_pill: "并发",
-        eta_waiting_pill: "ETA 等待连续规划",
-        speed_pill: "速度",
-        speed_waiting_pill: "速度等待连续规划",
-        unresolved_failures_pill: "未解决失败",
-        retry_recovered_pill: "重试恢复",
-        stale_lock_pid_pill: "陈旧锁 PID",
-        phase_not_started: "未启动",
-        phase_relationship_mining: "关系挖掘中",
-        phase_resume_preparing: "续传准备中",
-        phase_resume_skipping: "续传跳过中",
-        phase_scoring: "文档评分中",
-        phase_scanning: "扫描准备中",
-        phase_completed_with_failures: "分析完成，仍有失败",
-        phase_completed_relationships: "分析完成，关系已生成",
-        phase_completed_no_relationships: "分析完成，关系未生成",
-        phase_completed: "分析完成",
-        phase_stopped_resume: "已停止，可续传",
-        explain_summary: "摘要",
-        explain_reason: "评分理由",
-        explain_dimensions: "维度",
-        explain_failure: "失败",
-        explain_failure_stage: "阶段",
-        explain_failure_reason: "原因",
-        explain_failure_attempts: "尝试",
-        explain_failure_error: "错误",
-        dim_knowledge_density: "知识密度",
-        dim_implementation_specificity: "实现细节",
-        dim_logical_structure: "逻辑结构",
-        dim_evidence_richness: "证据",
-        dim_actionability: "可执行",
-        dim_strategic_value: "战略",
-        dim_freshness: "新鲜",
-        dim_uniqueness: "独特",
-        folder_picker_unavailable: "当前环境不支持图形目录选择，请手工输入路径",
-        operation_failed: "操作失败",
-        tip_source_dir: "待分析的原始文档目录。程序会递归扫描其下支持的文件类型。不要把输出目录放到这个目录里面。",
-        tip_output_dir: "写入进度、日志、评分结果和可选复制结果的目录。同一输出目录会自动续跑；同一时间只允许一个分析进程写入。",
-        tip_llm_endpoint: "文档评分调用的文本模型接口。Ollama 默认是 /api/generate；如果你切换服务地址，这里要一起改。",
-        tip_model: "用于文档分类、打分和摘要理解的模型名。Embedding 关系需要单独填写向量模型，不会自动沿用这里的模型。",
-        tip_output_language: "摘要和原因的输出语言。自动会根据文档主体语言推断；也可以强制指定一种语言。",
-        tip_concurrency: "同时向 LLM 发起的请求数。大目录和本地模型首跑建议 1；模型空闲且显存足够时再逐步上调。",
-        tip_limit: "只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。",
-        tip_max_mb: "跳过超过这个体积的候选文件，避免极大 PDF 或 Office 文档拖慢首轮筛选。",
-        tip_quality_threshold: "达到这个分数的文档会被视为高价值候选。仅评分模式下用于评分分层和后续筛选，不生成分类目录。",
-        tip_timeout_seconds: "单个 LLM 请求最长等待时间。模型较慢或文档较大时可以调高；过高会让失败请求卡更久。",
-        tip_summary: "把本地短摘要写入 decisions.jsonl，后续做关系挖掘、公开写作筛选和人工复核时更有用。会多占一点状态文件空间。",
-        tip_plan_only: "只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。",
-        tip_ocr_enabled: "启用 OCR 解析纯图片或扫描版 PDF。会明显增加处理时间；普通带文本层的 PDF 和 Office 文档通常不需要。",
-        tip_manifest_analysis: "启用目录级系列/集合分析，再进入文件级评分。适合需要识别同一目录下系列资料的场景；大目录首轮可以先不勾选。",
-        tip_force_reprocess: "忽略已处理记录，按当前参数重新处理匹配文件。适合你调整模型、阈值或提示词后重算。",
-        tip_content_hash: "变更检测除了时间和大小，还计算文件内容哈希。更准，但大目录和大文件会更慢。",
-        tip_mine_relationships: "在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。",
-        tip_title_citations: "启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。",
-        tip_embedding_relationships: "给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。必须填写向量模型；更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。",
-        ph_source_dir: "请选择源文档目录",
-        ph_output_dir: "请选择输出目录",
-        ph_reading_output_root: "选择或输入已分析输出目录",
-        ph_graph_output_root: "选择或输入已分析输出目录",
-        ph_text_search: "名称/路径/备注",
-        ph_graph_search: "路径/分类/标签",
-        ph_limit: "空为全量",
-        ph_embedding_model: "填写向量模型后才能启用"
-      },
-      en: {
-        app_title: "DocTriage Console",
-        tab_analysis: "Analysis",
-        tab_reading: "Reading",
-        tab_graph: "Graph",
-        source_dir: "Source directory",
-        output_dir: "Output directory",
-        pick_source_dir: "Pick source",
-        pick_output_dir: "Pick output",
-        model: "Model",
-        output_language: "Output language",
-        lang_auto: "Auto",
-        lang_zh: "Chinese",
-        lang_en: "English",
-        lang_ja: "Japanese",
-        lang_ko: "Korean",
-        lang_de: "German",
-        lang_fr: "French",
-        lang_es: "Spanish",
-        start_analysis: "Start analysis",
-        early_relationships: "Mine now",
-        stop_analysis: "Stop analysis",
-        stop_relationships: "Stop relationships",
-        reset_analysis: "Reset analysis",
-        reading_output_root: "Reading output directory",
-        graph_output_root: "Graph analysis directory",
-        pick_folder: "Pick folder",
-        apply_reading_output: "Apply reading directory",
-        apply_graph_output: "Apply graph directory",
-        reading_target_hint: "The analysis output directory fills this field one way. Switching the reading directory does not affect analysis execution.",
-        reading_scope: "Reading scope",
-        scope_analysis: "Analysis results",
-        scope_source: "All source files",
-        scope_source_unscored: "Unscored",
-        status: "Status",
-        min_quality: "Min quality",
-        category: "Category",
-        keywords: "Keywords",
-        search: "Search",
-        max_sensitivity: "Max sensitivity",
-        min_public: "Min public suitability",
-        refresh: "Refresh",
-        select_all: "Select all",
-        invert: "Invert",
-        select_current_page: "Select current page",
-        clear_selection: "Clear selection",
-        bulk_reading: "Bulk reading",
-        bulk_read: "Bulk read",
-        bulk_deferred: "Bulk defer",
-        bulk_skipped: "Bulk skip",
-        bulk_unread: "Bulk unread",
-        open_next: "Open next",
-        export_filtered_csv: "Export filtered CSV",
-        export_filtered_jsonl: "Export filtered JSONL",
-        open: "Open",
-        reveal: "Reveal",
-        mark_reading: "Reading",
-        mark_read: "Read",
-        mark_deferred: "Defer",
-        mark_skipped: "Skip",
-        mark_unread: "Unread",
-        disabled_open_title: "System default file opening is unavailable in this environment",
-        disabled_reveal_title: "File-manager reveal is unavailable in this environment",
-        missing_source_title: "Source file does not exist",
-        table_select: "Select",
-        table_quality: "Quality",
-        table_type: "Type",
-        table_sensitivity_public: "Sensitivity/public",
-        table_name: "Name",
-        table_modified: "Modified",
-        table_tags: "Tags",
-        table_actions: "Actions",
-        graph_search: "Cluster search",
-        graph_min_size: "Min cluster size",
-        generate_relationships: "Generate relationships",
-        export_kg: "Export graph",
-        export_bundle: "Export bundle",
-        refresh_graph: "Refresh graph",
-        concurrency: "Concurrency",
-        limit: "Limit",
-        max_mb: "Max MB",
-        quality_threshold: "Quality threshold",
-        timeout_seconds: "Timeout seconds",
-        summary: "Summary",
-        plan_only: "Plan only",
-        ocr_enabled: "Enable OCR",
-        manifest_analysis: "Enable directory analysis",
-        force_reprocess: "Force reprocess",
-        content_hash: "Content hash",
-        mine_relationships: "Mine relationships",
-        title_citations: "Title citations",
-        embedding_relationships: "Embedding relationships",
-        status_unread: "Unread",
-        status_reading: "Reading",
-        status_read: "Read",
-        status_reread_needed: "Reread needed",
-        status_failed: "Failed",
-        status_skipped: "Skipped",
-        status_deferred: "Deferred",
-        status_all: "All",
-        no_summary: "No summary",
-        empty_graph: "No relationship results",
-        graph_need_paths: "Select a graph analysis directory first",
-        graph_no_match: "No matching relationship clusters",
-        graph_select_cluster: "Select a relationship cluster to inspect documents",
-        graph_no_docs: "This cluster has no displayable documents",
-        graph_no_edges: "The selected document has no displayable relationship edges",
-        related_documents: "Related documents",
-        no_related_edges: "The selected document has no matching relationship edges",
-        no_explicit_signal: "No explicit signal",
-        uncategorized: "Uncategorized",
-        no_preview_path: "No preview path",
-        cluster: "Cluster",
-        documents_unit: "docs",
-        edges_unit: "edges",
-        sensitive: "Sensitive",
-        public_label: "Public",
-        match_prefix: "Matched",
-        all_prefix: "All",
-        first_page: "First",
-        previous_page: "Previous",
-        next_page: "Next",
-        last_page: "Last",
-        page_label: "Page",
-        page_suffix: "",
-        page_size_label: "Page size",
-        requested_open: "Open requested",
-        requested_reveal: "Reveal requested",
-        exported_rows: "Filtered rows exported",
-        pick_failed: "Selection failed",
-        paths_apply_failed: "Failed to apply paths",
-        paths_applied: "Paths applied",
-        need_reading_output: "Enter a reading output directory first",
-        need_graph_output: "Enter a graph analysis directory first",
-        reading_output_apply_failed: "Failed to apply reading directory",
-        reading_output_applied: "Reading directory applied",
-        graph_output_apply_failed: "Failed to apply graph directory",
-        graph_output_applied: "Graph directory applied",
-        analysis_start_failed: "Failed to start analysis",
-        analysis_started: "Analysis started",
-        early_relationships_failed: "Failed to mine relationships early",
-        early_relationships_started: "Analysis stopped and relationship generation started",
-        analysis_preempting_relationships: "Stopping relationship generation and preparing analysis",
-        embedding_model_required: "Embedding relationships are selected. Enter an embedding model first.",
-        early_relationships_without_embedding_confirm: "Embedding relationships are not selected and no embedding model is set.\n\nThis run will only mine relationships and title citations, without generating embedding vectors. Continue?\n\nCancel, then select Embedding relationships and enter a model name if you need vectors.",
-        stop_requested: "Stop requested",
-        stop_failed: "Failed to stop",
-        relationship_stop_requested: "Relationship stop requested",
-        relationship_stop_failed: "Failed to stop relationship generation",
-        need_source_output: "Apply source and output directories first",
-        reset_confirm: "This will clear logs, status, and relationship results in the output directory:\n{output}\n\nCopied routed files in that directory will also be removed. This cannot be undone. Continue?",
-        reset_failed: "Reset failed",
-        output_reset: "Output directory reset",
-        status_load_failed: "Failed to load status",
-        rows_load_failed: "Failed to load rows",
-        graph_load_failed: "Failed to load graph",
-        graph_relations_exists: "relations.jsonl exists",
-        graph_clusters_exists: "clusters.json exists",
-        graph_decisions_exists: "decisions.jsonl exists",
-        graph_task_mine: "Relationship generation",
-        graph_task_export_graph: "Graph export",
-        graph_task_export_bundle: "Bundle export",
-        graph_task_running: "{task} running",
-        graph_need_analysis_once: "Complete at least one document analysis first",
-        graph_can_generate_relationships: "Relationship generation is available",
-        graph_task_start_failed: "Failed to start relationship task",
-        graph_task_started: "Started {task}",
-        graph_cluster_load_failed: "Failed to load relationship cluster",
-        graph_task_running_refresh: "{task} is running. Refresh later.",
-        graph_need_analysis_before_graph: "Complete one document analysis before generating the graph",
-        graph_no_relationships_generate: "No relationship results yet. Click Generate relationships.",
-        graph_task_running_detail: "The background task is running. Local graph and evidence will appear here after it finishes.",
-        graph_generate_then_detail: "After relationship generation, local graph, evidence, and document details will appear here.",
-        mark_failed: "Failed to mark document",
-        marked_status: "Marked: {status}",
-        select_documents_first: "Select documents first",
-        bulk_mark_failed: "Failed to mark selected documents",
-        bulk_marked: "Marked {count} docs",
-        current_list_empty: "The current list is empty",
-        sort_public_desc: "Public↓",
-        sort_public_asc: "Public↑",
-        plan_only_pill: "Plan only: score and mark reading status without copying files",
-        running_pill: "Running",
-        not_running_pill: "Not running",
-        progress_pill: "Progress",
-        embedding_progress_pill: "Embedding vectors",
-        embedding_phase_loading_cache: "Loading cache",
-        embedding_phase_embedding: "Generating",
-        embedding_phase_complete: "Complete",
-        embedding_phase_ready: "Ready",
-        embedding_cached_pill: "Cached",
-        embedding_generated_pill: "Generated this run",
-        embedding_missing_pill: "Remaining",
-        completed_pill: "Completed",
-        concurrency_pill: "Concurrency",
-        eta_waiting_pill: "ETA waiting for steady planning",
-        speed_pill: "Speed",
-        speed_waiting_pill: "Speed waiting for steady planning",
-        unresolved_failures_pill: "Unresolved failures",
-        retry_recovered_pill: "Retry recovered",
-        stale_lock_pid_pill: "Stale lock PID",
-        phase_not_started: "Not started",
-        phase_relationship_mining: "Mining relationships",
-        phase_resume_preparing: "Preparing resume",
-        phase_resume_skipping: "Resume skipping",
-        phase_scoring: "Scoring documents",
-        phase_scanning: "Preparing scan",
-        phase_completed_with_failures: "Analysis complete, failures remain",
-        phase_completed_relationships: "Analysis complete, relationships generated",
-        phase_completed_no_relationships: "Analysis complete, relationships not generated",
-        phase_completed: "Analysis complete",
-        phase_stopped_resume: "Stopped, resumable",
-        explain_summary: "Summary",
-        explain_reason: "Scoring reason",
-        explain_dimensions: "Dimensions",
-        explain_failure: "Failure",
-        explain_failure_stage: "Stage",
-        explain_failure_reason: "Reason",
-        explain_failure_attempts: "Attempts",
-        explain_failure_error: "Error",
-        dim_knowledge_density: "Knowledge",
-        dim_implementation_specificity: "Implementation",
-        dim_logical_structure: "Structure",
-        dim_evidence_richness: "Evidence",
-        dim_actionability: "Actionability",
-        dim_strategic_value: "Strategic",
-        dim_freshness: "Freshness",
-        dim_uniqueness: "Uniqueness",
-        folder_picker_unavailable: "Folder picker is unavailable here; type the path manually",
-        operation_failed: "Operation failed",
-        tip_source_dir: "Original document directory. DocTriage recursively scans supported file types under this folder.",
-        tip_output_dir: "Directory for progress, logs, scoring results, and optional routed copies. A run can resume from the same output directory.",
-        tip_llm_endpoint: "Text model endpoint for document scoring. Ollama defaults to /api/generate.",
-        tip_model: "Model name for classification, scoring, and summaries. Embedding relationships require a separate embedding model and will not reuse this model automatically.",
-        tip_output_language: "Language for generated summaries and reasons. Auto infers from the document body; explicit choices force that language.",
-        tip_concurrency: "Maximum concurrent LLM requests. Start with 1 for large local runs.",
-        tip_limit: "Process only the first N candidate files. Leave empty for all files.",
-        tip_max_mb: "Skip files larger than this size to keep the first pass responsive.",
-        tip_quality_threshold: "Documents at or above this score are treated as high-value candidates. Plan-only mode uses it for scoring layers, not copied folders.",
-        tip_timeout_seconds: "Maximum wait time for one LLM request.",
-        tip_summary: "Persist short summaries to decisions.jsonl for relationship mining, public-writing review, and manual triage.",
-        tip_plan_only: "Record scoring, categories, progress, and decisions without copying source files.",
-        tip_ocr_enabled: "Enable OCR for image-only files and scanned PDFs. This can noticeably slow processing; PDFs with text layers and Office documents usually do not need it.",
-        tip_manifest_analysis: "Enable directory-level series detection before file-level scoring. Useful for related document sets; large first-pass runs can leave it off.",
-        tip_force_reprocess: "Ignore processed records and rerun matching files with current settings.",
-        tip_content_hash: "Use content hashes in addition to timestamps and sizes. More accurate, slower on large folders.",
-        tip_mine_relationships: "Generate document relations and clusters after scoring.",
-        tip_title_citations: "Use lightweight title/path citation signals without calling an embedding model.",
-        tip_embedding_relationships: "Generate embeddings for summaries, titles, and categories to find semantic relationships. Requires an explicit embedding model.",
-        ph_source_dir: "Select source document directory",
-        ph_output_dir: "Select output directory",
-        ph_reading_output_root: "Select or enter an analyzed output directory",
-        ph_graph_output_root: "Select or enter an analyzed output directory",
-        ph_text_search: "Name/path/note",
-        ph_graph_search: "Path/category/tag",
-        ph_limit: "empty means all",
-        ph_embedding_model: "required for embedding relationships"
-      }
-    };
-    let uiLanguage = localStorage.getItem("doctriage_ui_language") || "zh-CN";
-    let allRows = [];
-    let filteredRows = [];
-    let currentRows = [];
-    let capabilities = {};
-    let currentPage = 1;
-    let pageSize = Number(localStorage.getItem("doctriage_page_size") || 100);
-    let readingScope = localStorage.getItem("doctriage_reading_scope") || "analysis";
-    let sortKey = localStorage.getItem(sortStorageKey(readingScope)) || defaultSortForScope(readingScope);
-    let graphMeta = {};
-    let graphClusters = [];
-    let filteredGraphClusters = [];
-    let graphSelectedClusterId = null;
-    let graphClusterData = null;
-    let graphSelectedDocPath = "";
-    let graphClearMessageKey = "empty_graph";
-    let tooltipTarget = null;
-    let readingSourceDir = "";
-    let lastSyncedRunOutputRoot = "";
-    let lastAppliedRunPathKey = "";
-    let graphSourceDir = "";
-    let lastSyncedGraphOutputRoot = "";
-    let lastAnalysisPayload = null;
-    let relationshipLaunchPending = null;
-    const RUN_FORM_STORAGE_KEY = "doctriage_run_form";
-    const RUN_FORM_STORAGE_VERSION = 2;
-    const READING_TARGET_STORAGE_KEY = "doctriage_reading_target";
-    const GRAPH_TARGET_STORAGE_KEY = "doctriage_graph_target";
-    const RUN_FORM_VALUE_FIELDS = [
-      "run_source_dir",
-      "run_output_root",
-      "run_llm_endpoint",
-      "run_llm_model",
-      "run_output_language",
-      "run_embedding_model",
-      "run_concurrency",
-      "run_limit",
-      "run_max_file_size_mb",
-      "run_quality_threshold",
-      "run_timeout_seconds"
-    ];
-    const RUN_FORM_CHECKBOX_FIELDS = [
-      "run_document_summary",
-      "run_plan_only",
-      "run_ocr_enabled",
-      "run_manifest_analysis",
-      "run_force_reprocess",
-      "run_content_hash",
-      "run_mine_relationships",
-      "run_relationship_text",
-      "run_relationship_embeddings"
-    ];
-    const RUN_FORM_ALLOW_EMPTY_FIELDS = new Set([
-      "run_limit",
-      "run_embedding_model"
-    ]);
-    const EXPLANATION_DIMENSIONS = [
-      ["knowledge_density", "dim_knowledge_density"],
-      ["implementation_specificity", "dim_implementation_specificity"],
-      ["logical_structure", "dim_logical_structure"],
-      ["evidence_richness", "dim_evidence_richness"],
-      ["actionability", "dim_actionability"],
-      ["strategic_value", "dim_strategic_value"],
-      ["freshness", "dim_freshness"],
-      ["uniqueness", "dim_uniqueness"]
-    ];
 
-    function readingParams() {
-      const pairs = new URLSearchParams();
-      pairs.set("sort", sortKey);
-      pairs.set("scope", readingScope);
-      const paths = readingPathPayload();
-      if (paths.source_dir) pairs.set("source_dir", paths.source_dir);
-      if (paths.output_root) pairs.set("output_root", paths.output_root);
-      return pairs.toString();
-    }
+UI_PACKAGE = "doctriage_ui"
+UI_INDEX_ASSET = "index.html"
+UI_STATIC_ASSETS: dict[str, tuple[str, str]] = {
+    "/assets/app.css": ("app.css", "text/css; charset=utf-8"),
+    "/assets/app.js": ("app.js", "application/javascript; charset=utf-8"),
+}
 
-    function sortStorageKey(scope) {
-      return scope === "source" ? "doctriage_reading_sort_source" : "doctriage_reading_sort_analysis";
-    }
 
-    function defaultSortForScope(scope) {
-      return scope === "source" ? "source_path_asc" : "quality_desc";
-    }
+def read_ui_asset_text(asset_name: str) -> str:
+    return resources.files(UI_PACKAGE).joinpath(asset_name).read_text(encoding="utf-8")
 
-    function tr(key) {
-      return (I18N[uiLanguage] && I18N[uiLanguage][key]) || I18N["zh-CN"][key] || key;
-    }
 
-    function trf(key, values = {}) {
-      let text = tr(key);
-      for (const [name, value] of Object.entries(values)) {
-        text = text.split(`{${name}}`).join(String(value ?? ""));
-      }
-      return text;
-    }
+HTML_PAGE = read_ui_asset_text(UI_INDEX_ASSET)
 
-    function readStoredRunFormState() {
-      try {
-        const raw = localStorage.getItem(RUN_FORM_STORAGE_KEY);
-        if (!raw) return {};
-        const payload = JSON.parse(raw);
-        return payload && typeof payload === "object" ? payload : {};
-      } catch (error) {
-        return {};
-      }
-    }
 
-    function currentRunFormState() {
-      const state = {_version: RUN_FORM_STORAGE_VERSION};
-      for (const id of RUN_FORM_VALUE_FIELDS) {
-        const element = $(id);
-        if (element) state[id] = element.value;
-      }
-      for (const id of RUN_FORM_CHECKBOX_FIELDS) {
-        const element = $(id);
-        if (element) state[id] = !!element.checked;
-      }
-      return state;
-    }
-
-    function saveRunFormState() {
-      try {
-        localStorage.setItem(RUN_FORM_STORAGE_KEY, JSON.stringify(currentRunFormState()));
-      } catch (error) {
-        // Browser storage can be disabled or full; the form still works without persistence.
-      }
-    }
-
-    function readStoredReadingTargetState() {
-      try {
-        const raw = localStorage.getItem(READING_TARGET_STORAGE_KEY);
-        if (!raw) return {};
-        const payload = JSON.parse(raw);
-        return payload && typeof payload === "object" ? payload : {};
-      } catch (error) {
-        return {};
-      }
-    }
-
-    function saveReadingTargetState() {
-      try {
-        localStorage.setItem(READING_TARGET_STORAGE_KEY, JSON.stringify(readingPathPayload()));
-      } catch (error) {
-        // Browser storage can be disabled or full; reading still works without persistence.
-      }
-    }
-
-    function readStoredGraphTargetState() {
-      try {
-        const raw = localStorage.getItem(GRAPH_TARGET_STORAGE_KEY);
-        if (!raw) return {};
-        const payload = JSON.parse(raw);
-        return payload && typeof payload === "object" ? payload : {};
-      } catch (error) {
-        return {};
-      }
-    }
-
-    function saveGraphTargetState() {
-      try {
-        localStorage.setItem(GRAPH_TARGET_STORAGE_KEY, JSON.stringify(currentGraphTargetState()));
-      } catch (error) {
-        // Browser storage can be disabled or full; graph still works without persistence.
-      }
-    }
-
-    function applyStoredReadingTargetState() {
-      const state = readStoredReadingTargetState();
-      let applied = false;
-      if (Object.prototype.hasOwnProperty.call(state, "source_dir")) {
-        readingSourceDir = String(state.source_dir || "");
-        applied = true;
-      }
-      if (Object.prototype.hasOwnProperty.call(state, "output_root")) {
-        const outputRoot = String(state.output_root || "");
-        if (outputRoot && $("reading_output_root")) {
-          $("reading_output_root").value = outputRoot;
-          if (outputRoot === $("run_output_root").value.trim()) {
-            lastSyncedRunOutputRoot = outputRoot;
-          }
-          applied = true;
-        }
-      }
-      return applied;
-    }
-
-    function applyStoredGraphTargetState() {
-      const state = readStoredGraphTargetState();
-      let applied = false;
-      if (Object.prototype.hasOwnProperty.call(state, "source_dir")) {
-        graphSourceDir = String(state.source_dir || "");
-        applied = true;
-      }
-      if (Object.prototype.hasOwnProperty.call(state, "output_root")) {
-        const outputRoot = String(state.output_root || "");
-        if (outputRoot && $("graph_output_root")) {
-          $("graph_output_root").value = outputRoot;
-          if (
-            outputRoot === $("reading_output_root").value.trim() ||
-            outputRoot === $("run_output_root").value.trim()
-          ) {
-            lastSyncedGraphOutputRoot = outputRoot;
-          }
-          applied = true;
-        }
-      }
-      return applied;
-    }
-
-    function setReadingTarget(sourceDir, outputRoot, {persist = true} = {}) {
-      readingSourceDir = String(sourceDir || "");
-      if ($("reading_output_root")) $("reading_output_root").value = String(outputRoot || "");
-      if (String(outputRoot || "") === $("run_output_root").value.trim()) {
-        lastSyncedRunOutputRoot = String(outputRoot || "");
-      }
-      if (persist) saveReadingTargetState();
-      syncGraphTargetFrom(sourceDir, outputRoot, {force: true});
-    }
-
-    function setGraphTarget(sourceDir, outputRoot, {persist = true} = {}) {
-      graphSourceDir = String(sourceDir || "");
-      if ($("graph_output_root")) $("graph_output_root").value = String(outputRoot || "");
-      if (
-        String(outputRoot || "") === $("reading_output_root").value.trim() ||
-        String(outputRoot || "") === $("run_output_root").value.trim()
-      ) {
-        lastSyncedGraphOutputRoot = String(outputRoot || "");
-      }
-      if (persist) saveGraphTargetState();
-    }
-
-    function currentGraphTargetState() {
-      return {
-        source_dir: graphSourceDir,
-        output_root: $("graph_output_root").value.trim()
-      };
-    }
-
-    function syncGraphTargetFrom(sourceDir, outputRoot, {force = false} = {}) {
-      const outputText = String(outputRoot || "").trim();
-      if (!outputText) return;
-      const currentGraphOutput = $("graph_output_root").value.trim();
-      const shouldSync = force || !currentGraphOutput || currentGraphOutput === lastSyncedGraphOutputRoot;
-      if (!shouldSync) return;
-      graphSourceDir = String(sourceDir || "");
-      $("graph_output_root").value = outputText;
-      lastSyncedGraphOutputRoot = outputText;
-      saveGraphTargetState();
-    }
-
-    function syncGraphTargetFromReadingOutput({force = false} = {}) {
-      const paths = readingPathPayload();
-      syncGraphTargetFrom(paths.source_dir, paths.output_root, {force});
-    }
-
-    function syncReadingTargetFromRunOutput({force = false, syncGraph = true} = {}) {
-      const sourceDir = $("run_source_dir").value.trim();
-      const outputRoot = $("run_output_root").value.trim();
-      if (!outputRoot) return;
-      const currentReadingOutput = $("reading_output_root").value.trim();
-      const shouldSync = force || !currentReadingOutput || currentReadingOutput === lastSyncedRunOutputRoot;
-      if (!shouldSync) return;
-      readingSourceDir = sourceDir;
-      $("reading_output_root").value = outputRoot;
-      lastSyncedRunOutputRoot = outputRoot;
-      saveReadingTargetState();
-      if (syncGraph) syncGraphTargetFrom(sourceDir, outputRoot, {force});
-    }
-
-    function syncReadingSourceFromRunIfLinked() {
-      const runOutputRoot = $("run_output_root").value.trim();
-      const readingOutputRoot = $("reading_output_root").value.trim();
-      if (readingOutputRoot && readingOutputRoot !== runOutputRoot && readingOutputRoot !== lastSyncedRunOutputRoot) return;
-      readingSourceDir = $("run_source_dir").value.trim();
-      saveReadingTargetState();
-      syncGraphTargetFrom(readingSourceDir, readingOutputRoot || runOutputRoot);
-    }
-
-    function applyStoredRunFormState() {
-      const state = readStoredRunFormState();
-      const applyCheckboxState = Number(state._version || 0) === RUN_FORM_STORAGE_VERSION;
-      for (const id of RUN_FORM_VALUE_FIELDS) {
-        if (!Object.prototype.hasOwnProperty.call(state, id)) continue;
-        const element = $(id);
-        if (!element) continue;
-        const value = String(state[id] ?? "");
-        if (!value && !RUN_FORM_ALLOW_EMPTY_FIELDS.has(id)) continue;
-        element.value = value;
-      }
-      if (!applyCheckboxState) return;
-      for (const id of RUN_FORM_CHECKBOX_FIELDS) {
-        if (!Object.prototype.hasOwnProperty.call(state, id)) continue;
-        const element = $(id);
-        if (element) element.checked = !!state[id];
-      }
-    }
-
-    function initRunFormPersistence() {
-      for (const id of [...RUN_FORM_VALUE_FIELDS, ...RUN_FORM_CHECKBOX_FIELDS]) {
-        const element = $(id);
-        if (!element) continue;
-        const eventName = element.tagName === "INPUT" && element.type !== "checkbox" ? "input" : "change";
-        element.addEventListener(eventName, () => {
-          if (id === "run_output_root") syncReadingTargetFromRunOutput({force: true});
-          if (id === "run_source_dir") syncReadingSourceFromRunIfLinked();
-          saveRunFormState();
-        });
-      }
-      for (const id of ["run_source_dir", "run_output_root"]) {
-        const element = $(id);
-        if (element) element.addEventListener("blur", () => autoApplyPaths());
-      }
-    }
-
-    function initReadingTargetPersistence() {
-      const element = $("reading_output_root");
-      if (!element) return;
-      element.addEventListener("input", () => {
-        readingSourceDir = "";
-        saveReadingTargetState();
-        syncGraphTargetFrom("", element.value.trim(), {force: true});
-      });
-    }
-
-    function initGraphTargetPersistence() {
-      const element = $("graph_output_root");
-      if (!element) return;
-      element.addEventListener("input", () => {
-        graphSourceDir = "";
-        saveGraphTargetState();
-      });
-    }
-
-    function setUiLanguage(language) {
-      uiLanguage = I18N[language] ? language : "zh-CN";
-      localStorage.setItem("doctriage_ui_language", uiLanguage);
-      applyI18n();
-    }
-
-    function applyI18n() {
-      document.documentElement.lang = uiLanguage;
-      if ($("ui_language")) $("ui_language").value = uiLanguage;
-      document.querySelectorAll("[data-i18n]").forEach(item => {
-        item.textContent = tr(item.dataset.i18n);
-      });
-      document.querySelectorAll("[data-i18n-placeholder]").forEach(item => {
-        item.setAttribute("placeholder", tr(item.dataset.i18nPlaceholder));
-      });
-      document.querySelectorAll("[data-i18n-tip]").forEach(item => {
-        item.dataset.tip = tr(item.dataset.i18nTip);
-      });
-      if ($("reading_scope")) $("reading_scope").value = readingScope;
-      renderStatsFromRows(filteredRows, allRows.length);
-      renderPager();
-      renderRows(currentRows);
-      if (hasGraphPayload()) {
-        renderGraphStats(graphMeta);
-        renderGraphTaskStats(graphMeta);
-        if (graphClusterData) renderGraphCluster();
-        else if (filteredGraphClusters.length) renderGraphClusterList();
-        else renderGraphEmptyState();
-      } else {
-        renderClearedGraphState();
-      }
-    }
-
-    function switchTab(name) {
-      for (const id of ["analysis", "reading", "graph"]) {
-        $("tab-" + id).classList.toggle("active", id === name);
-        $("section-" + id).classList.toggle("active", id === name);
-      }
-      if (name === "analysis") loadAnalysis();
-      if (name === "reading") {
-        if (readingPathPayload().output_root) loadRows();
-      }
-      if (name === "graph") {
-        if (graphPathPayload().output_root) loadGraph();
-        else clearGraphState("graph_need_paths");
-      }
-      localStorage.setItem("doctriage_tab", name);
-    }
-
-    async function loadConfig() {
-      const response = await fetch("/api/config");
-      const payload = await response.json();
-      if (!response.ok) return;
-      capabilities = payload.capabilities || {};
-      $("run_source_dir").value = payload.source_dir || "";
-      $("run_output_root").value = payload.output_root || "";
-      $("reading_output_root").value = payload.output_root || "";
-      $("graph_output_root").value = payload.output_root || "";
-      readingSourceDir = payload.source_dir || "";
-      lastSyncedRunOutputRoot = payload.output_root || "";
-      lastAppliedRunPathKey = runPathKey(payload.source_dir || "", payload.output_root || "");
-      graphSourceDir = payload.source_dir || "";
-      lastSyncedGraphOutputRoot = payload.output_root || "";
-      applyStoredRunFormState();
-      const readingApplied = applyStoredReadingTargetState();
-      const graphApplied = applyStoredGraphTargetState();
-      if (!readingApplied) syncReadingTargetFromRunOutput({force: true, syncGraph: !graphApplied});
-      if (!graphApplied) syncGraphTargetFromReadingOutput({force: true});
-      for (const id of ["pick_source_btn", "pick_output_btn", "pick_reading_output_btn", "pick_graph_output_btn"]) {
-        if ($(id)) {
-          $(id).disabled = capabilities.folder_picker === false;
-          $(id).title = capabilities.folder_picker === false ? tr("folder_picker_unavailable") : "";
-        }
-      }
-      if (capabilities.headless_hint) {
-        showToast(capabilities.headless_hint);
-      }
-      applyI18n();
-      loadAnalysis();
-    }
-
-    async function pickFolder(targetId) {
-      const response = await fetch("/api/pick-folder", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({target: targetId})
-      });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("pick_failed"));
-      if (payload.path) $(targetId).value = payload.path;
-      if (targetId === "run_output_root") syncReadingTargetFromRunOutput({force: true});
-      if (targetId === "run_source_dir") syncReadingSourceFromRunIfLinked();
-      if (targetId.startsWith("run_")) saveRunFormState();
-      if (targetId === "run_source_dir" || targetId === "run_output_root") autoApplyPaths();
-      if (targetId === "reading_output_root") {
-        readingSourceDir = "";
-        saveReadingTargetState();
-        syncGraphTargetFrom("", payload.path || "", {force: true});
-      }
-      if (targetId === "graph_output_root") {
-        graphSourceDir = "";
-        saveGraphTargetState();
-      }
-    }
-
-    function runPathKey(sourceDir, outputRoot) {
-      return `${String(sourceDir || "").trim()}\n${String(outputRoot || "").trim()}`;
-    }
-
-    async function autoApplyPaths() {
-      const sourceDir = $("run_source_dir").value.trim();
-      const outputRoot = $("run_output_root").value.trim();
-      if (!sourceDir || !outputRoot) return;
-      const key = runPathKey(sourceDir, outputRoot);
-      if (key === lastAppliedRunPathKey) return;
-      await applyPaths({showSuccess: false});
-    }
-
-    async function applyPaths({showSuccess = true} = {}) {
-      saveRunFormState();
-      const sourceDir = $("run_source_dir").value.trim();
-      const outputRoot = $("run_output_root").value.trim();
-      const response = await fetch("/api/paths", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({
-          source_dir: sourceDir,
-          output_root: outputRoot
-        })
-      });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("paths_apply_failed"));
-      lastAppliedRunPathKey = runPathKey(sourceDir, outputRoot);
-      syncReadingTargetFromRunOutput({force: true});
-      if (showSuccess) showToast(tr("paths_applied"));
-      loadAnalysis();
-      loadRows();
-      if ($("section-graph").classList.contains("active")) loadGraph();
-    }
-
-    async function applyReadingOutput() {
-      const outputRoot = $("reading_output_root").value.trim();
-      if (!outputRoot) return showToast(tr("need_reading_output"));
-      const response = await fetch("/api/reading-output", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({output_root: outputRoot})
-      });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("reading_output_apply_failed"));
-      setReadingTarget(payload.source_dir || "", payload.output_root || outputRoot);
-      showToast(tr("reading_output_applied"));
-      loadRows();
-      if ($("section-graph").classList.contains("active")) loadGraph();
-    }
-
-    async function applyGraphOutput() {
-      const outputRoot = $("graph_output_root").value.trim();
-      if (!outputRoot) return showToast(tr("need_graph_output"));
-      const response = await fetch("/api/graph-output", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({output_root: outputRoot})
-      });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("graph_output_apply_failed"));
-      setGraphTarget(payload.source_dir || "", payload.output_root || outputRoot);
-      showToast(tr("graph_output_applied"));
-      loadGraph();
-    }
-
-    function runPayload() {
-      return {
-        source_dir: $("run_source_dir").value.trim(),
-        output_root: $("run_output_root").value.trim(),
-        llm_endpoint: $("run_llm_endpoint").value.trim(),
-        llm_model: $("run_llm_model").value.trim(),
-        output_language: $("run_output_language").value,
-        embedding_model: $("run_embedding_model").value.trim(),
-        concurrency: $("run_concurrency").value,
-        limit: $("run_limit").value,
-        max_file_size_mb: $("run_max_file_size_mb").value,
-        quality_threshold: $("run_quality_threshold").value,
-        timeout_seconds: $("run_timeout_seconds").value,
-        document_summary: $("run_document_summary").checked,
-        plan_only: $("run_plan_only").checked,
-        ocr_enabled: $("run_ocr_enabled").checked,
-        no_ocr: !$("run_ocr_enabled").checked,
-        manifest_analysis: $("run_manifest_analysis").checked,
-        skip_manifest_analysis: !$("run_manifest_analysis").checked,
-        force_reprocess: $("run_force_reprocess").checked,
-        content_hash: $("run_content_hash").checked,
-        mine_relationships: $("run_mine_relationships").checked,
-        relationship_use_text_citations: $("run_relationship_text").checked,
-        relationship_use_embeddings: $("run_relationship_embeddings").checked
-      };
-    }
-
-    function earlyRelationshipPayload() {
-      const payload = runPayload();
-      payload.embedding_model = $("run_embedding_model").value.trim();
-      payload.mine_relationships = true;
-      payload.relationship_use_text_citations = true;
-      return payload;
-    }
-
-    function validateEmbeddingModelSelection(payload) {
-      if (!payload || !payload.relationship_use_embeddings) return true;
-      if (String(payload.embedding_model || "").trim()) return true;
-      showToast(tr("embedding_model_required"));
-      return false;
-    }
-
-    function confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(payload) {
-      if (!payload || payload.relationship_use_embeddings) return true;
-      if (String(payload.embedding_model || "").trim()) return true;
-      return window.confirm(tr("early_relationships_without_embedding_confirm"));
-    }
-
-    function pathPayload() {
-      return {
-        source_dir: $("run_source_dir").value.trim(),
-        output_root: $("run_output_root").value.trim()
-      };
-    }
-
-    function readingPathPayload() {
-      const sourceDir = readingSourceDir;
-      const outputRoot = $("reading_output_root").value.trim() || $("run_output_root").value.trim();
-      return {
-        source_dir: sourceDir,
-        output_root: outputRoot
-      };
-    }
-
-    function graphPathPayload() {
-      const sourceDir = graphSourceDir;
-      const outputRoot = $("graph_output_root").value.trim();
-      return {
-        source_dir: sourceDir,
-        output_root: outputRoot
-      };
-    }
-
-    function pathQuery() {
-      const query = new URLSearchParams(pathPayload());
-      return query.toString();
-    }
-
-    function graphQuery() {
-      const query = new URLSearchParams(graphPathPayload());
-      return query.toString();
-    }
-
-    async function startAnalysis() {
-      saveRunFormState();
-      const requestPayload = runPayload();
-      requestPayload.preempt_relationships = true;
-      if (!validateEmbeddingModelSelection(requestPayload)) return;
-      if (shouldPreemptRelationshipsForAnalysis()) showToast(tr("analysis_preempting_relationships"));
-      relationshipLaunchPending = null;
-      $("start_analysis_btn").disabled = true;
-      const response = await fetch("/api/analysis/start", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(requestPayload)
-      });
-      const responsePayload = await response.json();
-      if (!response.ok) return showToast(responsePayload.error || tr("analysis_start_failed"));
-      showToast(tr("analysis_started"));
-      loadAnalysis();
-    }
-
-    function shouldPreemptRelationshipsForAnalysis() {
-      const relationshipTask = (lastAnalysisPayload && lastAnalysisPayload.relationship_task) || {};
-      const graphTask = (graphMeta && graphMeta.task) || {};
-      return !!relationshipTask.running || !!graphTask.running || !!relationshipLaunchPending;
-    }
-
-    async function startEarlyRelationships() {
-      saveRunFormState();
-      const requestPayload = earlyRelationshipPayload();
-      if (!validateEmbeddingModelSelection(requestPayload)) return;
-      if (!confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(requestPayload)) return;
-      showRelationshipLaunchPending(requestPayload);
-      const response = await fetch("/api/analysis/early-relationships", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(requestPayload)
-      });
-      const responsePayload = await response.json();
-      if (!response.ok) {
-        clearRelationshipLaunchPending();
-        return showToast(responsePayload.error || tr("early_relationships_failed"));
-      }
-      syncReadingTargetFromRunOutput({force: true});
-      showToast(tr("early_relationships_started"));
-      loadAnalysis();
-      if ($("section-graph").classList.contains("active")) loadGraph();
-    }
-
-    function showRelationshipLaunchPending(payload) {
-      relationshipLaunchPending = {
-        useEmbeddings: !!(payload && payload.relationship_use_embeddings),
-        startedAt: Date.now()
-      };
-      if (lastAnalysisPayload) {
-        renderAnalysis(lastAnalysisPayload);
-        return;
-      }
-      const task = pendingRelationshipTask();
-      $("analysisStats").innerHTML = `<span class="pill">${escapeHtml(relationshipTaskPillText(task))}</span>`;
-      renderEmbeddingProgress(pendingEmbeddingProgress(), task);
-      $("start_analysis_btn").disabled = true;
-      $("early_relationships_btn").disabled = true;
-      $("reset_analysis_btn").disabled = true;
-    }
-
-    function clearRelationshipLaunchPending() {
-      relationshipLaunchPending = null;
-      if (lastAnalysisPayload) renderAnalysis(lastAnalysisPayload);
-      else renderEmbeddingProgress({}, {});
-    }
-
-    function pendingRelationshipTask() {
-      if (!relationshipLaunchPending) return null;
-      return {
-        running: true,
-        pending: true,
-        kind: "mine",
-        command: relationshipLaunchPending.useEmbeddings ? ["--use-embeddings"] : []
-      };
-    }
-
-    function pendingEmbeddingProgress() {
-      return {
-        enabled: true,
-        phase: "ready",
-        percent: 0
-      };
-    }
-
-    async function stopAnalysis() {
-      const response = await fetch("/api/analysis/stop", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(pathPayload())
-      });
-      const payload = await response.json();
-      showToast(response.ok ? tr("stop_requested") : (payload.error || tr("stop_failed")));
-      loadAnalysis();
-    }
-
-    async function stopRelationships() {
-      relationshipLaunchPending = null;
-      const graphPaths = graphPathPayload();
-      const targetPayload = $("section-graph").classList.contains("active") && graphPaths.output_root
-        ? {...runPayload(), ...graphPaths}
-        : runPayload();
-      const response = await fetch("/api/relationships/stop", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(targetPayload)
-      });
-      const payload = await response.json();
-      showToast(response.ok ? tr("relationship_stop_requested") : (payload.error || tr("relationship_stop_failed")));
-      loadAnalysis();
-      if ($("section-graph").classList.contains("active")) loadGraph();
-    }
-
-    function clearReadingRows() {
-      allRows = [];
-      filteredRows = [];
-      currentRows = [];
-      populateFacetOptions([]);
-      renderStatsFromRows([], 0);
-      renderPager();
-      renderSortMarks();
-      renderRows([]);
-    }
-
-    function hasGraphPayload() {
-      return !!(graphMeta && Object.keys(graphMeta).length);
-    }
-
-    function renderClearedGraphState() {
-      const message = tr(graphClearMessageKey || "empty_graph");
-      $("graphStats").innerHTML = `<span class="pill">${escapeHtml(message)}</span>`;
-      $("graphTaskStats").innerHTML = "";
-      $("graphClusters").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
-      $("graphClusterTitle").innerHTML = "";
-      $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
-      $("graphEdges").innerHTML = "";
-      $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
-    }
-
-    function clearGraphState(messageKey = "empty_graph") {
-      graphClearMessageKey = messageKey;
-      graphMeta = {};
-      graphClusters = [];
-      filteredGraphClusters = [];
-      graphSelectedClusterId = null;
-      graphClusterData = null;
-      graphSelectedDocPath = "";
-      renderClearedGraphState();
-    }
-
-    async function resetAnalysis() {
-      const sourceDir = $("run_source_dir").value.trim();
-      const outputRoot = $("run_output_root").value.trim();
-      if (!sourceDir || !outputRoot) return showToast(tr("need_source_output"));
-      if (!window.confirm(trf("reset_confirm", {output: outputRoot}))) return;
-      const response = await fetch("/api/analysis/reset", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({source_dir: sourceDir, output_root: outputRoot})
-      });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("reset_failed"));
-      clearReadingRows();
-      clearGraphState("output_reset");
-      showToast(tr("output_reset"));
-      loadAnalysis();
-    }
-
-    async function loadAnalysis() {
-      const query = pathQuery();
-      const response = await fetch("/api/analysis/status" + (query ? "?" + query : ""));
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("status_load_failed"));
-      renderAnalysis(payload);
-    }
-
-    function renderAnalysis(payload) {
-      lastAnalysisPayload = payload;
-      syncReadingTarget(payload);
-      const progress = payload.progress || {};
-      const activity = payload.activity || {};
-      const latest = activity.latest_activity || {};
-      const lock = payload.run_lock || {};
-      const summary = payload.run_summary || {};
-      const unresolvedFailures = Number(summary.unresolved_failures ?? progress.failed ?? 0);
-      const retryAttempted = Number(summary.retry_attempted || 0);
-      const retrySucceeded = Number(summary.retry_succeeded || 0);
-      const phaseText = localizedPhase(payload.phase);
-      const rateReady = !!progress.rate_window_active && Number(progress.rate_window_completed || 0) > 0;
-      const relationshipTask = payload.relationship_task || {};
-      if (relationshipTask.running || relationshipTask.return_code !== null) relationshipLaunchPending = null;
-      const effectiveRelationshipTask = relationshipTask.running ? relationshipTask : (pendingRelationshipTask() || relationshipTask);
-      const parts = [
-        phaseText,
-        payload.plan_only ? tr("plan_only_pill") : "",
-        payload.running ? tr("running_pill") : tr("not_running_pill"),
-        relationshipTaskPillText(effectiveRelationshipTask),
-        payload.pid ? "PID " + payload.pid : "",
-        payload.effective_concurrency ? `${tr("concurrency_pill")} ${payload.effective_concurrency}` : "",
-        progress.percent !== undefined ? `${tr("progress_pill")} ${progress.percent}%` : "",
-        progress.completed !== undefined ? `${tr("completed_pill")} ${progress.completed}/${progress.total || 0}` : "",
-        rateReady && progress.eta_human && progress.eta_human !== "unknown" ? `ETA ${progress.eta_human}` : (payload.running ? tr("eta_waiting_pill") : ""),
-        rateReady && progress.files_per_minute !== undefined && Number(progress.files_per_minute) > 0 ? `${tr("speed_pill")} ${progress.files_per_minute}/min` : (payload.running ? tr("speed_waiting_pill") : ""),
-        unresolvedFailures > 0 ? `${tr("unresolved_failures_pill")} ${unresolvedFailures}` : "",
-        retryAttempted > 0 ? `${tr("retry_recovered_pill")} ${retrySucceeded}/${retryAttempted}` : "",
-        lock.exists && !lock.active && lock.pid ? `${tr("stale_lock_pid_pill")} ${lock.pid}` : "",
-        activityPillText(latest)
-      ].filter(Boolean);
-      $("analysisStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
-      $("analysisBar").style.width = Math.max(0, Math.min(100, Number(progress.percent || 0))) + "%";
-      $("analysisLog").textContent = payload.log_tail || "";
-      const decisionCount = Number((activity.state_counts || {}).decisions || 0);
-      const embeddingProgress = effectiveRelationshipTask.pending ? pendingEmbeddingProgress() : (payload.embedding_progress || {});
-      renderEmbeddingProgress(embeddingProgress, effectiveRelationshipTask);
-      $("start_analysis_btn").disabled = !!payload.running;
-      $("early_relationships_btn").disabled = decisionCount <= 0 || !!relationshipTask.running || !!relationshipLaunchPending;
-      $("stop_analysis_btn").disabled = !payload.running;
-      $("stop_relationships_btn").disabled = !relationshipTask.running;
-      $("reset_analysis_btn").disabled = !!payload.running || !!relationshipTask.running || !!relationshipLaunchPending;
-    }
-
-    function renderEmbeddingProgress(progress, task) {
-      const command = task && Array.isArray(task.command) ? task.command : [];
-      const embeddingTask = command.includes("--use-embeddings");
-      const activeEmbeddingTask = !!(task && task.running && embeddingTask);
-      const visible = activeEmbeddingTask && (!!(progress && progress.enabled) || !!task.pending);
-      $("embeddingProgressWrap").style.display = visible ? "block" : "none";
-      if (!visible) {
-        $("embeddingProgressStats").innerHTML = "";
-        $("embeddingProgressBar").style.width = "0%";
-        return;
-      }
-      const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
-      const total = Number(progress.total || 0);
-      const phase = localizedEmbeddingPhase(progress.phase || "ready");
-      const parts = [
-        `${tr("embedding_progress_pill")} ${percent}%`,
-        phase,
-        total > 0 ? `${tr("completed_pill")} ${Number(progress.completed || 0)}/${total}` : "",
-        total > 0 ? `${tr("embedding_cached_pill")} ${Number(progress.cached || 0)}` : "",
-        total > 0 ? `${tr("embedding_generated_pill")} ${Number(progress.generated || 0)}` : "",
-        Number(progress.missing || 0) > 0 ? `${tr("embedding_missing_pill")} ${Number(progress.missing || 0)}` : "",
-        progress.workers ? `${tr("concurrency_pill")} ${progress.workers}` : ""
-      ].filter(Boolean);
-      $("embeddingProgressStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
-      $("embeddingProgressBar").style.width = percent + "%";
-    }
-
-    function relationshipTaskPillText(task) {
-      if (!task || !task.running) return "";
-      return trf("graph_task_running", {task: graphTaskKindLabel(task.kind || "mine")});
-    }
-
-    function localizedEmbeddingPhase(phase) {
-      const key = {
-        loading_cache: "embedding_phase_loading_cache",
-        embedding: "embedding_phase_embedding",
-        complete: "embedding_phase_complete",
-        ready: "embedding_phase_ready"
-      }[phase];
-      return key ? tr(key) : (phase || "");
-    }
-
-    function activityPillText(latest) {
-      if (!latest || !latest.label) return "";
-      const label = localizedActivityLabel(latest.label);
-      const detail = localizedActivityDetail(latest.detail || "").trim();
-      return detail ? `${label}: ${detail}` : label;
-    }
-
-    function localizedPhase(phase) {
-      if (phase === "文档评分中") return "";
-      const key = {
-        "未启动": "phase_not_started",
-        "关系挖掘中": "phase_relationship_mining",
-        "续传准备中": "phase_resume_preparing",
-        "续传跳过中": "phase_resume_skipping",
-        "扫描准备中": "phase_scanning",
-        "分析完成，仍有失败": "phase_completed_with_failures",
-        "分析完成，关系已生成": "phase_completed_relationships",
-        "分析完成，关系未生成": "phase_completed_no_relationships",
-        "分析完成": "phase_completed",
-        "已停止，可续传": "phase_stopped_resume"
-      }[phase];
-      return key ? tr(key) : (phase || "");
-    }
-
-    function localizedActivityLabel(label) {
-      return label || "";
-    }
-
-    function localizedActivityDetail(detail) {
-      return detail || "";
-    }
-
-    async function loadRows() {
-      syncReadingScopeControls();
-      const response = await fetch("/api/state?" + readingParams());
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("rows_load_failed"));
-      allRows = payload.rows || [];
-      populateFacetOptions(allRows);
-      currentPage = 1;
-      applyClientFilters();
-    }
-
-    function syncReadingScopeControls() {
-      if ($("reading_scope")) $("reading_scope").value = readingScope;
-      const disabled = readingScope === "source";
-      for (const id of ["min_quality", "categories", "topic_tags", "max_sensitivity_risk", "min_public_writing_suitability"]) {
-        const element = $(id);
-        if (element) element.disabled = disabled;
-      }
-    }
-
-    function syncReadingTarget(payload) {
-      if (!payload) return;
-      let changed = false;
-      if (payload.source_dir && $("run_source_dir").value !== payload.source_dir) {
-        $("run_source_dir").value = payload.source_dir;
-        changed = true;
-      }
-      if (payload.output_root && $("run_output_root").value !== payload.output_root) {
-        $("run_output_root").value = payload.output_root;
-        changed = true;
-      }
-      if (changed) {
-        lastAppliedRunPathKey = runPathKey($("run_source_dir").value, $("run_output_root").value);
-        syncReadingTargetFromRunOutput();
-        saveRunFormState();
-      } else if (!$("reading_output_root").value.trim()) {
-        syncReadingTargetFromRunOutput();
-      }
-    }
-
-    async function loadGraph(preserveSelection = true) {
-      if (!graphPathPayload().output_root) {
-        clearGraphState("graph_need_paths");
-        return;
-      }
-      const query = graphQuery();
-      const response = await fetch("/api/relationships" + (query ? "?" + query : ""));
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("graph_load_failed"));
-      graphMeta = payload;
-      graphClusters = payload.clusters || [];
-      renderGraphStats(payload);
-      renderGraphTaskStats(payload);
-      applyGraphFilters(preserveSelection);
-    }
-
-    function renderGraphStats(payload) {
-      const parts = [];
-      if (payload.cluster_count !== undefined) parts.push(`${tr("cluster")} ${payload.cluster_count}`);
-      if (payload.relations_exists) parts.push(tr("graph_relations_exists"));
-      if (payload.clusters_exists) parts.push(tr("graph_clusters_exists"));
-      if (payload.decisions_exists) parts.push(tr("graph_decisions_exists"));
-      if (!payload.available) parts.push(tr("empty_graph"));
-      $("graphStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
-    }
-
-    function graphTaskKindLabel(kind) {
-      return {
-        mine: tr("graph_task_mine"),
-        export_graph: tr("graph_task_export_graph"),
-        export_bundle: tr("graph_task_export_bundle")
-      }[kind] || kind || "";
-    }
-
-    function localGraphTaskLabel(label, taskName = "") {
-      const reverse = {
-        "关系结果生成": "graph_task_mine",
-        "知识图谱导出": "graph_task_export_graph",
-        "Bundle 导出": "graph_task_export_bundle"
-      };
-      if (label && reverse[label]) return tr(reverse[label]);
-      return graphTaskKindLabel(taskName || label);
-    }
-
-    function renderGraphTaskStats(payload) {
-      const task = payload.task || {};
-      const parts = [];
-      if (task.running) parts.push(trf("graph_task_running", {task: graphTaskKindLabel(task.kind)}));
-      if (task.pid) parts.push(`PID ${task.pid}`);
-      if (!payload.decisions_exists) {
-        parts.push(tr("graph_need_analysis_once"));
-      } else if (!payload.relations_exists && !task.running) {
-        parts.push(tr("graph_can_generate_relationships"));
-      }
-      $("graphTaskStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
-      $("graph_mine_btn").disabled = !!task.running || !payload.decisions_exists;
-      $("graph_stop_relationships_btn").disabled = !task.running;
-      $("graph_export_graph_btn").disabled = !!task.running || !payload.relations_exists;
-      $("graph_export_bundle_btn").disabled = !!task.running || !payload.relations_exists;
-    }
-
-    async function startGraphTask(taskName) {
-      if (!graphPathPayload().output_root) {
-        return showToast(tr("graph_need_paths"));
-      }
-      const requestPayload = {...runPayload(), ...graphPathPayload()};
-      if (taskName === "mine" && !validateEmbeddingModelSelection(requestPayload)) return;
-      const response = await fetch(`/api/relationships/${taskName.replace("_", "-")}`, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify(requestPayload)
-      });
-      const responsePayload = await response.json();
-      if (!response.ok) return showToast(responsePayload.error || tr("graph_task_start_failed"));
-      showToast(trf("graph_task_started", {task: localGraphTaskLabel(responsePayload.label, taskName)}));
-      loadGraph();
-    }
-
-    function renderGraphEmptyState() {
-      const message = graphEmptyMessage(graphMeta);
-      $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(message)}</div>`;
-      $("graphEdges").innerHTML = "";
-      $("graphClusterTitle").innerHTML = "";
-      $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(graphDetailEmptyMessage(graphMeta))}</div>`;
-    }
-
-    function graphMatchesFilters(cluster) {
-      const minSize = Number($("graph_min_size").value || 2);
-      if (Number(cluster.size || 0) < minSize) return false;
-      const q = $("graph_q").value.trim().toLowerCase();
-      if (!q) return true;
-      const haystack = [
-        ...(cluster.categories || []),
-        ...(cluster.preview_paths || [])
-      ].join(" ").toLowerCase();
-      return haystack.includes(q);
-    }
-
-    function applyGraphFilters(preserveSelection = true) {
-      filteredGraphClusters = graphClusters.filter(graphMatchesFilters);
-      renderGraphClusterList();
-      if (!filteredGraphClusters.length) {
-        graphSelectedClusterId = null;
-        graphClusterData = null;
-        graphSelectedDocPath = "";
-        if (graphClusters.length) {
-          $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(tr("graph_no_match"))}</div>`;
-          $("graphEdges").innerHTML = "";
-          $("graphClusterTitle").innerHTML = "";
-          $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(graphDetailEmptyMessage(graphMeta))}</div>`;
-        } else {
-          renderGraphEmptyState();
-        }
-        return;
-      }
-      const hasSelection = preserveSelection && filteredGraphClusters.some(item => item.cluster_id === graphSelectedClusterId);
-      if (hasSelection) {
-        renderGraphClusterList();
-        if (graphClusterData && graphClusterData.cluster_id === graphSelectedClusterId) {
-          renderGraphCluster();
-          return;
-        }
-      }
-      loadGraphCluster(filteredGraphClusters[0].cluster_id, false);
-    }
-
-    async function loadGraphCluster(clusterId, preserveDocSelection = true) {
-      graphSelectedClusterId = clusterId;
-      renderGraphClusterList();
-      const query = new URLSearchParams(graphPathPayload());
-      query.set("cluster", String(clusterId));
-      const response = await fetch("/api/relationships?" + query.toString());
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("graph_cluster_load_failed"));
-      graphClusterData = payload.selected_cluster;
-      if (!graphClusterData) {
-        graphSelectedDocPath = "";
-      } else if (!preserveDocSelection || !graphClusterData.files.some(item => item.relative_path === graphSelectedDocPath)) {
-        graphSelectedDocPath = graphClusterData.files[0] ? graphClusterData.files[0].relative_path : "";
-      }
-      renderGraphCluster();
-    }
-
-    function renderGraphClusterList() {
-      if (!filteredGraphClusters.length) {
-        $("graphClusters").innerHTML = `<div class="graph-empty">${escapeHtml(graphEmptyMessage(graphMeta))}</div>`;
-        return;
-      }
-      $("graphClusters").innerHTML = filteredGraphClusters.map(cluster => `
-        <button class="graph-cluster-item ${cluster.cluster_id === graphSelectedClusterId ? "active" : ""}" onclick="loadGraphCluster(${cluster.cluster_id}, false)">
-          <div class="graph-cluster-title">${tr("cluster")} ${cluster.cluster_id + 1} · ${cluster.size} ${tr("documents_unit")}</div>
-          <div class="graph-cluster-preview">${escapeHtml((cluster.categories || []).join(", ") || tr("uncategorized"))}</div>
-          <div class="graph-cluster-preview">${escapeHtml((cluster.preview_paths || []).join(" / ") || tr("no_preview_path"))}</div>
-        </button>
-      `).join("");
-    }
-
-    function renderGraphCluster() {
-      if (!graphClusterData) {
-        $("graphClusterTitle").innerHTML = "";
-        $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(graphEmptyMessage(graphMeta))}</div>`;
-        $("graphEdges").innerHTML = "";
-        $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(graphDetailEmptyMessage(graphMeta))}</div>`;
-        return;
-      }
-      const categories = (graphClusterData.categories || []).join(", ") || tr("uncategorized");
-      $("graphClusterTitle").innerHTML = [
-        `<span class="pill">${tr("cluster")} ${graphClusterData.cluster_id + 1}</span>`,
-        `<span class="pill">${graphClusterData.size} ${tr("documents_unit")}</span>`,
-        `<span class="pill">${graphClusterData.edge_count} ${tr("edges_unit")}</span>`,
-        `<span class="pill">${escapeHtml(categories)}</span>`
-      ].join("");
-      renderGraphCanvas();
-      renderGraphEdges();
-      renderGraphDetail();
-    }
-
-    function graphDisplayName(relativePath) {
-      const value = String(relativePath || "");
-      const parts = value.split(/[\\\\/]/);
-      return parts[parts.length - 1] || value;
-    }
-
-    function graphShortLabel(relativePath, maxLength = 18) {
-      const name = graphDisplayName(relativePath).replace(/\.[^.]+$/, "");
-      return name.length <= maxLength ? name : name.slice(0, maxLength - 1) + "…";
-    }
-
-    function graphColorForCategory(category) {
-      const value = String(category || "Unknown");
-      let hash = 0;
-      for (const ch of value) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
-      return `hsl(${hash}, 68%, 55%)`;
-    }
-
-    function graphNodePositionMap(files, selectedPath) {
-      const width = 760;
-      const height = 460;
-      const centerX = width / 2;
-      const centerY = height / 2;
-      const positions = {};
-      const ordered = files.map(item => item.relative_path);
-      const anchor = selectedPath && ordered.includes(selectedPath) ? selectedPath : ordered[0];
-      if (!anchor) return {width, height, positions};
-      positions[anchor] = {x: centerX, y: centerY};
-      const others = ordered.filter(path => path !== anchor);
-      const radius = Math.min(width, height) * 0.34;
-      others.forEach((path, index) => {
-        const angle = -Math.PI / 2 + (index * 2 * Math.PI) / Math.max(others.length, 1);
-        positions[path] = {
-          x: centerX + radius * Math.cos(angle),
-          y: centerY + radius * Math.sin(angle),
-        };
-      });
-      return {width, height, positions};
-    }
-
-    function renderGraphCanvas() {
-      const files = graphClusterData.files || [];
-      if (!files.length) {
-        $("graphCanvas").innerHTML = `<div class="graph-empty">${escapeHtml(tr("graph_no_docs"))}</div>`;
-        return;
-      }
-      const selectedPath = graphSelectedDocPath || files[0].relative_path;
-      const layout = graphNodePositionMap(files, selectedPath);
-      const edges = (graphClusterData.edges || []).map(edge => {
-        const left = layout.positions[edge.left_path];
-        const right = layout.positions[edge.right_path];
-        if (!left || !right) return "";
-        const active = edge.left_path === selectedPath || edge.right_path === selectedPath;
-        const stroke = active ? "#2563eb" : "#94a3b8";
-        const opacity = active ? 0.9 : 0.45;
-        const width = Math.max(1.5, Number(edge.relation_score || 0) * 3);
-        const title = `${edge.left_path} ↔ ${edge.right_path} | score=${edge.relation_score} | ${(edge.signals || []).join(", ")}`;
-        return `<line x1="${left.x}" y1="${left.y}" x2="${right.x}" y2="${right.y}" stroke="${stroke}" stroke-width="${width}" opacity="${opacity}"><title>${escapeHtml(title)}</title></line>`;
-      }).join("");
-      const nodes = files.map(file => {
-        const point = layout.positions[file.relative_path];
-        const selected = file.relative_path === selectedPath;
-        const radius = selected ? 22 : 18;
-        const fill = graphColorForCategory(file.category);
-        const stroke = selected ? "#172033" : "#ffffff";
-        const title = `${file.relative_path} | ${file.category} | q=${file.quality} | ${labelStatus(file.status)}`;
-        return `
-          <g onclick='selectGraphDoc(${JSON.stringify(file.relative_path)})' style="cursor:pointer">
-            <circle cx="${point.x}" cy="${point.y}" r="${radius}" fill="${fill}" stroke="${stroke}" stroke-width="${selected ? 3 : 2}"><title>${escapeHtml(title)}</title></circle>
-            <text x="${point.x}" y="${point.y + radius + 16}" text-anchor="middle" font-size="11" fill="#172033">${escapeHtml(graphShortLabel(file.relative_path))}</text>
-          </g>
-        `;
-      }).join("");
-      $("graphCanvas").innerHTML = `<svg class="graph-svg" viewBox="0 0 ${layout.width} ${layout.height}" preserveAspectRatio="xMidYMid meet">${edges}${nodes}</svg>`;
-    }
-
-    function selectGraphDoc(relativePath) {
-      graphSelectedDocPath = relativePath;
-      renderGraphCanvas();
-      renderGraphEdges();
-      renderGraphDetail();
-    }
-
-    function renderGraphEdges() {
-      if (!graphClusterData) {
-        $("graphEdges").innerHTML = "";
-        return;
-      }
-      const selectedPath = graphSelectedDocPath;
-      let edges = graphClusterData.edges || [];
-      if (selectedPath) {
-        edges = edges.filter(edge => edge.left_path === selectedPath || edge.right_path === selectedPath);
-      }
-      edges = [...edges].sort((a, b) => Number(b.relation_score || 0) - Number(a.relation_score || 0)).slice(0, 18);
-      if (!edges.length) {
-        $("graphEdges").innerHTML = `<div class="graph-empty">${escapeHtml(tr("graph_no_edges"))}</div>`;
-        return;
-      }
-      $("graphEdges").innerHTML = edges.map(edge => {
-        const title = `${graphDisplayName(edge.left_path)} ↔ ${graphDisplayName(edge.right_path)}`;
-        const signals = (edge.signals || []).join(", ") || tr("no_explicit_signal");
-        return `
-          <div class="graph-edge-item">
-            <div class="graph-cluster-title">${escapeHtml(title)}</div>
-            <div class="muted">score ${edge.relation_score} · ${escapeHtml(signals)}</div>
-          </div>
-        `;
-      }).join("");
-    }
-
-    function graphNeighborPath(edge, relativePath) {
-      return edge.left_path === relativePath ? edge.right_path : edge.left_path;
-    }
-
-    function graphEmptyMessage(payload) {
-      const task = (payload && payload.task) || {};
-      if (task.running) return trf("graph_task_running_refresh", {task: graphTaskKindLabel(task.kind)});
-      if (payload && !payload.decisions_exists) return tr("graph_need_analysis_before_graph");
-      if (payload && payload.decisions_exists && !payload.relations_exists) return tr("graph_no_relationships_generate");
-      return tr("empty_graph");
-    }
-
-    function graphDetailEmptyMessage(payload) {
-      const task = (payload && payload.task) || {};
-      if (task.running) return tr("graph_task_running_detail");
-      if (payload && payload.decisions_exists && !payload.relations_exists) return tr("graph_generate_then_detail");
-      return tr("graph_select_cluster");
-    }
-
-    async function graphMarkDoc(relativePath, status) {
-      await markDoc(relativePath, status);
-      if (graphSelectedClusterId !== null) {
-        await loadGraphCluster(graphSelectedClusterId, true);
-      }
-    }
-
-    function renderGraphDetail() {
-      if (!graphClusterData || !graphClusterData.files || !graphClusterData.files.length) {
-        $("graphDocDetail").innerHTML = `<div class="graph-empty">${escapeHtml(tr("graph_select_cluster"))}</div>`;
-        return;
-      }
-      const selected = graphClusterData.files.find(item => item.relative_path === graphSelectedDocPath) || graphClusterData.files[0];
-      graphSelectedDocPath = selected.relative_path;
-      const relatedEdges = (graphClusterData.edges || [])
-        .filter(edge => edge.left_path === selected.relative_path || edge.right_path === selected.relative_path)
-        .sort((a, b) => Number(b.relation_score || 0) - Number(a.relation_score || 0));
-      $("graphDocDetail").innerHTML = `
-        <div class="graph-detail-card">
-          <div class="graph-cluster-title">${escapeHtml(graphDisplayName(selected.relative_path))}</div>
-          <div class="muted">${escapeHtml(selected.relative_path)}</div>
-          <div class="stats">
-            <span class="pill">${escapeHtml(labelStatus(selected.status))}</span>
-            <span class="pill">q ${selected.quality}</span>
-            <span class="pill">${escapeHtml(selected.category)}</span>
-            <span class="pill">${escapeHtml(selected.document_kind || "Unknown")}</span>
-          </div>
-          <div class="stats">
-            <span class="pill">${tr("sensitive")} ${selected.sensitivity_risk}</span>
-            <span class="pill">${tr("public_label")} ${selected.public_writing_suitability}</span>
-          </div>
-          <p class="muted">${escapeHtml(selected.summary || tr("no_summary"))}</p>
-          <div class="graph-actions">
-            <button ${capabilities.open_file === false ? "disabled" : ""} onclick='openDoc(${JSON.stringify(selected.relative_path)})'>${tr("open")}</button>
-            <button ${capabilities.reveal_file === false ? "disabled" : ""} onclick='revealDoc(${JSON.stringify(selected.relative_path)})'>${tr("reveal")}</button>
-            <button onclick='graphMarkDoc(${JSON.stringify(selected.relative_path)}, "reading")'>${tr("mark_reading")}</button>
-            <button onclick='graphMarkDoc(${JSON.stringify(selected.relative_path)}, "read")'>${tr("mark_read")}</button>
-            <button onclick='graphMarkDoc(${JSON.stringify(selected.relative_path)}, "deferred")'>${tr("mark_deferred")}</button>
-          </div>
-        </div>
-        <div class="graph-detail-card">
-          <div class="graph-cluster-title">${tr("related_documents")}</div>
-          ${relatedEdges.length ? relatedEdges.map(edge => {
-            const neighbor = graphNeighborPath(edge, selected.relative_path);
-            return `
-              <div style="display:grid; gap:4px; margin-top:8px;">
-                <button class="graph-cluster-item" style="padding:8px;" onclick='selectGraphDoc(${JSON.stringify(neighbor)})'>
-                  <div class="graph-cluster-title">${escapeHtml(graphDisplayName(neighbor))}</div>
-                  <div class="muted">score ${edge.relation_score} · ${escapeHtml((edge.signals || []).join(", ") || tr("no_explicit_signal"))}</div>
-                </button>
-              </div>
-            `;
-          }).join("") : `<div class="muted" style="margin-top:8px;">${escapeHtml(tr("no_related_edges"))}</div>`}
-        </div>
-      `;
-    }
-
-    function applyClientFilters() {
-      filteredRows = sortRowsClient(allRows.filter(rowMatchesFilters), sortKey);
-      const pageCount = pageCountFor(filteredRows.length);
-      currentPage = Math.min(Math.max(currentPage, 1), pageCount);
-      renderStatsFromRows(filteredRows, allRows.length);
-      renderPager();
-      renderSortMarks();
-      renderPageRows();
-    }
-
-    function renderPageRows() {
-      const start = (currentPage - 1) * pageSize;
-      currentRows = filteredRows.slice(start, start + pageSize);
-      renderRows(currentRows);
-    }
-
-    function renderStatsFromRows(rows, totalCount) {
-      const counts = countStatus(rows);
-      const parts = [`${tr("match_prefix")} ${rows.length} / ${tr("all_prefix")} ${totalCount}`];
-      for (const key of ["failed","unread","reading","read","reread_needed","skipped","deferred"]) {
-        if (counts[key]) parts.push(`${labelStatus(key)} ${counts[key]}`);
-      }
-      $("stats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
-    }
-
-    function renderPager() {
-      const pageCount = pageCountFor(filteredRows.length);
-      const start = filteredRows.length ? ((currentPage - 1) * pageSize + 1) : 0;
-      const end = Math.min(currentPage * pageSize, filteredRows.length);
-      const html = `
-        <span class="muted">${start}-${end} / ${filteredRows.length}</span>
-        <button onclick="setPage(1)" ${currentPage <= 1 ? "disabled" : ""}>${tr("first_page")}</button>
-        <button onclick="setPage(${currentPage - 1})" ${currentPage <= 1 ? "disabled" : ""}>${tr("previous_page")}</button>
-        <span>${tr("page_label")} <input value="${currentPage}" onchange="setPage(Number(this.value))" /> / ${pageCount} ${tr("page_suffix")}</span>
-        <button onclick="setPage(${currentPage + 1})" ${currentPage >= pageCount ? "disabled" : ""}>${tr("next_page")}</button>
-        <button onclick="setPage(${pageCount})" ${currentPage >= pageCount ? "disabled" : ""}>${tr("last_page")}</button>
-        <label style="display:inline-flex; align-items:center; gap:4px;">${tr("page_size_label")} <input value="${pageSize}" min="1" onchange="setPageSize(Number(this.value))" /></label>`;
-      $("pagerTop").innerHTML = html;
-      $("pagerBottom").innerHTML = html;
-    }
-
-    function rowMatchesFilters(row) {
-      const status = $("status").value;
-      if (status && row.status !== status) return false;
-      const q = $("q").value.trim().toLowerCase();
-      if (readingScope === "source" || row.source_only || row.status === "failed") {
-        return !q || rowMatchesSearch(row, q);
-      }
-      const minQuality = Number($("min_quality").value || 0);
-      if (Number(row.quality || 0) < minQuality) return false;
-      const maxSensitivity = $("max_sensitivity_risk").value.trim();
-      if (maxSensitivity && Number(row.sensitivity_risk || 0) > Number(maxSensitivity)) return false;
-      const minPublic = $("min_public_writing_suitability").value.trim();
-      if (minPublic && Number(row.public_writing_suitability || 0) < Number(minPublic)) return false;
-
-      const selectedCategories = selectedValues("categories");
-      if (selectedCategories.length && selectedCategories.length < $("categories").options.length && !selectedCategories.includes(row.category)) return false;
-
-      const selectedTags = selectedValues("topic_tags");
-      if (selectedTags.length && selectedTags.length < $("topic_tags").options.length) {
-        const rowTags = row.topic_tags || [];
-        if (!selectedTags.some(tag => rowTags.includes(tag))) return false;
-      }
-
-      if (q && !rowMatchesSearch(row, q)) return false;
-      return true;
-    }
-
-    function rowMatchesSearch(row, q) {
-      const haystack = [
-        row.relative_path || "",
-        row.source_path || "",
-        row.category || "",
-        row.document_kind || "",
-        row.summary || "",
-        row.reason || "",
-        row.failure_stage || "",
-        row.failure_reason || "",
-        row.failure_error || "",
-        (row.topic_tags || []).join(" "),
-        row.note || ""
-      ].join(" ").toLowerCase();
-      return haystack.includes(q);
-    }
-
-    function exportFilteredRows(format) {
-      const rows = filteredRows || [];
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const extension = format === "jsonl" ? "jsonl" : "csv";
-      const filename = `doctriage-${readingScope}-${timestamp}.${extension}`;
-      const content = format === "jsonl" ? rowsToJsonl(rows) : rowsToCsv(rows);
-      const mime = format === "jsonl" ? "application/x-ndjson;charset=utf-8" : "text/csv;charset=utf-8";
-      downloadText(filename, content, mime);
-      showToast(`${tr("exported_rows")} ${rows.length}`);
-    }
-
-    function exportRow(row) {
-      return {
-        relative_path: row.relative_path || "",
-        source_path: row.source_path || "",
-        status: row.status || "",
-        quality: row.quality ?? "",
-        category: row.category || "",
-        document_kind: row.document_kind || "",
-        topic_tags: (row.topic_tags || []).join(", "),
-        sensitivity_risk: row.sensitivity_risk ?? "",
-        public_writing_suitability: row.public_writing_suitability ?? "",
-        source_mtime: row.source_mtime || "",
-        source_size_bytes: row.source_size_bytes ?? "",
-        summary: row.summary || "",
-        reason: row.reason || "",
-        knowledge_density: row.knowledge_density ?? "",
-        implementation_specificity: row.implementation_specificity ?? "",
-        logical_structure: row.logical_structure ?? "",
-        evidence_richness: row.evidence_richness ?? "",
-        actionability: row.actionability ?? "",
-        strategic_value: row.strategic_value ?? "",
-        freshness: row.freshness ?? "",
-        uniqueness: row.uniqueness ?? "",
-        note: row.note || "",
-        attempts: row.attempts ?? "",
-        failure_stage: row.failure_stage || "",
-        failure_reason: row.failure_reason || "",
-        failure_error: row.failure_error || ""
-      };
-    }
-
-    function rowsToJsonl(rows) {
-      return rows.map(row => JSON.stringify(exportRow(row))).join("\n") + (rows.length ? "\n" : "");
-    }
-
-    function rowsToCsv(rows) {
-      const headers = [
-        "relative_path",
-        "source_path",
-        "status",
-        "quality",
-        "category",
-        "document_kind",
-        "topic_tags",
-        "sensitivity_risk",
-        "public_writing_suitability",
-        "source_mtime",
-        "source_size_bytes",
-        "summary",
-        "reason",
-        "knowledge_density",
-        "implementation_specificity",
-        "logical_structure",
-        "evidence_richness",
-        "actionability",
-        "strategic_value",
-        "freshness",
-        "uniqueness",
-        "note",
-        "attempts",
-        "failure_stage",
-        "failure_reason",
-        "failure_error"
-      ];
-      const lines = [headers.join(",")];
-      for (const row of rows) {
-        const item = exportRow(row);
-        lines.push(headers.map(header => csvCell(item[header])).join(","));
-      }
-      return lines.join("\n") + "\n";
-    }
-
-    function csvCell(value) {
-      const text = String(value ?? "");
-      return `"${text.replace(/"/g, '""')}"`;
-    }
-
-    function downloadText(filename, content, mime) {
-      const blob = new Blob([content], {type: mime});
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    }
-
-    function populateFacetOptions(rows) {
-      const categories = Array.from(new Set(rows.map(row => row.category).filter(Boolean))).sort();
-      const tags = Array.from(new Set(rows.flatMap(row => row.topic_tags || []).filter(Boolean))).sort();
-      populateMultiSelect("categories", categories);
-      populateMultiSelect("topic_tags", tags);
-    }
-
-    function populateMultiSelect(id, values) {
-      const select = $(id);
-      const selected = new Set(selectedValues(id));
-      select.innerHTML = values.map(value =>
-        `<option value="${escapeAttrValue(value)}" ${selected.has(value) ? "selected" : ""}>${escapeHtml(value)}</option>`
-      ).join("");
-    }
-
-    function selectedValues(id) {
-      return Array.from($(id).selectedOptions || []).map(option => option.value);
-    }
-
-    function selectMulti(id, checked) {
-      Array.from($(id).options).forEach(option => option.selected = checked);
-      currentPage = 1;
-      applyClientFilters();
-    }
-
-    function invertMulti(id) {
-      Array.from($(id).options).forEach(option => option.selected = !option.selected);
-      currentPage = 1;
-      applyClientFilters();
-    }
-
-    function countStatus(rows) {
-      const counts = {};
-      rows.forEach(row => counts[row.status] = (counts[row.status] || 0) + 1);
-      return counts;
-    }
-
-    function setSort(field) {
-      const next = {
-        quality: sortKey === "quality_desc" ? "quality_asc" : "quality_desc",
-        path: sortKey === "source_path_asc" || sortKey === "path_asc" ? "source_path_desc" : "source_path_asc",
-        source_mtime: sortKey === "source_mtime_desc" ? "source_mtime_asc" : "source_mtime_desc",
-        category: sortKey === "category_asc" ? "category_desc" : "category_asc",
-        status: sortKey === "status_asc" ? "status_desc" : "status_asc",
-        document_kind: sortKey === "kind_asc" ? "kind_desc" : "kind_asc",
-        sensitivity: sortKey === "sensitivity_asc" ? "sensitivity_desc" : "sensitivity_asc",
-        public: sortKey === "public_desc" ? "public_asc" : "public_desc"
-      };
-      sortKey = next[field] || defaultSortForScope(readingScope);
-      localStorage.setItem(sortStorageKey(readingScope), sortKey);
-      currentPage = 1;
-      applyClientFilters();
-    }
-
-    function sortRowsClient(rows, key) {
-      const sorted = [...rows];
-      const text = value => String(value || "").toLowerCase();
-      const num = value => Number(value || 0);
-      const sourcePath = row => text(row.source_path || row.relative_path);
-      const sourceMtime = row => Number(row.source_mtime_epoch || 0);
-      const comparators = {
-        quality_desc: (a, b) => num(b.quality) - num(a.quality) || text(a.relative_path).localeCompare(text(b.relative_path)),
-        quality_asc: (a, b) => num(a.quality) - num(b.quality) || text(a.relative_path).localeCompare(text(b.relative_path)),
-        path_asc: (a, b) => sourcePath(a).localeCompare(sourcePath(b)),
-        path_desc: (a, b) => sourcePath(b).localeCompare(sourcePath(a)),
-        source_path_asc: (a, b) => sourcePath(a).localeCompare(sourcePath(b)),
-        source_path_desc: (a, b) => sourcePath(b).localeCompare(sourcePath(a)),
-        source_mtime_desc: (a, b) => sourceMtime(b) - sourceMtime(a) || sourcePath(a).localeCompare(sourcePath(b)),
-        source_mtime_asc: (a, b) => sourceMtime(a) - sourceMtime(b) || sourcePath(a).localeCompare(sourcePath(b)),
-        category_asc: (a, b) => text(a.category).localeCompare(text(b.category)) || num(b.quality) - num(a.quality),
-        category_desc: (a, b) => text(b.category).localeCompare(text(a.category)) || num(b.quality) - num(a.quality),
-        status_asc: (a, b) => text(a.status).localeCompare(text(b.status)) || num(b.quality) - num(a.quality),
-        status_desc: (a, b) => text(b.status).localeCompare(text(a.status)) || num(b.quality) - num(a.quality),
-        kind_asc: (a, b) => text(a.document_kind).localeCompare(text(b.document_kind)) || num(b.quality) - num(a.quality),
-        kind_desc: (a, b) => text(b.document_kind).localeCompare(text(a.document_kind)) || num(b.quality) - num(a.quality),
-        sensitivity_asc: (a, b) => num(a.sensitivity_risk) - num(b.sensitivity_risk) || num(b.quality) - num(a.quality),
-        sensitivity_desc: (a, b) => num(b.sensitivity_risk) - num(a.sensitivity_risk) || num(b.quality) - num(a.quality),
-        public_desc: (a, b) => num(b.public_writing_suitability) - num(a.public_writing_suitability) || num(b.quality) - num(a.quality),
-        public_asc: (a, b) => num(a.public_writing_suitability) - num(b.public_writing_suitability) || num(b.quality) - num(a.quality)
-      };
-      sorted.sort(comparators[key] || comparators.quality_desc);
-      return sorted;
-    }
-
-    function renderSortMarks() {
-      document.querySelectorAll("[data-sort-mark]").forEach(item => item.textContent = "");
-      const map = {
-        quality_desc: ["quality", "↓"],
-        quality_asc: ["quality", "↑"],
-        path_asc: ["path", "↑"],
-        path_desc: ["path", "↓"],
-        source_path_asc: ["path", "↑"],
-        source_path_desc: ["path", "↓"],
-        source_mtime_desc: ["source_mtime", "↓"],
-        source_mtime_asc: ["source_mtime", "↑"],
-        category_asc: ["category", "↑"],
-        category_desc: ["category", "↓"],
-        status_asc: ["status", "↑"],
-        status_desc: ["status", "↓"],
-        kind_asc: ["document_kind", "↑"],
-        kind_desc: ["document_kind", "↓"],
-        sensitivity_asc: ["sensitivity", "↑"],
-        sensitivity_desc: ["sensitivity", "↓"],
-        public_desc: ["sensitivity", tr("sort_public_desc")],
-        public_asc: ["sensitivity", tr("sort_public_asc")]
-      };
-      const mark = map[sortKey];
-      if (!mark) return;
-      const target = document.querySelector(`[data-sort-mark="${mark[0]}"]`);
-      if (target) target.textContent = mark[1];
-    }
-
-    function pageCountFor(total) {
-      return Math.max(1, Math.ceil(total / Math.max(1, pageSize)));
-    }
-
-    function setPage(page) {
-      if (!Number.isFinite(page)) return;
-      currentPage = Math.min(Math.max(Math.floor(page), 1), pageCountFor(filteredRows.length));
-      renderPager();
-      renderPageRows();
-    }
-
-    function setPageSize(value) {
-      if (!Number.isFinite(value) || value < 1) return;
-      pageSize = Math.max(1, Math.floor(value));
-      localStorage.setItem("doctriage_page_size", String(pageSize));
-      currentPage = 1;
-      renderPager();
-      renderPageRows();
-    }
-
-    function rowExplanation(row) {
-      const parts = [];
-      const summary = String(row.summary || "").trim();
-      const reason = String(row.reason || "").trim();
-      if (summary) parts.push(`${tr("explain_summary")}: ${summary}`);
-      if (reason) parts.push(`${tr("explain_reason")}: ${reason}`);
-      const dimensions = EXPLANATION_DIMENSIONS
-        .map(([field, labelKey]) => {
-          const value = Number(row[field]);
-          if (!Number.isFinite(value) || value <= 0) return "";
-          return `${tr(labelKey)} ${value}`;
-        })
-        .filter(Boolean);
-      if (dimensions.length) parts.push(`${tr("explain_dimensions")}: ${dimensions.join(" / ")}`);
-      if (row.failure) {
-        const failureParts = [];
-        if (row.failure_stage) failureParts.push(`${tr("explain_failure_stage")} ${row.failure_stage}`);
-        if (row.failure_reason) failureParts.push(`${tr("explain_failure_reason")} ${row.failure_reason}`);
-        if (row.attempts) failureParts.push(`${tr("explain_failure_attempts")} ${row.attempts}`);
-        if (row.failure_error && row.failure_error !== summary) {
-          failureParts.push(`${tr("explain_failure_error")} ${row.failure_error}`);
-        }
-        if (failureParts.length) parts.push(`${tr("explain_failure")}: ${failureParts.join(" / ")}`);
-      }
-      return parts.join("\n");
-    }
-
-    function renderRows(rows) {
-      $("rows").innerHTML = rows.map(row => {
-        const explanation = rowExplanation(row);
-        return `
-        <tr>
-          <td>${isPureFailureRow(row) ? "" : `<input type="checkbox" class="rowcheck" value="${escapeHtml(row.relative_path)}" />`}</td>
-          <td class="status-${escapeAttr(row.status)}">${labelStatus(row.status)}</td>
-          <td>${formatQuality(row)}</td>
-          <td>${escapeHtml(displayCategory(row))}</td>
-          <td>${escapeHtml(displayKind(row))}</td>
-          <td>${formatSensitivityPublic(row)}</td>
-          <td class="name">
-            <span class="doc-name ${explanation ? "has-summary" : ""}" tabindex="${explanation ? "0" : "-1"}" data-tip="${escapeAttrValue(explanation)}">${escapeHtml(row.relative_path || "")}</span>
-            ${row.source_path ? `<span class="doc-path">${escapeHtml(row.source_path)}</span>` : ""}
-            ${row.note ? `<br><span class="muted">${escapeHtml(row.note)}</span>` : ""}
-          </td>
-          <td>${escapeHtml(row.source_mtime_label || "")}${row.source_size_label ? `<br><span class="muted">${escapeHtml(row.source_size_label)}</span>` : ""}</td>
-          <td>${escapeHtml((row.topic_tags || []).join(", "))}</td>
-          <td class="actions">${renderRowActions(row)}</td>
-        </tr>`;
-      }).join("");
-      bindSummaryTooltips();
-    }
-
-    function isPureFailureRow(row) {
-      return row.failure && !row.source_scope;
-    }
-
-    function formatQuality(row) {
-      return Number.isFinite(Number(row.quality)) && row.quality !== null && row.quality !== undefined ? escapeHtml(row.quality) : "—";
-    }
-
-    function displayCategory(row) {
-      if (row.category) return row.category;
-      return row.source_only ? tr("scope_source_unscored") : "";
-    }
-
-    function displayKind(row) {
-      if (row.document_kind && row.document_kind !== "Unscored") return row.document_kind;
-      return row.source_only ? tr("scope_source_unscored") : (row.document_kind || "");
-    }
-
-    function formatSensitivityPublic(row) {
-      if (row.failure && !row.source_scope) return "—";
-      if (row.sensitivity_risk === null || row.sensitivity_risk === undefined || row.public_writing_suitability === null || row.public_writing_suitability === undefined) return "—";
-      return `${row.sensitivity_risk} / ${row.public_writing_suitability}`;
-    }
-
-    function renderRowActions(row) {
-      if (isPureFailureRow(row)) {
-        const missing = row.exists === false;
-        const missingTitle = missing ? ` title='${escapeAttrValue(tr("missing_source_title"))}'` : "";
-        return `
-          <button ${missing || capabilities.open_file === false ? `disabled${missingTitle || ` title='${escapeAttrValue(tr("disabled_open_title"))}'`}` : ""} onclick='openFailure(${JSON.stringify(row.source_path)})'>${tr("open")}</button>
-          <button ${missing || capabilities.reveal_file === false ? `disabled${missingTitle || ` title='${escapeAttrValue(tr("disabled_reveal_title"))}'`}` : ""} onclick='revealFailure(${JSON.stringify(row.source_path)})'>${tr("reveal")}</button>
-        `;
-      }
-      const missing = row.exists === false;
-      const missingTitle = missing ? ` title='${escapeAttrValue(tr("missing_source_title"))}'` : "";
-      return `
-        <button ${missing || capabilities.open_file === false ? `disabled${missingTitle || ` title='${escapeAttrValue(tr("disabled_open_title"))}'`}` : ""} onclick='openDoc(${JSON.stringify(row.relative_path)})'>${tr("open")}</button>
-        <button ${missing || capabilities.reveal_file === false ? `disabled${missingTitle || ` title='${escapeAttrValue(tr("disabled_reveal_title"))}'`}` : ""} onclick='revealDoc(${JSON.stringify(row.relative_path)})'>${tr("reveal")}</button>
-        <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "reading")'>${tr("mark_reading")}</button>
-        <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "read")'>${tr("mark_read")}</button>
-        <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "deferred")'>${tr("mark_deferred")}</button>
-        <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "skipped")'>${tr("mark_skipped")}</button>
-        <button onclick='markDoc(${JSON.stringify(row.relative_path)}, "unread")'>${tr("mark_unread")}</button>
-      `;
-    }
-
-    async function markDoc(relativePath, status) {
-      const note = status === "read" ? "" : "";
-      const response = await fetch("/api/mark", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({relative_path: relativePath, status, note, ...readingPathPayload()})
-      });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("mark_failed"));
-      showToast(trf("marked_status", {status: labelStatus(status)}));
-      loadRows();
-    }
-
-    function selectedPaths() {
-      return Array.from(document.querySelectorAll(".rowcheck:checked")).map(item => item.value);
-    }
-
-    function toggleAllRows(checked) {
-      document.querySelectorAll(".rowcheck").forEach(item => item.checked = checked);
-    }
-
-    async function bulkMark(status) {
-      const paths = selectedPaths();
-      if (!paths.length) return showToast(tr("select_documents_first"));
-      const response = await fetch("/api/mark-batch", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({relative_paths: paths, status, ...readingPathPayload()})
-      });
-      const payload = await response.json();
-      if (!response.ok) return showToast(payload.error || tr("bulk_mark_failed"));
-      showToast(trf("bulk_marked", {count: payload.count || 0}));
-      loadRows();
-    }
-
-    function openNextVisible() {
-      const row = currentRows.find(item => item.status === "unread" || item.status === "reread_needed") || currentRows[0];
-      if (!row) return showToast(tr("current_list_empty"));
-      openDoc(row.relative_path);
-    }
-
-    async function openDoc(relativePath) {
-      await postAction("/api/open", relativePath, tr("requested_open"));
-    }
-
-    async function revealDoc(relativePath) {
-      await postAction("/api/reveal", relativePath, tr("requested_reveal"));
-    }
-
-    async function openFailure(sourcePath) {
-      await postSourceAction("/api/open-failure", sourcePath, tr("requested_open"));
-    }
-
-    async function revealFailure(sourcePath) {
-      await postSourceAction("/api/reveal-failure", sourcePath, tr("requested_reveal"));
-    }
-
-    async function postAction(url, relativePath, okText) {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({relative_path: relativePath, ...readingPathPayload()})
-      });
-      const payload = await response.json();
-      showToast(response.ok ? okText : (payload.error || tr("operation_failed")));
-    }
-
-    async function postSourceAction(url, sourcePath, okText) {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({source_path: sourcePath, ...readingPathPayload()})
-      });
-      const payload = await response.json();
-      showToast(response.ok ? okText : (payload.error || tr("operation_failed")));
-    }
-
-    function labelStatus(status) {
-      return {
-        unread: tr("status_unread"),
-        reading: tr("status_reading"),
-        read: tr("status_read"),
-        reread_needed: tr("status_reread_needed"),
-        failed: tr("status_failed"),
-        skipped: tr("status_skipped"),
-        deferred: tr("status_deferred")
-      }[status] || status;
-    }
-
-    function showToast(text) {
-      const toast = $("toast");
-      toast.textContent = text;
-      toast.style.display = "block";
-      setTimeout(() => toast.style.display = "none", 2600);
-    }
-
-    function hideHelpTooltip() {
-      tooltipTarget = null;
-      $("tooltip").style.display = "none";
-    }
-
-    function positionHelpTooltip(target) {
-      const tooltip = $("tooltip");
-      const tip = target && target.dataset ? String(target.dataset.tip || "") : "";
-      if (!tip) {
-        hideHelpTooltip();
-        return;
-      }
-      tooltip.textContent = tip;
-      tooltip.style.display = "block";
-      tooltip.style.visibility = "hidden";
-      const margin = 12;
-      tooltip.style.maxWidth = Math.min(320, Math.max(180, window.innerWidth - margin * 2)) + "px";
-      const targetRect = target.getBoundingClientRect();
-      const tooltipRect = tooltip.getBoundingClientRect();
-      const left = Math.min(
-        Math.max(margin, targetRect.left + targetRect.width / 2 - tooltipRect.width / 2),
-        window.innerWidth - tooltipRect.width - margin
-      );
-      const top = Math.max(margin, targetRect.top - tooltipRect.height - 10);
-      tooltip.style.left = left + "px";
-      tooltip.style.top = top + "px";
-      tooltip.style.visibility = "visible";
-    }
-
-    function showHelpTooltip(target) {
-      tooltipTarget = target;
-      positionHelpTooltip(target);
-    }
-
-    function refreshHelpTooltip() {
-      if (tooltipTarget) positionHelpTooltip(tooltipTarget);
-    }
-
-    function bindSummaryTooltips(root = document) {
-      root.querySelectorAll("[data-tip]").forEach(item => {
-        if (item.dataset.tooltipBound === "1") return;
-        item.dataset.tooltipBound = "1";
-        item.addEventListener("mouseenter", () => showHelpTooltip(item));
-        item.addEventListener("mouseleave", hideHelpTooltip);
-        item.addEventListener("focus", () => showHelpTooltip(item));
-        item.addEventListener("blur", hideHelpTooltip);
-      });
-    }
-
-    function initHelpTooltips() {
-      bindSummaryTooltips();
-      window.addEventListener("scroll", hideHelpTooltip, true);
-      window.addEventListener("resize", refreshHelpTooltip);
-    }
-
-    function escapeHtml(value) {
-      return String(value ?? "").replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-    }
-
-    function escapeAttr(value) {
-      return String(value ?? "").replace(/[^a-zA-Z0-9_-]/g, "_");
-    }
-
-    function escapeAttrValue(value) {
-      return escapeHtml(value);
-    }
-
-    function initReadingControls() {
-      const scopeSelect = $("reading_scope");
-      if (scopeSelect) {
-        scopeSelect.value = readingScope;
-        scopeSelect.addEventListener("change", () => {
-          const previousScope = readingScope;
-          readingScope = scopeSelect.value || "analysis";
-          localStorage.setItem("doctriage_reading_scope", readingScope);
-          sortKey = localStorage.getItem(sortStorageKey(readingScope)) || defaultSortForScope(readingScope);
-          currentPage = 1;
-          loadRows();
-        });
-      }
-      for (const id of ["status","min_quality","q","max_sensitivity_risk","min_public_writing_suitability","categories","topic_tags"]) {
-        const element = $(id);
-        if (!element) continue;
-        element.addEventListener("change", () => {
-          currentPage = 1;
-          applyClientFilters();
-        });
-      }
-      $("q").addEventListener("input", () => {
-        currentPage = 1;
-        applyClientFilters();
-      });
-    }
-
-    function initGraphControls() {
-      for (const id of ["graph_q", "graph_min_size"]) {
-        const element = $(id);
-        if (!element) continue;
-        const eventName = id === "graph_q" ? "input" : "change";
-        element.addEventListener(eventName, () => applyGraphFilters(true));
-      }
-    }
-
-    initReadingControls();
-    initGraphControls();
-    initRunFormPersistence();
-    initReadingTargetPersistence();
-    initGraphTargetPersistence();
-    initHelpTooltips();
-    applyStoredRunFormState();
-    const readingApplied = applyStoredReadingTargetState();
-    const graphApplied = applyStoredGraphTargetState();
-    if (!readingApplied) syncReadingTargetFromRunOutput({force: true, syncGraph: !graphApplied});
-    if (!graphApplied) syncGraphTargetFromReadingOutput({force: true});
-    clearGraphState("empty_graph");
-    applyI18n();
-    loadConfig();
-    switchTab(localStorage.getItem("doctriage_tab") || "analysis");
-    setInterval(() => {
-      if ($("section-analysis").classList.contains("active")) loadAnalysis();
-    }, 3000);
-  </script>
-</body>
-</html>
-"""
+def read_ui_frontend_source() -> str:
+    return "\n".join(
+        read_ui_asset_text(asset_name)
+        for asset_name in (UI_INDEX_ASSET, "app.css", "app.js")
+    )
 
 
 def build_state_payload(paths: ReadingPaths, query: dict[str, str]) -> dict[str, Any]:
@@ -3358,6 +677,58 @@ def relationship_embedding_progress_path(paths: ReadingPaths) -> Path:
     return relationship_dir(paths) / "embedding_progress.json"
 
 
+def relationship_progress_path(paths: ReadingPaths) -> Path:
+    return relationship_dir(paths) / "progress.json"
+
+
+def relationship_outputs_complete_after(
+    paths: ReadingPaths, started_epoch: float | None
+) -> bool:
+    if not started_epoch or started_epoch <= 0:
+        return False
+    relation_path = relationship_relations_path(paths)
+    cluster_path = relationship_clusters_path(paths)
+    return (
+        file_modified_after(relation_path, started_epoch)
+        and file_modified_after(cluster_path, started_epoch)
+    )
+
+
+def file_modified_after(path: Path, started_epoch: float) -> bool:
+    try:
+        return path.exists() and path.stat().st_mtime >= started_epoch - 1
+    except OSError:
+        return False
+
+
+def rag_dir(paths: ReadingPaths) -> Path:
+    return paths.output_root / "_rag"
+
+
+def rag_documents_path(paths: ReadingPaths) -> Path:
+    return rag_dir(paths) / "documents.jsonl"
+
+
+def rag_chunks_path(paths: ReadingPaths) -> Path:
+    return rag_dir(paths) / "chunks.jsonl"
+
+
+def rag_vectors_path(paths: ReadingPaths) -> Path:
+    return rag_dir(paths) / "vectors.jsonl"
+
+
+def rag_manifest_path(paths: ReadingPaths) -> Path:
+    return rag_dir(paths) / "manifest.json"
+
+
+def rag_progress_path(paths: ReadingPaths) -> Path:
+    return rag_dir(paths) / "progress.json"
+
+
+def rag_log_path(paths: ReadingPaths) -> Path:
+    return rag_dir(paths) / "rag.log"
+
+
 def coerce_int_value(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -3411,6 +782,7 @@ def build_relationship_payload(
         "clusters": summaries,
         "selected_cluster": selected_cluster,
         "task": relationship_task_status(app_state, paths),
+        "progress": read_json_file(relationship_progress_path(paths)),
         "embedding_progress": read_json_file(relationship_embedding_progress_path(paths)),
     }
 
@@ -3550,23 +922,802 @@ def relationship_task_status(
     app_state: AppState, paths: ReadingPaths | None = None
 ) -> dict[str, Any]:
     with app_state.lock:
-        process = app_state.relationship_process
-        kind = app_state.relationship_process_kind
-        command = app_state.relationship_process_command
-        matches_paths = paths is None or paths_match_command(command, paths)
-        return_code = None if process is None or not matches_paths else process.poll()
-        if process is not None and process.poll() is not None:
-            app_state.relationship_process = None
-            app_state.relationship_process_kind = None
-            app_state.relationship_process_command = None
-        running = process is not None and return_code is None and matches_paths
-        pid = process.pid if process is not None and matches_paths else None
-    return {
+        task = relationship_task_for_paths(app_state, paths)
+        process = task.process if task is not None else None
+        kind = task.kind if task is not None else None
+        command = task.command if task is not None else None
+        return_code = None if process is None else process.poll()
+        relationship_outputs_complete = (
+            paths is not None
+            and process is not None
+            and return_code is None
+            and relationship_outputs_complete_after(paths, task.started_epoch if task is not None else None)
+        )
+        running = (
+            process is not None
+            and return_code is None
+            and not relationship_outputs_complete
+        )
+        pid = process.pid if process is not None and not relationship_outputs_complete else None
+        if relationship_outputs_complete:
+            return_code = 0
+        if relationship_outputs_complete:
+            reap_completed_managed_process(
+                app_state, paths, task, clear_relationship_task
+            )
+        if process is not None and return_code is not None:
+            clear_relationship_task(app_state, paths, task)
+
+        analysis_task = analysis_task_for_paths(app_state, paths)
+        analysis_process = analysis_task.process if analysis_task is not None else None
+        analysis_command = analysis_task.command if analysis_task is not None else None
+        analysis_started_epoch = (
+            analysis_task.started_epoch if analysis_task is not None else None
+        )
+        analysis_matches_paths = paths is None or paths_match_command(
+            analysis_command, paths
+        )
+        analysis_return_code = (
+            None
+            if analysis_process is None or not analysis_matches_paths
+            else analysis_process.poll()
+        )
+        analysis_running = (
+            analysis_process is not None
+            and analysis_return_code is None
+            and analysis_matches_paths
+        )
+        analysis_pid = (
+            analysis_process.pid
+            if analysis_process is not None and analysis_matches_paths
+            else None
+        )
+        if (
+            analysis_process is not None
+            and analysis_process.poll() is not None
+            and analysis_matches_paths
+        ):
+            clear_analysis_task(app_state, paths, analysis_task)
+            analysis_started_epoch = None
+    payload = {
         "running": running,
         "pid": pid,
-        "kind": kind if matches_paths else None,
-        "command": command if matches_paths else None,
+        "kind": kind,
+        "command": command,
         "return_code": return_code,
+        "source_dir": "" if paths is None else str(paths.source_dir),
+        "output_root": "" if paths is None else str(paths.output_root),
+    }
+    if running or return_code is not None or paths is None or relationship_outputs_complete:
+        return payload
+    recorded_task = relationship_task_from_record(paths)
+    if recorded_task is not None:
+        return recorded_task
+    progress = read_json_file(paths.progress_path)
+    embedding_progress = read_json_file(relationship_embedding_progress_path(paths))
+    lock_info = read_run_lock(run_lock_path(paths.output_root))
+    active_pid = None if analysis_running else active_run_pid_from_lock_info(lock_info)
+    active_started_epoch = (
+        analysis_started_epoch
+        if analysis_running
+        else coerce_float_value(lock_info.get("created_epoch"), 0.0)
+    )
+    if paths is not None and relationship_outputs_complete_after(paths, active_started_epoch):
+        return payload
+    if inline_relationship_mining_is_active(
+        running=analysis_running or active_pid is not None,
+        command=analysis_command,
+        log_tail=read_text_tail(paths.application_log_path, max_lines=80),
+        progress=progress,
+        embedding_progress=embedding_progress,
+        active_started_epoch=active_started_epoch,
+    ):
+        return inline_relationship_task_payload(
+            analysis_pid or active_pid,
+            analysis_command,
+            embedding_progress,
+            paths=paths,
+        )
+    return payload
+
+
+def inline_relationship_mining_is_active(
+    *,
+    running: bool,
+    command: list[str] | None,
+    log_tail: str,
+    progress: dict[str, Any] | None = None,
+    embedding_progress: dict[str, Any] | None = None,
+    active_started_epoch: float | None = None,
+) -> bool:
+    if not running:
+        return False
+    known_relationship_command = bool(command and "--mine-relationships" in command)
+    if command and not known_relationship_command:
+        return False
+    if relationship_log_marker_is_active(log_tail, active_started_epoch):
+        return True
+    if relationship_embedding_progress_is_active(
+        embedding_progress,
+        active_started_epoch=active_started_epoch,
+    ) and (
+        known_relationship_command or analysis_progress_is_complete(progress)
+    ):
+        return True
+    return known_relationship_command and analysis_progress_is_complete(progress)
+
+
+def relationship_log_marker_is_active(
+    log_tail: str, active_started_epoch: float | None = None
+) -> bool:
+    start_index = log_tail.rfind("Starting relationship mining")
+    complete_index = log_tail.rfind("Relationship mining completed")
+    if start_index <= complete_index:
+        return False
+    if active_started_epoch is None or active_started_epoch <= 0:
+        return True
+    start_epoch = log_line_epoch_for_index(log_tail, start_index)
+    if start_epoch is None:
+        return False
+    return start_epoch >= active_started_epoch - 2
+
+
+def log_line_epoch_for_index(log_tail: str, index: int) -> float | None:
+    line_start = log_tail.rfind("\n", 0, index) + 1
+    line = log_tail[line_start : log_tail.find("\n", index)]
+    if not line:
+        line = log_tail[line_start:]
+    timestamp_text = line[:23]
+    try:
+        return datetime.strptime(timestamp_text, "%Y-%m-%d %H:%M:%S,%f").timestamp()
+    except ValueError:
+        return None
+
+
+def analysis_progress_is_complete(progress: dict[str, Any] | None) -> bool:
+    if not isinstance(progress, dict):
+        return False
+    total = coerce_int_value(progress.get("total"), 0)
+    completed = coerce_int_value(progress.get("completed"), 0)
+    remaining = coerce_int_value(progress.get("remaining"), 0)
+    if total > 0:
+        return remaining == 0 and completed >= total
+    return completed > 0 and remaining == 0
+
+
+def relationship_embedding_progress_is_active(
+    progress: dict[str, Any] | None,
+    *,
+    active_started_epoch: float | None = None,
+) -> bool:
+    if not isinstance(progress, dict) or not bool(progress.get("enabled")):
+        return False
+    if active_started_epoch is not None and active_started_epoch > 0:
+        updated_epoch = coerce_float_value(progress.get("updated_epoch"), 0.0)
+        if updated_epoch and updated_epoch < active_started_epoch:
+            return False
+    phase = str(progress.get("phase") or "").strip().lower()
+    return phase not in {"complete", "error"}
+
+
+def inline_relationship_task_payload(
+    pid: int | None,
+    command: list[str] | None,
+    embedding_progress: dict[str, Any] | None = None,
+    paths: ReadingPaths | None = None,
+) -> dict[str, Any]:
+    task_command = list(command or [])
+    if (
+        "--relationship-use-embeddings" in task_command
+        and "--use-embeddings" not in task_command
+    ):
+        task_command.append("--use-embeddings")
+    if not task_command and (embedding_progress or {}).get("enabled"):
+        task_command.append("--use-embeddings")
+    return {
+        "running": True,
+        "pid": pid,
+        "kind": "mine",
+        "command": task_command,
+        "return_code": None,
+        "inline": True,
+        "source_dir": "" if paths is None else str(paths.source_dir),
+        "output_root": "" if paths is None else str(paths.output_root),
+    }
+
+
+def bundle_path_for_output(paths: ReadingPaths) -> Path:
+    return relationship_dir(paths) / "doctriage_bundle.json"
+
+
+def build_anydocs_url(base_url: str, bundle_path: Path, *, auto_plan: bool) -> str:
+    url_text = str(base_url or DEFAULT_ANYDOCS_URL).strip() or DEFAULT_ANYDOCS_URL
+    parsed = urllib.parse.urlparse(url_text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("AnyDocsToAgents URL must be an http(s) URL.")
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    query["doctriage_bundle_path"] = [str(bundle_path)]
+    if auto_plan:
+        query["autoplan"] = ["1"]
+    else:
+        query.pop("autoplan", None)
+    encoded_query = urllib.parse.urlencode(query, doseq=True)
+    return urllib.parse.urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path or "/",
+            parsed.params,
+            encoded_query,
+            "view-planner",
+        )
+    )
+
+
+def export_bundle_for_anydocs(paths: ReadingPaths, payload: dict[str, Any]) -> Path:
+    source_dir = paths.source_dir
+    output_root = paths.output_root
+    settings = Settings(
+        LLM_ENDPOINT=str(payload.get("llm_endpoint") or DEFAULT_LLM_ENDPOINT),
+        LLM_MODEL=str(payload.get("llm_model") or "") or None,
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+    )
+    return export_bundle(
+        settings,
+        output_path=bundle_path_for_output(paths),
+        selection=BundleSelection(
+            min_quality=parse_int(
+                str(payload.get("min_quality") or payload.get("quality_threshold") or 0),
+                0,
+            )
+        ),
+    )
+
+
+def export_anydocs_bundle_request(
+    app_state: AppState, payload: dict[str, Any]
+) -> dict[str, Any]:
+    paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
+    bundle_path = export_bundle_for_anydocs(paths, payload)
+    return {
+        "exported": True,
+        "bundle_path": str(bundle_path),
+    }
+
+
+def open_anydocs_request(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
+    paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
+    bundle_path = bundle_path_for_output(paths)
+    if bool(payload.get("export_bundle")) or not bundle_path.exists():
+        bundle_path = export_bundle_for_anydocs(paths, payload)
+    url = build_anydocs_url(
+        str(payload.get("anydocs_url") or DEFAULT_ANYDOCS_URL),
+        bundle_path,
+        auto_plan=bool(payload.get("auto_plan")),
+    )
+    webbrowser.open(url)
+    return {
+        "opened": True,
+        "url": url,
+        "bundle_path": str(bundle_path),
+    }
+
+
+def http_json_request(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout_seconds: float = HTTP_PROBE_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    request_headers = dict(headers or {})
+    data = None
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers=request_headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            raw = response.read(HTTP_PROBE_MAX_BYTES)
+            status_code = int(getattr(response, "status", response.getcode()))
+            reachable = True
+            error = ""
+    except urllib.error.HTTPError as exc:
+        raw = exc.read(HTTP_PROBE_MAX_BYTES)
+        status_code = int(exc.code)
+        reachable = True
+        error = str(exc)
+    except (OSError, TimeoutError, urllib.error.URLError, ValueError) as exc:
+        return {
+            "reachable": False,
+            "status_code": None,
+            "json": {},
+            "text": "",
+            "error": str(exc),
+        }
+
+    text = raw.decode("utf-8", errors="ignore")
+    try:
+        json_payload = json.loads(text) if text.strip() else {}
+    except json.JSONDecodeError:
+        json_payload = {}
+    return {
+        "reachable": reachable,
+        "status_code": status_code,
+        "json": json_payload,
+        "text": text,
+        "error": error,
+    }
+
+
+def endpoint_auth_headers(payload: dict[str, Any]) -> dict[str, str]:
+    role = str(payload.get("role") or "").strip().lower()
+    if role == "embedding":
+        api_key = str(
+            payload.get("embedding_api_key")
+            or os.environ.get("EMBEDDING_API_KEY")
+            or payload.get("api_key")
+            or payload.get("llm_api_key")
+            or os.environ.get("LLM_API_KEY")
+            or ""
+        ).strip()
+        return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    api_key = str(
+        payload.get("api_key")
+        or payload.get("llm_api_key")
+        or os.environ.get("LLM_API_KEY")
+        or ""
+    ).strip()
+    return {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+
+def validate_http_url(url: str) -> str | None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return None
+    return "Endpoint must be an http(s) URL."
+
+
+def infer_openai_models_url(endpoint: str) -> str | None:
+    parsed = urllib.parse.urlparse(endpoint)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if "v1" not in [part.lower() for part in path_parts]:
+        return None
+    v1_index = [part.lower() for part in path_parts].index("v1")
+    models_path = "/" + "/".join(path_parts[: v1_index + 1] + ["models"])
+    return urllib.parse.urlunparse(
+        (parsed.scheme, parsed.netloc, models_path, "", "", "")
+    )
+
+
+def extract_model_names(payload: Any) -> list[str]:
+    raw_items: Any
+    if isinstance(payload, dict):
+        raw_items = payload.get("models")
+        if raw_items is None:
+            raw_items = payload.get("data")
+    else:
+        raw_items = payload
+    if not isinstance(raw_items, list):
+        return []
+
+    names: list[str] = []
+    for item in raw_items:
+        if isinstance(item, str):
+            names.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        for key in ("name", "model", "id"):
+            name = str(item.get(key) or "").strip()
+            if name:
+                names.append(name)
+    return sorted(set(names), key=str.lower)
+
+
+def model_exists(model: str, names: list[str]) -> bool:
+    return any(models_are_same(model, name) for name in names)
+
+
+def llm_probe_endpoint_and_model(payload: dict[str, Any]) -> tuple[str, str, str]:
+    role = str(payload.get("role") or "analysis").strip().lower()
+    if role == "embedding":
+        endpoint = str(
+            payload.get("endpoint")
+            or payload.get("embedding_endpoint")
+            or DEFAULT_EMBEDDING_ENDPOINT
+        ).strip()
+        model = str(
+            payload.get("model") or payload.get("embedding_model") or ""
+        ).strip()
+        return role, endpoint, model
+    endpoint = str(
+        payload.get("endpoint") or payload.get("llm_endpoint") or DEFAULT_LLM_ENDPOINT
+    ).strip()
+    model = str(payload.get("model") or payload.get("llm_model") or "").strip()
+    return role or "analysis", endpoint, model
+
+
+def test_llm_connection(payload: dict[str, Any]) -> dict[str, Any]:
+    role, endpoint, model = llm_probe_endpoint_and_model(payload)
+    if not endpoint:
+        return {
+            "ok": False,
+            "reachable": False,
+            "role": role,
+            "endpoint": endpoint,
+            "model": model,
+            "model_checked": False,
+            "model_exists": None,
+            "message": "Endpoint is required.",
+        }
+    url_error = validate_http_url(endpoint)
+    if url_error:
+        return {
+            "ok": False,
+            "reachable": False,
+            "role": role,
+            "endpoint": endpoint,
+            "model": model,
+            "model_checked": False,
+            "model_exists": None,
+            "message": url_error,
+        }
+
+    headers = endpoint_auth_headers(payload)
+    ollama_endpoint = resolve_ollama_runtime_endpoint(endpoint)
+    if ollama_endpoint is not None:
+        tags_url = f"{ollama_endpoint.base_url}/tags"
+        probe = http_json_request(tags_url, headers=headers)
+        status_code = probe.get("status_code")
+        if not probe.get("reachable"):
+            return {
+                "ok": False,
+                "reachable": False,
+                "provider": "ollama",
+                "role": role,
+                "endpoint": endpoint,
+                "model": model,
+                "model_checked": False,
+                "model_exists": None,
+                "status_code": status_code,
+                "message": f"Ollama endpoint is unreachable: {probe.get('error') or 'request failed'}",
+            }
+        if status_code != 200:
+            return {
+                "ok": False,
+                "reachable": True,
+                "provider": "ollama",
+                "role": role,
+                "endpoint": endpoint,
+                "model": model,
+                "model_checked": False,
+                "model_exists": None,
+                "status_code": status_code,
+                "message": f"Ollama is reachable, but /api/tags returned HTTP {status_code}.",
+            }
+        names = extract_model_names(probe.get("json"))
+        checked = bool(model)
+        exists = model_exists(model, names) if checked else None
+        return {
+            "ok": not checked or bool(exists),
+            "reachable": True,
+            "provider": "ollama",
+            "role": role,
+            "endpoint": endpoint,
+            "model": model,
+            "model_checked": checked,
+            "model_exists": exists,
+            "status_code": status_code,
+            "models": names[:50],
+            "message": (
+                f"Model '{model}' was found on Ollama."
+                if checked and exists
+                else f"Model '{model}' was not found on Ollama."
+                if checked
+                else "Ollama endpoint is reachable."
+            ),
+        }
+
+    models_url = infer_openai_models_url(endpoint)
+    if models_url:
+        probe = http_json_request(models_url, headers=headers)
+        status_code = probe.get("status_code")
+        if probe.get("reachable") and status_code == 200:
+            names = extract_model_names(probe.get("json"))
+            checked = bool(model)
+            exists = model in names if checked else None
+            return {
+                "ok": not checked or bool(exists),
+                "reachable": True,
+                "provider": "openai-compatible",
+                "role": role,
+                "endpoint": endpoint,
+                "model": model,
+                "model_checked": checked,
+                "model_exists": exists,
+                "status_code": status_code,
+                "models": names[:50],
+                "message": (
+                    f"Model '{model}' was found."
+                    if checked and exists
+                    else f"Model '{model}' was not found in /v1/models."
+                    if checked
+                    else "OpenAI-compatible endpoint is reachable."
+                ),
+            }
+        if probe.get("reachable") and status_code in {401, 403}:
+            return {
+                "ok": False,
+                "reachable": True,
+                "provider": "openai-compatible",
+                "role": role,
+                "endpoint": endpoint,
+                "model": model,
+                "model_checked": False,
+                "model_exists": None,
+                "status_code": status_code,
+                "message": f"/v1/models returned HTTP {status_code}; check API key or permissions.",
+            }
+
+    probe = http_json_request(endpoint, headers=headers)
+    status_code = probe.get("status_code")
+    reachable = bool(probe.get("reachable"))
+    ok = reachable and (
+        status_code is None
+        or 200 <= int(status_code) < 400
+        or int(status_code) in {400, 405}
+    )
+    return {
+        "ok": ok,
+        "reachable": reachable,
+        "provider": "http",
+        "role": role,
+        "endpoint": endpoint,
+        "model": model,
+        "model_checked": False,
+        "model_exists": None,
+        "status_code": status_code,
+        "message": (
+            "Endpoint is reachable; model listing is not available."
+            if ok
+            else f"Endpoint check failed: {probe.get('error') or f'HTTP {status_code}'}"
+        ),
+    }
+
+
+def joined_url(base_url: str, *segments: str) -> str:
+    base = base_url.rstrip("/")
+    encoded = "/".join(urllib.parse.quote(str(segment).strip("/"), safe="") for segment in segments)
+    return f"{base}/{encoded}" if encoded else base
+
+
+def test_local_vector_store(paths: ReadingPaths) -> dict[str, Any]:
+    rag_root = rag_dir(paths)
+    vectors = rag_vectors_path(paths)
+    chunks = rag_chunks_path(paths)
+    documents = rag_documents_path(paths)
+    root_exists = paths.output_root.exists() and paths.output_root.is_dir()
+    rag_exists = rag_root.exists() and rag_root.is_dir()
+    vectors_exists = vectors.exists() and vectors.is_file()
+    vector_count = count_nonempty_lines(vectors) if vectors_exists else 0
+    return {
+        "ok": root_exists and rag_exists,
+        "reachable": root_exists,
+        "store_type": "local_jsonl",
+        "output_root": str(paths.output_root),
+        "rag_dir": str(rag_root),
+        "documents_exists": documents.exists(),
+        "chunks_exists": chunks.exists(),
+        "vectors_exists": vectors_exists,
+        "vector_count": vector_count,
+        "message": (
+            f"Local RAG store is readable; vectors.jsonl has {vector_count} records."
+            if root_exists and rag_exists and vectors_exists
+            else "Local RAG store is readable, but vectors.jsonl has not been generated yet."
+            if root_exists and rag_exists
+            else "Output directory is reachable, but _rag does not exist yet."
+            if root_exists
+            else "Output directory is not reachable."
+        ),
+    }
+
+
+def test_qdrant_vector_store(url: str, collection: str) -> dict[str, Any]:
+    collections_url = joined_url(url, "collections")
+    probe = http_json_request(collections_url)
+    status_code = probe.get("status_code")
+    if not probe.get("reachable") or status_code != 200:
+        return {
+            "ok": False,
+            "reachable": bool(probe.get("reachable")),
+            "store_type": "qdrant",
+            "url": url,
+            "collection": collection,
+            "collection_checked": False,
+            "collection_exists": None,
+            "status_code": status_code,
+            "message": f"Qdrant /collections check failed: {probe.get('error') or f'HTTP {status_code}'}",
+        }
+
+    collection_exists: bool | None = None
+    if collection:
+        collection_probe = http_json_request(joined_url(url, "collections", collection))
+        collection_exists = (
+            bool(collection_probe.get("reachable"))
+            and collection_probe.get("status_code") == 200
+        )
+        status_code = collection_probe.get("status_code")
+    return {
+        "ok": collection_exists if collection else True,
+        "reachable": True,
+        "store_type": "qdrant",
+        "url": url,
+        "collection": collection,
+        "collection_checked": bool(collection),
+        "collection_exists": collection_exists,
+        "status_code": status_code,
+        "message": (
+            f"Qdrant is reachable; collection '{collection}' exists."
+            if collection and collection_exists
+            else f"Qdrant is reachable, but collection '{collection}' was not found."
+            if collection
+            else "Qdrant is reachable."
+        ),
+    }
+
+
+def test_chroma_vector_store(url: str, collection: str) -> dict[str, Any]:
+    heartbeat_urls = [
+        joined_url(url, "api", "v2", "heartbeat"),
+        joined_url(url, "api", "v1", "heartbeat"),
+    ]
+    heartbeat_probe: dict[str, Any] | None = None
+    heartbeat_version = ""
+    for candidate_url in heartbeat_urls:
+        candidate = http_json_request(candidate_url)
+        if candidate.get("reachable") and candidate.get("status_code") == 200:
+            heartbeat_probe = candidate
+            heartbeat_version = "v2" if "/v2/" in candidate_url else "v1"
+            break
+        if heartbeat_probe is None:
+            heartbeat_probe = candidate
+
+    status_code = None if heartbeat_probe is None else heartbeat_probe.get("status_code")
+    if heartbeat_probe is None or not heartbeat_probe.get("reachable") or status_code != 200:
+        return {
+            "ok": False,
+            "reachable": bool(heartbeat_probe and heartbeat_probe.get("reachable")),
+            "store_type": "chroma",
+            "url": url,
+            "collection": collection,
+            "collection_checked": False,
+            "collection_exists": None,
+            "status_code": status_code,
+            "message": f"Chroma heartbeat check failed: {(heartbeat_probe or {}).get('error') or f'HTTP {status_code}'}",
+        }
+
+    collection_exists: bool | None = None
+    if collection:
+        if heartbeat_version == "v2":
+            collection_url = joined_url(
+                url,
+                "api",
+                "v2",
+                "tenants",
+                "default_tenant",
+                "databases",
+                "default_database",
+                "collections",
+                collection,
+            )
+        else:
+            collection_url = joined_url(url, "api", "v1", "collections", collection)
+        collection_probe = http_json_request(collection_url)
+        collection_exists = (
+            bool(collection_probe.get("reachable"))
+            and collection_probe.get("status_code") == 200
+        )
+        status_code = collection_probe.get("status_code")
+
+    return {
+        "ok": collection_exists if collection else True,
+        "reachable": True,
+        "store_type": "chroma",
+        "url": url,
+        "collection": collection,
+        "collection_checked": bool(collection),
+        "collection_exists": collection_exists,
+        "status_code": status_code,
+        "message": (
+            f"Chroma is reachable; collection '{collection}' exists."
+            if collection and collection_exists
+            else f"Chroma is reachable, but collection '{collection}' was not found."
+            if collection
+            else "Chroma is reachable."
+        ),
+    }
+
+
+def test_generic_vector_store(url: str, collection: str) -> dict[str, Any]:
+    probe = http_json_request(url)
+    status_code = probe.get("status_code")
+    reachable = bool(probe.get("reachable"))
+    ok = reachable and status_code is not None and 200 <= int(status_code) < 400
+    return {
+        "ok": ok,
+        "reachable": reachable,
+        "store_type": "http",
+        "url": url,
+        "collection": collection,
+        "collection_checked": False,
+        "collection_exists": None,
+        "status_code": status_code,
+        "message": (
+            "HTTP vector endpoint is reachable."
+            if ok
+            else f"HTTP vector endpoint check failed: {probe.get('error') or f'HTTP {status_code}'}"
+        ),
+    }
+
+
+def test_vector_store_connection(
+    app_state: AppState, payload: dict[str, Any]
+) -> dict[str, Any]:
+    store_type = str(
+        payload.get("store_type") or payload.get("vector_store_type") or "local_jsonl"
+    ).strip().lower()
+    if store_type in {"local", "jsonl", "local-jsonl"}:
+        store_type = "local_jsonl"
+    if store_type == "local_jsonl":
+        paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
+        return test_local_vector_store(paths)
+
+    url = str(payload.get("url") or payload.get("vector_store_url") or "").strip()
+    collection = str(
+        payload.get("collection") or payload.get("vector_store_collection") or ""
+    ).strip()
+    if not url:
+        return {
+            "ok": False,
+            "reachable": False,
+            "store_type": store_type,
+            "url": url,
+            "collection": collection,
+            "message": "Vector store URL is required.",
+        }
+    url_error = validate_http_url(url)
+    if url_error:
+        return {
+            "ok": False,
+            "reachable": False,
+            "store_type": store_type,
+            "url": url,
+            "collection": collection,
+            "message": url_error,
+        }
+    if store_type == "qdrant":
+        return test_qdrant_vector_store(url, collection)
+    if store_type == "chroma":
+        return test_chroma_vector_store(url, collection)
+    if store_type in {"http", "generic_http", "generic"}:
+        return test_generic_vector_store(url, collection)
+    return {
+        "ok": False,
+        "reachable": False,
+        "store_type": store_type,
+        "url": url,
+        "collection": collection,
+        "message": f"Unsupported vector store type: {store_type}",
     }
 
 
@@ -3575,6 +1726,7 @@ def relationship_task_command(
 ) -> list[str]:
     llm_endpoint = str(payload.get("llm_endpoint") or "http://localhost:11434/api/generate")
     llm_model = str(payload.get("llm_model") or "").strip()
+    embedding_endpoint = str(payload.get("embedding_endpoint") or "").strip()
     embedding_model = str(payload.get("embedding_model") or "").strip()
     command_map = {
         "mine": [sys.executable, str(PROJECT_ROOT / "relationship_miner.py")],
@@ -3609,8 +1761,54 @@ def relationship_task_command(
                 )
             command.append("--use-embeddings")
         if embedding_model:
+            if embedding_endpoint:
+                command.extend(["--embedding-endpoint", embedding_endpoint])
             command.extend(["--embedding-model", embedding_model])
     return command
+
+
+def model_api_key_env(payload: dict[str, Any]) -> dict[str, str]:
+    env: dict[str, str] = {}
+    llm_api_key = str(payload.get("llm_api_key") or "").strip()
+    embedding_api_key = str(payload.get("embedding_api_key") or "").strip()
+    if llm_api_key:
+        env["LLM_API_KEY"] = llm_api_key
+    if embedding_api_key:
+        env["EMBEDDING_API_KEY"] = embedding_api_key
+    return env
+
+
+def subprocess_env_for_payload(payload: dict[str, Any]) -> dict[str, str]:
+    env = utf8_subprocess_env()
+    env.update(model_api_key_env(payload))
+    return env
+
+
+def managed_process_popen_options() -> dict[str, Any]:
+    if os.name == "nt":
+        return {"creationflags": MANAGED_PROCESS_CREATIONFLAGS}
+    return {"start_new_session": True}
+
+
+def stop_completed_managed_relationship_task(
+    app_state: AppState,
+    paths: ReadingPaths,
+    task: ManagedProcessTask,
+) -> bool:
+    process = task.process
+    if process.poll() is not None:
+        clear_relationship_task(app_state, paths, task)
+        return True
+    if not relationship_outputs_complete_after(paths, task.started_epoch):
+        return False
+
+    terminate_process_tree(process, timeout_seconds=5.0)
+    if process.poll() is not None:
+        clear_relationship_task(app_state, paths, task)
+        return True
+
+    reap_completed_managed_process(app_state, paths, task, clear_relationship_task)
+    return False
 
 
 def start_relationship_task(
@@ -3619,36 +1817,56 @@ def start_relationship_task(
     paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
     output_root = paths.output_root
     task_labels = {
-        "mine": "关系结果生成",
+        "mine": "图谱生成",
         "export_graph": "知识图谱导出",
         "export_bundle": "Bundle 导出",
     }
     label = task_labels.get(task_name, task_name)
 
     with app_state.lock:
-        process = app_state.process
-        if process is not None and process.poll() is None:
+        analysis_task = analysis_task_for_paths(app_state, paths)
+        analysis_process = analysis_task.process if analysis_task is not None else None
+        if analysis_process is not None and analysis_process.poll() is None:
             raise RuntimeError("Cannot start relationship task while analysis is running.")
-        if app_state.relationship_process is not None and app_state.relationship_process.poll() is None:
-            raise RuntimeError("Another relationship task is already running.")
+        active_analysis_pid = find_active_run_pid(paths)
+        if active_analysis_pid is not None:
+            raise RuntimeError(
+                f"Cannot start relationship task while analysis is running with PID {active_analysis_pid}."
+            )
+        relationship_task = relationship_task_for_paths(app_state, paths)
+        if (
+            relationship_task is not None
+            and relationship_task.process.poll() is None
+        ):
+            if stop_completed_managed_relationship_task(
+                app_state, paths, relationship_task
+            ):
+                relationship_task = None
+            else:
+                raise RuntimeError(
+                    "Another relationship task is already running for this output."
+                )
+        active_relationship_pid = find_active_relationship_task_pid(paths)
+        if active_relationship_pid is not None:
+            raise RuntimeError(
+                f"Relationship task is already running for this output with PID {active_relationship_pid}."
+            )
         if task_name != "mine" and not relationship_relations_path(paths).exists():
             raise RuntimeError("No relationship results found. Generate relations first.")
-
         output_root.mkdir(parents=True, exist_ok=True)
         paths.log_dir.mkdir(parents=True, exist_ok=True)
         command = relationship_task_command(task_name, payload, paths)
+        process_env = subprocess_env_for_payload(payload)
         with paths.application_log_path.open("a", encoding="utf-8", errors="ignore") as log_handle:
             task_process = subprocess.Popen(
                 command,
                 cwd=str(PROJECT_ROOT),
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
-                env=utf8_subprocess_env(),
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                env=process_env,
+                **managed_process_popen_options(),
             )
-        app_state.relationship_process = task_process
-        app_state.relationship_process_kind = task_name
-        app_state.relationship_process_command = command
+        register_relationship_task(app_state, paths, task_process, command, task_name)
     return {
         "started": True,
         "task": task_name,
@@ -3662,28 +1880,266 @@ def stop_relationship_task(
     app_state: AppState, payload: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     requested_paths = reading_paths_from_payload(app_state, payload or {})
+    relationship_result: dict[str, Any] | None = None
     with app_state.lock:
-        process = app_state.relationship_process
-        command = app_state.relationship_process_command
-        kind = app_state.relationship_process_kind
-        process_matches_paths = (
-            requested_paths is None
-            or paths_match_command(command, requested_paths)
+        task = relationship_task_for_paths(app_state, requested_paths)
+        process = task.process if task is not None else None
+        command = task.command if task is not None else None
+        kind = task.kind if task is not None else None
+        if process is not None:
+            if process.poll() is None:
+                stopped = terminate_process_tree(process, timeout_seconds=5.0)
+                running = process.poll() is None
+                if not running:
+                    clear_relationship_task(app_state, requested_paths, task)
+                return {
+                    "stopped": stopped,
+                    "running": running,
+                    "pid": process.pid,
+                    "kind": kind,
+                }
+            clear_relationship_task(app_state, requested_paths, task)
+            relationship_result = {
+                "stopped": False,
+                "running": False,
+                "pid": process.pid,
+                "kind": kind,
+                "return_code": process.poll(),
+            }
+    if requested_paths is not None:
+        recorded_task = relationship_task_from_record(requested_paths)
+        if recorded_task is not None:
+            pid = coerce_pid(recorded_task.get("pid"))
+            if pid is not None:
+                stopped = terminate_process_id(pid)
+                running = is_process_alive(pid)
+                if not running:
+                    remove_relationship_task_record(
+                        relationship_task_record_path(requested_paths)
+                    )
+                return {
+                    "stopped": stopped,
+                    "running": running,
+                    "pid": pid,
+                    "kind": recorded_task.get("kind"),
+                }
+    inline_stop = stop_inline_relationship_task(app_state, requested_paths)
+    if inline_stop is not None:
+        return inline_stop
+    return relationship_result or {"stopped": False, "running": False}
+
+
+def stop_inline_relationship_task(
+    app_state: AppState, requested_paths: ReadingPaths | None = None
+) -> dict[str, Any] | None:
+    with app_state.lock:
+        paths = requested_paths or app_state.paths
+        if paths is None:
+            return None
+        task = analysis_task_for_paths(app_state, paths)
+        process = task.process if task is not None else None
+        command = task.command if task is not None else None
+        local_running = (
+            process is not None
+            and process.poll() is None
+            and paths_match_command(command, paths)
         )
-        if process is None or not process_matches_paths:
+
+    active_pid = None if local_running else find_active_run_pid(paths)
+    if not inline_relationship_mining_is_active(
+        running=local_running or active_pid is not None,
+        command=command,
+        log_tail=read_text_tail(paths.application_log_path, max_lines=80),
+    ):
+        return None
+
+    stop_result = stop_analysis(
+        app_state,
+        {"source_dir": str(paths.source_dir), "output_root": str(paths.output_root)},
+    )
+    return {
+        **stop_result,
+        "kind": "mine",
+        "inline": True,
+    }
+
+
+def build_rag_payload(app_state: AppState, paths: ReadingPaths) -> dict[str, Any]:
+    return {
+        "available": rag_manifest_path(paths).exists(),
+        "documents_exists": rag_documents_path(paths).exists(),
+        "chunks_exists": rag_chunks_path(paths).exists(),
+        "vectors_exists": rag_vectors_path(paths).exists(),
+        "manifest": read_json_file(rag_manifest_path(paths)),
+        "progress": read_json_file(rag_progress_path(paths)),
+        "task": rag_task_status(app_state, paths),
+        "log_tail": read_text_tail(rag_log_path(paths), max_lines=80),
+    }
+
+
+def rag_task_status(
+    app_state: AppState, paths: ReadingPaths | None = None
+) -> dict[str, Any]:
+    with app_state.lock:
+        task = rag_managed_task_for_paths(app_state, paths)
+        process = task.process if task is not None else None
+        kind = task.kind if task is not None else None
+        command = task.command if task is not None else None
+        return_code = None if process is None else process.poll()
+        if process is not None and return_code is not None:
+            clear_rag_task(app_state, paths, task)
+        running = process is not None and return_code is None
+        pid = process.pid if process is not None else None
+    return {
+        "running": running,
+        "pid": pid,
+        "kind": kind,
+        "command": command,
+        "return_code": return_code,
+    }
+
+
+def rag_task_command(payload: dict[str, Any], paths: ReadingPaths) -> list[str]:
+    llm_endpoint = str(payload.get("llm_endpoint") or "http://localhost:11434/api/generate")
+    llm_model = str(payload.get("llm_model") or "").strip()
+    embedding_endpoint = str(payload.get("embedding_endpoint") or "").strip()
+    embedding_model = str(payload.get("embedding_model") or "").strip()
+    command = [
+        sys.executable,
+        str(PROJECT_ROOT / "rag_indexer.py"),
+        "build",
+        "--source-dir",
+        str(paths.source_dir),
+        "--output-root",
+        str(paths.output_root),
+        "--llm-endpoint",
+        llm_endpoint,
+    ]
+    if llm_model:
+        command.extend(["--llm-model", llm_model])
+    if embedding_endpoint:
+        command.extend(["--embedding-endpoint", embedding_endpoint])
+    if embedding_model:
+        command.extend(["--embedding-model", embedding_model])
+
+    option_map = {
+        "rag_min_quality": "--min-quality",
+        "rag_limit": "--limit",
+        "rag_chunk_max_chars": "--chunk-max-chars",
+        "rag_chunk_overlap_chars": "--chunk-overlap-chars",
+    }
+    for payload_key, option_name in option_map.items():
+        value = str(payload.get(payload_key) or "").strip()
+        if value:
+            command.extend([option_name, value])
+
+    categories = str(payload.get("rag_categories") or "").strip()
+    if categories:
+        command.extend(["--categories", categories])
+    if bool(payload.get("rag_prefer_target_path")):
+        command.append("--prefer-target-path")
+    if not embedding_model:
+        command.append("--no-embeddings")
+    return command
+
+
+def rag_redaction_env(payload: dict[str, Any]) -> dict[str, str]:
+    if not bool(payload.get("rag_redaction_enabled")):
+        return {}
+    redact_terms = str(payload.get("rag_redact_terms") or "").strip()
+    redact_mappings = str(payload.get("rag_redact_mappings") or "").strip()
+    if not redact_terms and not redact_mappings:
+        raise ValueError(
+            "Sensitive firewall is enabled, but no redaction rules were provided."
+        )
+    env: dict[str, str] = {}
+    if redact_terms:
+        env[RAG_REDACTION_TERMS_ENV] = redact_terms
+    if redact_mappings:
+        env[RAG_REDACTION_MAPPINGS_ENV] = redact_mappings
+    redact_placeholder = str(payload.get("rag_redact_placeholder") or "").strip()
+    if redact_placeholder:
+        env[RAG_REDACTION_PLACEHOLDER_ENV] = redact_placeholder
+    if bool(payload.get("rag_redact_drop_matched_documents")):
+        env[RAG_REDACTION_DROP_ENV] = "1"
+    return env
+
+
+def start_rag_task(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
+    paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
+
+    with app_state.lock:
+        analysis_task = analysis_task_for_paths(app_state, paths)
+        analysis_process = analysis_task.process if analysis_task is not None else None
+        if analysis_process is not None and analysis_process.poll() is None:
+            raise RuntimeError("Cannot start RAG indexing while analysis is running.")
+        active_analysis_pid = find_active_run_pid(paths)
+        if active_analysis_pid is not None:
+            raise RuntimeError(
+                f"Cannot start RAG indexing while analysis is running with PID {active_analysis_pid}."
+            )
+        relationship_task = relationship_task_for_paths(app_state, paths)
+        relationship_process = (
+            relationship_task.process if relationship_task is not None else None
+        )
+        if relationship_process is not None and relationship_process.poll() is None:
+            raise RuntimeError(
+                "Cannot start RAG indexing while a relationship task is running."
+            )
+        active_relationship_pid = find_active_relationship_task_pid(paths)
+        if active_relationship_pid is not None:
+            raise RuntimeError(
+                f"Cannot start RAG indexing while a relationship task is running with PID {active_relationship_pid}."
+            )
+        rag_task = rag_managed_task_for_paths(app_state, paths)
+        if rag_task is not None and rag_task.process.poll() is None:
+            raise RuntimeError("RAG indexing is already running.")
+
+        paths.output_root.mkdir(parents=True, exist_ok=True)
+        rag_dir(paths).mkdir(parents=True, exist_ok=True)
+        command = rag_task_command(payload, paths)
+        process_env = subprocess_env_for_payload(payload)
+        process_env.update(rag_redaction_env(payload))
+        with rag_log_path(paths).open("a", encoding="utf-8", errors="ignore") as log_handle:
+            task_process = subprocess.Popen(
+                command,
+                cwd=str(PROJECT_ROOT),
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                env=process_env,
+                **managed_process_popen_options(),
+            )
+        register_rag_task(app_state, paths, task_process, command, "build")
+    return {
+        "started": True,
+        "task": "build",
+        "pid": task_process.pid,
+        "command": command,
+    }
+
+
+def stop_rag_task(
+    app_state: AppState, payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    requested_paths = reading_paths_from_payload(app_state, payload or {})
+    with app_state.lock:
+        task = rag_managed_task_for_paths(app_state, requested_paths)
+        process = task.process if task is not None else None
+        kind = task.kind if task is not None else None
+        if process is None:
             return {"stopped": False, "running": False}
         if process.poll() is None:
-            process.terminate()
-            stopped = wait_for_process_exit(process, timeout_seconds=5.0)
-            if not stopped:
-                stopped = kill_process(process)
+            stopped = terminate_process_tree(process, timeout_seconds=5.0)
             running = process.poll() is None
+            if not running:
+                clear_rag_task(app_state, requested_paths, task)
             return {
                 "stopped": stopped,
                 "running": running,
                 "pid": process.pid,
                 "kind": kind,
             }
+        clear_rag_task(app_state, requested_paths, task)
         return {
             "stopped": False,
             "running": False,
@@ -3691,6 +2147,33 @@ def stop_relationship_task(
             "kind": kind,
             "return_code": process.poll(),
         }
+
+
+def search_rag_request(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
+    from rag_indexer import search_rag_index
+
+    paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
+    query = str(payload.get("query") or "").strip()
+    if not query:
+        raise ValueError("Search query is required.")
+    settings = Settings(
+        LLM_ENDPOINT=str(payload.get("llm_endpoint") or "http://localhost:11434/api/generate"),
+        LLM_API_KEY=str(payload.get("llm_api_key") or "").strip() or None,
+        SOURCE_DIR=paths.source_dir,
+        OUTPUT_ROOT=paths.output_root,
+        EMBEDDING_ENDPOINT=str(
+            payload.get("embedding_endpoint") or "http://localhost:11434/api/embeddings"
+        ),
+        EMBEDDING_MODEL=str(payload.get("embedding_model") or "").strip() or None,
+        EMBEDDING_API_KEY=str(payload.get("embedding_api_key") or "").strip() or None,
+        RAG_MAX_SEARCH_RESULTS=coerce_int_value(payload.get("top_k"), 10),
+    )
+    return search_rag_index(
+        settings,
+        query,
+        top_k=coerce_int_value(payload.get("top_k"), 10),
+        lexical_only=bool(payload.get("lexical_only")),
+    )
 
 
 def row_matches_query(row: dict[str, Any], q: str) -> bool:
@@ -3763,8 +2246,30 @@ def config_payload(paths: ReadingPaths | None) -> dict[str, Any]:
     return {
         "source_dir": "" if paths is None else str(paths.source_dir),
         "output_root": "" if paths is None else str(paths.output_root),
+        "embedding_endpoint": configured_embedding_endpoint(),
         "capabilities": environment_capabilities(),
     }
+
+
+def configured_embedding_endpoint() -> str:
+    endpoint = str(os.environ.get("EMBEDDING_ENDPOINT") or "").strip()
+    if endpoint:
+        return endpoint
+    env_path = PROJECT_ROOT / ".env"
+    try:
+        lines = env_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return DEFAULT_EMBEDDING_ENDPOINT
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        if key.strip() != "EMBEDDING_ENDPOINT":
+            continue
+        endpoint = value.strip().strip("\"'")
+        return endpoint or DEFAULT_EMBEDDING_ENDPOINT
+    return DEFAULT_EMBEDDING_ENDPOINT
 
 
 def environment_capabilities() -> dict[str, Any]:
@@ -3833,46 +2338,81 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
     relationship_command: list[str] | None = None
 
     with app_state.lock:
-        process = app_state.process
+        analysis_task = analysis_task_for_paths(app_state, paths)
+        process = analysis_task.process if analysis_task is not None else None
         if process is not None and process.poll() is None:
-            raise RuntimeError(f"Analysis is already running with PID {process.pid}")
+            raise RuntimeError(
+                f"Analysis is already running for this output with PID {process.pid}"
+            )
 
-        relationship_process = app_state.relationship_process
+        relationship_task = relationship_task_for_paths(app_state, paths)
+        relationship_process = (
+            relationship_task.process if relationship_task is not None else None
+        )
+        if relationship_process is not None and relationship_process.poll() is not None:
+            clear_relationship_task(app_state, paths, relationship_task)
+            relationship_task = None
+            relationship_process = None
         relationship_running = (
             relationship_process is not None and relationship_process.poll() is None
         )
-        relationship_running_for_paths = relationship_running and paths_match_command(
-            app_state.relationship_process_command, paths
-        )
         if relationship_running:
-            relationship_command = app_state.relationship_process_command
+            relationship_command = relationship_task.command
+
+    external_relationship_pid = (
+        None if relationship_running else find_active_relationship_task_pid(paths)
+    )
+    if external_relationship_pid is not None:
+        if not preempt_relationships:
+            raise RuntimeError(
+                f"Cannot start analysis while a relationship task is running for this output with PID {external_relationship_pid}."
+            )
+        relationship_stop_result = stop_relationship_task(
+            app_state,
+            {"source_dir": str(source_dir), "output_root": str(output_root)},
+        )
+        if relationship_stop_result.get("running"):
+            raise RuntimeError(
+                "Relationship task did not stop; analysis was not started."
+            )
 
     if relationship_running:
         if not preempt_relationships:
-            if relationship_running_for_paths:
-                raise RuntimeError(
-                    "Cannot start analysis while a relationship task is running for this output."
-                )
+            raise RuntimeError(
+                "Cannot start analysis while a relationship task is running for this output."
+            )
         else:
             if not str(payload.get("embedding_model") or "").strip() and relationship_command:
                 embedding_model = command_option_value(relationship_command, "--embedding-model")
                 if embedding_model:
                     payload["embedding_model"] = embedding_model
-            relationship_stop_result = stop_relationship_task(app_state)
+            relationship_stop_result = stop_relationship_task(
+                app_state,
+                {"source_dir": str(source_dir), "output_root": str(output_root)},
+            )
             if relationship_stop_result.get("running"):
                 raise RuntimeError(
                     "Relationship task did not stop; analysis was not started."
                 )
 
     with app_state.lock:
-        process = app_state.process
+        analysis_task = analysis_task_for_paths(app_state, paths)
+        process = analysis_task.process if analysis_task is not None else None
         if process is not None and process.poll() is None:
-            raise RuntimeError(f"Analysis is already running with PID {process.pid}")
-        relationship_process = app_state.relationship_process
+            raise RuntimeError(
+                f"Analysis is already running for this output with PID {process.pid}"
+            )
+        relationship_task = relationship_task_for_paths(app_state, paths)
+        relationship_process = (
+            relationship_task.process if relationship_task is not None else None
+        )
+        if relationship_process is not None and relationship_process.poll() is not None:
+            clear_relationship_task(app_state, paths, relationship_task)
+            relationship_task = None
+            relationship_process = None
         if (
             relationship_process is not None
             and relationship_process.poll() is None
-            and paths_match_command(app_state.relationship_process_command, paths)
         ):
             raise RuntimeError(
                 "Cannot start analysis while a relationship task is running for this output."
@@ -3883,6 +2423,7 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
         if active_pid is not None:
             raise RuntimeError(f"Analysis is already running with PID {active_pid}")
         command = build_analysis_command(payload, source_dir, output_root)
+        process_env = subprocess_env_for_payload(payload)
         output_root.mkdir(parents=True, exist_ok=True)
         (output_root / "_state").mkdir(parents=True, exist_ok=True)
         (output_root / "_logs").mkdir(parents=True, exist_ok=True)
@@ -3894,11 +2435,11 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
                 cwd=str(PROJECT_ROOT),
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
-                env=utf8_subprocess_env(),
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                env=process_env,
+                **managed_process_popen_options(),
             )
-        app_state.process = process
-        app_state.process_command = command
+        started_epoch = time.time()
+        register_analysis_task(app_state, paths, process, command, started_epoch)
         return {
             "started": True,
             "pid": process.pid,
@@ -3913,9 +2454,6 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
 def set_active_paths(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
     source_dir, output_root = resolve_payload_paths(payload)
     with app_state.lock:
-        process = app_state.process
-        if process is not None and process.poll() is None:
-            raise RuntimeError("Cannot change active paths while analysis is running.")
         clear_source_file_scan_cache(source_dir)
         app_state.paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
     return {"source_dir": str(source_dir), "output_root": str(output_root)}
@@ -3936,17 +2474,38 @@ def set_reading_output(app_state: AppState, payload: dict[str, Any]) -> dict[str
 def infer_source_dir_for_output(app_state: AppState, output_root: Path) -> Path:
     with app_state.lock:
         active_paths = app_state.paths
-        process = app_state.process
-        running = process is not None and process.poll() is None
     if active_paths is not None and active_paths.output_root.resolve() == output_root:
         return active_paths.source_dir
+
+    probe_paths = ReadingPaths(source_dir=output_root, output_root=output_root)
+    with app_state.lock:
+        tasks = [
+            analysis_task_for_paths(app_state, probe_paths),
+            relationship_task_for_paths(app_state, probe_paths),
+            rag_managed_task_for_paths(app_state, probe_paths),
+        ]
+    for task in tasks:
+        if task is None:
+            continue
+        source_dir = command_option_path(task.command or [], "--source-dir")
+        if source_dir is not None:
+            return source_dir.resolve()
+
+    run_lock = read_run_lock(run_lock_path(output_root))
+    lock_source = str(run_lock.get("source_dir") or "").strip()
+    if lock_source:
+        return Path(lock_source).expanduser().resolve()
+
+    relationship_record = read_json_file(output_root / "_relationships" / "task.json")
+    relationship_pid = coerce_pid(relationship_record.get("pid"))
+    if relationship_pid is not None and is_process_alive(relationship_pid):
+        relationship_source = str(relationship_record.get("source_dir") or "").strip()
+        if relationship_source:
+            return Path(relationship_source).expanduser().resolve()
 
     decision_source = infer_source_dir_from_decisions(output_root)
     if decision_source is not None:
         return decision_source
-
-    if running and active_paths is not None:
-        return active_paths.source_dir
     return output_root
 
 
@@ -4028,6 +2587,313 @@ def reading_request_paths(app_state: AppState, payload: dict[str, Any]) -> Readi
     return reading_paths_from_payload(app_state, payload) or require_paths(app_state)
 
 
+def task_key_for_output_root(output_root: Path) -> str:
+    return os.path.normcase(str(output_root.expanduser().resolve()))
+
+
+def task_key_for_paths(paths: ReadingPaths) -> str:
+    return task_key_for_output_root(paths.output_root)
+
+
+def managed_task_from_legacy(
+    process: subprocess.Popen | None,
+    command: list[str] | None,
+    *,
+    kind: str | None = None,
+    started_epoch: float | None = None,
+) -> ManagedProcessTask | None:
+    if process is None:
+        return None
+    return ManagedProcessTask(
+        process=process,
+        command=command,
+        kind=kind,
+        started_epoch=started_epoch,
+    )
+
+
+def managed_task_for_paths(
+    tasks: dict[str, ManagedProcessTask],
+    paths: ReadingPaths | None,
+    legacy_task: ManagedProcessTask | None = None,
+) -> ManagedProcessTask | None:
+    if paths is not None:
+        key = task_key_for_paths(paths)
+        task = tasks.get(key)
+        if task is not None:
+            return task
+        for candidate in tasks.values():
+            if paths_match_command(candidate.command, paths):
+                return candidate
+        if legacy_task is not None and paths_match_command(legacy_task.command, paths):
+            return legacy_task
+        return None
+
+    for candidate in tasks.values():
+        if candidate.process.poll() is None:
+            return candidate
+    if tasks:
+        return next(iter(tasks.values()))
+    return legacy_task
+
+
+def analysis_task_for_paths(
+    app_state: AppState, paths: ReadingPaths | None
+) -> ManagedProcessTask | None:
+    return managed_task_for_paths(
+        app_state.analysis_tasks,
+        paths,
+        managed_task_from_legacy(
+            app_state.process,
+            app_state.process_command,
+            started_epoch=app_state.process_started_epoch,
+        ),
+    )
+
+
+def relationship_task_for_paths(
+    app_state: AppState, paths: ReadingPaths | None
+) -> ManagedProcessTask | None:
+    return managed_task_for_paths(
+        app_state.relationship_tasks,
+        paths,
+        managed_task_from_legacy(
+            app_state.relationship_process,
+            app_state.relationship_process_command,
+            kind=app_state.relationship_process_kind,
+        ),
+    )
+
+
+def rag_managed_task_for_paths(
+    app_state: AppState, paths: ReadingPaths | None
+) -> ManagedProcessTask | None:
+    return managed_task_for_paths(
+        app_state.rag_tasks,
+        paths,
+        managed_task_from_legacy(
+            app_state.rag_process,
+            app_state.rag_process_command,
+            kind=app_state.rag_process_kind,
+        ),
+    )
+
+
+def register_analysis_task(
+    app_state: AppState,
+    paths: ReadingPaths,
+    process: subprocess.Popen,
+    command: list[str],
+    started_epoch: float,
+) -> None:
+    task = ManagedProcessTask(
+        process=process,
+        command=command,
+        started_epoch=started_epoch,
+    )
+    app_state.analysis_tasks[task_key_for_paths(paths)] = task
+    app_state.process = process
+    app_state.process_command = command
+    app_state.process_started_epoch = started_epoch
+    completion_predicate = (
+        (lambda: relationship_outputs_complete_after(paths, started_epoch))
+        if command and "--mine-relationships" in command
+        else None
+    )
+    watch_managed_process(
+        app_state,
+        paths,
+        task,
+        clear_analysis_task,
+        completion_predicate=completion_predicate,
+    )
+
+
+def register_relationship_task(
+    app_state: AppState,
+    paths: ReadingPaths,
+    process: subprocess.Popen,
+    command: list[str],
+    kind: str,
+) -> None:
+    started_epoch = time.time()
+    task = ManagedProcessTask(
+        process=process,
+        command=command,
+        kind=kind,
+        started_epoch=started_epoch,
+    )
+    app_state.relationship_tasks[task_key_for_paths(paths)] = task
+    app_state.relationship_process = process
+    app_state.relationship_process_kind = kind
+    app_state.relationship_process_command = command
+    watch_managed_process(
+        app_state,
+        paths,
+        task,
+        clear_relationship_task,
+        completion_predicate=lambda: relationship_outputs_complete_after(
+            paths, started_epoch
+        ),
+    )
+
+
+def register_rag_task(
+    app_state: AppState,
+    paths: ReadingPaths,
+    process: subprocess.Popen,
+    command: list[str],
+    kind: str,
+) -> None:
+    task = ManagedProcessTask(
+        process=process,
+        command=command,
+        kind=kind,
+    )
+    app_state.rag_tasks[task_key_for_paths(paths)] = task
+    app_state.rag_process = process
+    app_state.rag_process_kind = kind
+    app_state.rag_process_command = command
+    watch_managed_process(app_state, paths, task, clear_rag_task)
+
+
+def clear_analysis_task(
+    app_state: AppState, paths: ReadingPaths | None, task: ManagedProcessTask | None
+) -> None:
+    if paths is not None:
+        app_state.analysis_tasks.pop(task_key_for_paths(paths), None)
+    elif task is not None:
+        for key, candidate in list(app_state.analysis_tasks.items()):
+            if candidate.process is task.process:
+                app_state.analysis_tasks.pop(key, None)
+    if task is not None and app_state.process is task.process:
+        app_state.process = None
+        app_state.process_command = None
+        app_state.process_started_epoch = None
+
+
+def clear_relationship_task(
+    app_state: AppState, paths: ReadingPaths | None, task: ManagedProcessTask | None
+) -> None:
+    if paths is not None:
+        app_state.relationship_tasks.pop(task_key_for_paths(paths), None)
+    elif task is not None:
+        for key, candidate in list(app_state.relationship_tasks.items()):
+            if candidate.process is task.process:
+                app_state.relationship_tasks.pop(key, None)
+    if task is not None and app_state.relationship_process is task.process:
+        app_state.relationship_process = None
+        app_state.relationship_process_kind = None
+        app_state.relationship_process_command = None
+
+
+def watch_managed_process(
+    app_state: AppState,
+    paths: ReadingPaths | None,
+    task: ManagedProcessTask,
+    clear_callback: Callable[[AppState, ReadingPaths | None, ManagedProcessTask | None], None],
+    *,
+    completion_predicate: Callable[[], bool] | None = None,
+) -> None:
+    threading.Thread(
+        target=_watch_managed_process_worker,
+        args=(app_state, paths, task, clear_callback, completion_predicate),
+        name="doctriage-task-watch",
+        daemon=True,
+    ).start()
+
+
+def _watch_managed_process_worker(
+    app_state: AppState,
+    paths: ReadingPaths | None,
+    task: ManagedProcessTask,
+    clear_callback: Callable[[AppState, ReadingPaths | None, ManagedProcessTask | None], None],
+    completion_predicate: Callable[[], bool] | None,
+) -> None:
+    process = task.process
+    while process.poll() is None:
+        if completion_predicate is not None:
+            try:
+                completed = bool(completion_predicate())
+            except OSError:
+                completed = False
+            if completed:
+                if task.cleanup_started:
+                    return
+                task.cleanup_started = True
+                _reap_completed_managed_process_worker(
+                    app_state,
+                    paths,
+                    task,
+                    clear_callback,
+                    COMPLETED_TASK_PROCESS_GRACE_SECONDS,
+                )
+                return
+        time.sleep(TASK_WATCH_POLL_SECONDS)
+
+    with app_state.lock:
+        clear_callback(app_state, paths, task)
+
+
+def reap_completed_managed_process(
+    app_state: AppState,
+    paths: ReadingPaths | None,
+    task: ManagedProcessTask | None,
+    clear_callback: Callable[[AppState, ReadingPaths | None, ManagedProcessTask | None], None],
+    *,
+    timeout_seconds: float | None = None,
+) -> None:
+    if task is None or task.cleanup_started:
+        return
+    task.cleanup_started = True
+    effective_timeout = (
+        COMPLETED_TASK_PROCESS_GRACE_SECONDS
+        if timeout_seconds is None
+        else timeout_seconds
+    )
+    threading.Thread(
+        target=_reap_completed_managed_process_worker,
+        args=(app_state, paths, task, clear_callback, effective_timeout),
+        name="doctriage-task-reaper",
+        daemon=True,
+    ).start()
+
+
+def _reap_completed_managed_process_worker(
+    app_state: AppState,
+    paths: ReadingPaths | None,
+    task: ManagedProcessTask,
+    clear_callback: Callable[[AppState, ReadingPaths | None, ManagedProcessTask | None], None],
+    timeout_seconds: float,
+) -> None:
+    process = task.process
+    if process.poll() is None:
+        try:
+            process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            terminate_process_tree(process, timeout_seconds=5.0)
+        except (OSError, subprocess.SubprocessError, AttributeError):
+            pass
+    with app_state.lock:
+        if process.poll() is not None:
+            clear_callback(app_state, paths, task)
+
+
+def clear_rag_task(
+    app_state: AppState, paths: ReadingPaths | None, task: ManagedProcessTask | None
+) -> None:
+    if paths is not None:
+        app_state.rag_tasks.pop(task_key_for_paths(paths), None)
+    elif task is not None:
+        for key, candidate in list(app_state.rag_tasks.items()):
+            if candidate.process is task.process:
+                app_state.rag_tasks.pop(key, None)
+    if task is not None and app_state.rag_process is task.process:
+        app_state.rag_process = None
+        app_state.rag_process_kind = None
+        app_state.rag_process_command = None
+
+
 def paths_match_command(command: list[str] | None, paths: ReadingPaths) -> bool:
     if not command:
         return False
@@ -4080,6 +2946,9 @@ def build_analysis_command(
             "Embedding model is required when embedding relationships are enabled."
         )
     if embedding_model:
+        embedding_endpoint = str(payload.get("embedding_endpoint") or "").strip()
+        if embedding_endpoint:
+            command.extend(["--embedding-endpoint", embedding_endpoint])
         command.extend(["--embedding-model", embedding_model])
 
     option_map = {
@@ -4130,6 +2999,54 @@ def run_lock_path(output_root: Path) -> Path:
     return output_root / "_state" / "run.lock"
 
 
+def relationship_task_record_path(paths: ReadingPaths) -> Path:
+    return relationship_dir(paths) / "task.json"
+
+
+def relationship_task_from_record(paths: ReadingPaths) -> dict[str, Any] | None:
+    record_path = relationship_task_record_path(paths)
+    info = read_json_file(record_path)
+    pid = coerce_pid(info.get("pid"))
+    if pid is None:
+        return None
+    created_epoch = coerce_float_value(info.get("created_epoch"), 0.0)
+    if not is_process_alive(pid):
+        remove_relationship_task_record(record_path)
+        return None
+    if relationship_outputs_complete_after(paths, created_epoch):
+        remove_relationship_task_record(record_path)
+        return None
+    command_payload = info.get("command")
+    command = command_payload if isinstance(command_payload, list) else None
+    kind = str(info.get("kind") or "mine")
+    return {
+        "running": True,
+        "pid": pid,
+        "kind": kind,
+        "command": command,
+        "return_code": None,
+        "source_dir": str(info.get("source_dir") or paths.source_dir),
+        "output_root": str(info.get("output_root") or paths.output_root),
+        "task_record": str(record_path),
+    }
+
+
+def remove_relationship_task_record(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
+def find_active_relationship_task_pid(paths: ReadingPaths) -> int | None:
+    payload = relationship_task_from_record(paths)
+    if payload is None:
+        return None
+    return coerce_pid(payload.get("pid"))
+
+
 def read_run_lock(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -4174,6 +3091,10 @@ def is_process_alive(pid: int) -> bool:
 
 def find_active_run_pid(paths: ReadingPaths) -> int | None:
     lock_info = read_run_lock(run_lock_path(paths.output_root))
+    return active_run_pid_from_lock_info(lock_info)
+
+
+def active_run_pid_from_lock_info(lock_info: dict[str, Any]) -> int | None:
     pid = coerce_pid(lock_info.get("pid"))
     if pid is None or not is_process_alive(pid):
         return None
@@ -4260,22 +3181,39 @@ def reset_analysis_output(app_state: AppState, payload: dict[str, Any]) -> dict[
     clear_source_file_scan_cache(source_dir)
 
     with app_state.lock:
-        process = app_state.process
+        analysis_task = analysis_task_for_paths(app_state, paths)
+        process = analysis_task.process if analysis_task is not None else None
         if process is not None and process.poll() is None:
             raise RuntimeError("Cannot reset output while analysis is running.")
-        relationship_process = app_state.relationship_process
+        relationship_task = relationship_task_for_paths(app_state, paths)
+        relationship_process = (
+            relationship_task.process if relationship_task is not None else None
+        )
         if (
             relationship_process is not None
             and relationship_process.poll() is None
-            and paths_match_command(app_state.relationship_process_command, paths)
         ):
             raise RuntimeError(
                 "Cannot reset output while a relationship task is running for this output."
+            )
+        rag_task = rag_managed_task_for_paths(app_state, paths)
+        rag_process = rag_task.process if rag_task is not None else None
+        if (
+            rag_process is not None
+            and rag_process.poll() is None
+        ):
+            raise RuntimeError(
+                "Cannot reset output while a RAG indexing task is running for this output."
             )
         active_pid = find_active_run_pid(paths)
         if active_pid is not None:
             raise RuntimeError(
                 f"Cannot reset output while analysis is running with PID {active_pid}."
+            )
+        active_relationship_pid = find_active_relationship_task_pid(paths)
+        if active_relationship_pid is not None:
+            raise RuntimeError(
+                f"Cannot reset output while a relationship task is running with PID {active_relationship_pid}."
             )
 
         clear_output_root_contents(output_root)
@@ -4283,8 +3221,7 @@ def reset_analysis_output(app_state: AppState, payload: dict[str, Any]) -> dict[
         (output_root / "_state").mkdir(parents=True, exist_ok=True)
         (output_root / "_logs").mkdir(parents=True, exist_ok=True)
         app_state.paths = paths
-        app_state.process = None
-        app_state.process_command = None
+        clear_analysis_task(app_state, paths, analysis_task)
 
     return {
         "reset": True,
@@ -4293,27 +3230,88 @@ def reset_analysis_output(app_state: AppState, payload: dict[str, Any]) -> dict[
     }
 
 
+def reset_relationship_output(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
+    source_dir, output_root = resolve_payload_paths(payload)
+    validate_reset_output_root(source_dir, output_root)
+    paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
+    target_dir = relationship_dir(paths)
+
+    with app_state.lock:
+        analysis_task = analysis_task_for_paths(app_state, paths)
+        process = analysis_task.process if analysis_task is not None else None
+        if process is not None and process.poll() is None:
+            raise RuntimeError("Cannot reset relationships while analysis is running.")
+        relationship_task = relationship_task_for_paths(app_state, paths)
+        relationship_process = (
+            relationship_task.process if relationship_task is not None else None
+        )
+        if (
+            relationship_process is not None
+            and relationship_process.poll() is None
+        ):
+            raise RuntimeError(
+                "Cannot reset relationships while a relationship task is running for this output."
+            )
+        rag_task = rag_managed_task_for_paths(app_state, paths)
+        rag_process = rag_task.process if rag_task is not None else None
+        if (
+            rag_process is not None
+            and rag_process.poll() is None
+        ):
+            raise RuntimeError(
+                "Cannot reset relationships while a RAG indexing task is running for this output."
+            )
+        active_pid = find_active_run_pid(paths)
+        if active_pid is not None:
+            raise RuntimeError(
+                f"Cannot reset relationships while analysis is running with PID {active_pid}."
+            )
+        active_relationship_pid = find_active_relationship_task_pid(paths)
+        if active_relationship_pid is not None:
+            raise RuntimeError(
+                f"Cannot reset relationships while a relationship task is running with PID {active_relationship_pid}."
+            )
+
+        if target_dir.exists():
+            if target_dir.is_symlink() or target_dir.is_file():
+                target_dir.unlink()
+            else:
+                shutil.rmtree(target_dir)
+        relationship_progress = relationship_progress_path(paths)
+        if relationship_progress.exists():
+            relationship_progress.unlink()
+        app_state.paths = paths
+        if relationship_process is not None and relationship_process.poll() is not None:
+            clear_relationship_task(app_state, paths, relationship_task)
+
+    return {
+        "reset": True,
+        "source_dir": str(source_dir),
+        "output_root": str(output_root),
+        "relationship_dir": str(target_dir),
+    }
+
+
 def stop_analysis(app_state: AppState, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     requested_paths = paths_from_payload(payload or {})
     with app_state.lock:
-        process = app_state.process
         paths = requested_paths or app_state.paths
         if paths is not None:
             clear_source_file_scan_cache(paths.source_dir)
-        process_matches_paths = (
-            requested_paths is None
-            or paths_match_command(app_state.process_command, requested_paths)
-        )
-        if process is not None and process.poll() is None and process_matches_paths:
-            process.terminate()
-            stopped = wait_for_process_exit(process, timeout_seconds=5.0)
-            if not stopped:
-                stopped = kill_process(process)
+        task = analysis_task_for_paths(app_state, paths)
+        process = task.process if task is not None else None
+        if process is not None and process.poll() is None:
+            stopped = terminate_process_tree(process, timeout_seconds=5.0)
+            running = process.poll() is None
+            if not running:
+                clear_analysis_task(app_state, paths, task)
             return {
                 "stopped": stopped,
-                "running": process.poll() is None,
+                "running": running,
                 "pid": process.pid,
             }
+        if process is not None:
+            clear_analysis_task(app_state, paths, task)
         if paths is None:
             return {"stopped": False, "running": False}
         pid = find_active_run_pid(paths)
@@ -4338,9 +3336,19 @@ def start_early_relationships(
     relationship_task_command("mine", relationship_payload, paths)
 
     with app_state.lock:
-        relationship_process = app_state.relationship_process
+        relationship_task = relationship_task_for_paths(app_state, paths)
+        relationship_process = (
+            relationship_task.process if relationship_task is not None else None
+        )
         if relationship_process is not None and relationship_process.poll() is None:
-            raise RuntimeError("Another relationship task is already running.")
+            raise RuntimeError(
+                "Another relationship task is already running for this output."
+            )
+        active_relationship_pid = find_active_relationship_task_pid(paths)
+        if active_relationship_pid is not None:
+            raise RuntimeError(
+                f"Relationship task is already running for this output with PID {active_relationship_pid}."
+            )
 
     stop_result = stop_analysis(app_state, relationship_payload)
     if stop_result.get("running"):
@@ -4369,7 +3377,63 @@ def wait_for_process_exit(process: subprocess.Popen, timeout_seconds: float) -> 
     return True
 
 
+def terminate_process_tree(
+    process: subprocess.Popen, timeout_seconds: float = 5.0
+) -> bool:
+    if os.name == "nt" and isinstance(process, SUBPROCESS_POPEN_TYPE):
+        stopped = terminate_process_id(process.pid)
+        try:
+            process.wait(timeout=timeout_seconds)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return stopped or process.poll() is not None
+    if os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return True
+        except (OSError, PermissionError):
+            try:
+                process.terminate()
+            except (OSError, subprocess.SubprocessError):
+                return False
+        stopped = wait_for_process_exit(process, timeout_seconds=timeout_seconds)
+        if not stopped:
+            stopped = kill_process(process)
+        return stopped
+    try:
+        process.terminate()
+    except (OSError, subprocess.SubprocessError):
+        return False
+    stopped = wait_for_process_exit(process, timeout_seconds=timeout_seconds)
+    if not stopped:
+        stopped = kill_process(process)
+    return stopped
+
+
 def kill_process(process: subprocess.Popen) -> bool:
+    if os.name == "nt" and isinstance(process, SUBPROCESS_POPEN_TYPE):
+        stopped = terminate_process_id(process.pid)
+        try:
+            process.wait(timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return stopped or process.poll() is not None
+    if os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return True
+        except (OSError, PermissionError):
+            try:
+                process.kill()
+            except (OSError, subprocess.SubprocessError):
+                return False
+        try:
+            process.wait(timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return process.poll() is not None
     try:
         process.kill()
         process.wait(timeout=5)
@@ -4384,8 +3448,12 @@ def infer_analysis_phase(
     progress: dict[str, Any],
     log_tail: str,
     decisions_exists: bool,
+    command: list[str] | None = None,
+    embedding_progress: dict[str, Any] | None = None,
+    active_started_epoch: float | None = None,
     relations_exists: bool = False,
     clusters_exists: bool = False,
+    relationship_outputs_current: bool = False,
     run_summary: dict[str, Any] | None = None,
 ) -> str:
     completed = coerce_int_value(progress.get("completed"), 0)
@@ -4396,9 +3464,19 @@ def infer_analysis_phase(
     succeeded = coerce_int_value(progress.get("succeeded"), 0)
     skipped_resumed = coerce_int_value(progress.get("skipped_resumed"), 0)
 
+    if relationship_outputs_current or (not running and relations_exists and clusters_exists):
+        if unresolved_failures_from_summary_or_progress(run_summary, progress) > 0:
+            return "分析完成，仍有失败"
+        return "分析完成，关系已生成"
+
     if running:
-        if log_tail.rfind("Starting relationship mining") > log_tail.rfind(
-            "Relationship mining completed"
+        if inline_relationship_mining_is_active(
+            running=True,
+            command=command,
+            log_tail=log_tail,
+            progress=progress,
+            embedding_progress=embedding_progress,
+            active_started_epoch=active_started_epoch,
         ):
             return "关系挖掘中"
         if decisions_exists and completed == 0 and submitted == 0 and skipped_resumed == 0:
@@ -4410,8 +3488,8 @@ def infer_analysis_phase(
         return "扫描准备中"
 
     summary = run_summary or {}
-    unresolved_failures = coerce_int_value(
-        summary.get("unresolved_failures"), coerce_int_value(progress.get("failed"), 0)
+    unresolved_failures = unresolved_failures_from_summary_or_progress(
+        run_summary, progress
     )
     if total > 0 and remaining == 0:
         if unresolved_failures > 0:
@@ -4426,21 +3504,41 @@ def infer_analysis_phase(
     return "未启动"
 
 
+def unresolved_failures_from_summary_or_progress(
+    run_summary: dict[str, Any] | None,
+    progress: dict[str, Any],
+) -> int:
+    summary = run_summary or {}
+    return coerce_int_value(
+        summary.get("unresolved_failures"), coerce_int_value(progress.get("failed"), 0)
+    )
+
+
 def analysis_status(
     app_state: AppState, paths: ReadingPaths | None = None
 ) -> dict[str, Any]:
     with app_state.lock:
-        process = app_state.process
-        command = app_state.process_command
         active_paths = app_state.paths
         paths = paths or active_paths
+        task = analysis_task_for_paths(app_state, paths)
+        process = task.process if task is not None else None
+        command = task.command if task is not None else None
+        process_started_epoch = task.started_epoch if task is not None else None
         local_running = (
             process is not None
             and process.poll() is None
             and (paths is None or paths_match_command(command, paths))
         )
-        local_pid = process.pid if process is not None else None
+        local_pid = (
+            process.pid
+            if process is not None
+            and (paths is None or paths_match_command(command, paths))
+            else None
+        )
         return_code = None if process is None else process.poll()
+        if process is not None and process.poll() is not None:
+            clear_analysis_task(app_state, paths, task)
+            process_started_epoch = None
 
     if paths is None:
         return {
@@ -4463,21 +3561,36 @@ def analysis_status(
             },
             "run_summary": {},
             "relationship_task": {"running": False, "pid": None, "kind": None},
+            "rag_task": {"running": False, "pid": None, "kind": None},
             "embedding_progress": {},
         }
 
-    active_pid = find_active_run_pid(paths)
-    running = local_running or active_pid is not None
-    pid = local_pid if local_running else active_pid
-    if running and not local_running:
-        return_code = None
     effective_concurrency = infer_effective_concurrency(command)
     progress = read_json_file(paths.progress_path)
     run_summary = read_json_file(paths.output_root / "_state" / "run_summary.json")
     log_tail = read_text_tail(paths.application_log_path, max_lines=80)
+    embedding_progress = read_json_file(relationship_embedding_progress_path(paths))
     plan_only = infer_plan_only_mode(command, progress, run_summary)
     decisions_exists = paths.decisions_path.exists()
     lock_status = run_lock_status(paths)
+    active_started_epoch = (
+        process_started_epoch
+        if local_running
+        else coerce_float_value(lock_status.get("created_epoch"), 0.0)
+    )
+    relationship_outputs_current = relationship_outputs_complete_after(
+        paths, active_started_epoch
+    )
+    active_pid = find_active_run_pid(paths)
+    running = (local_running or active_pid is not None) and not relationship_outputs_current
+    pid = local_pid if local_running else active_pid
+    if relationship_outputs_current:
+        if task is not None:
+            reap_completed_managed_process(app_state, paths, task, clear_analysis_task)
+        pid = None
+        return_code = 0 if return_code is None else return_code
+    elif running and not local_running:
+        return_code = None
 
     return {
         "running": running,
@@ -4487,8 +3600,12 @@ def analysis_status(
             progress=progress,
             log_tail=log_tail,
             decisions_exists=decisions_exists,
+            command=command,
+            embedding_progress=embedding_progress,
+            active_started_epoch=active_started_epoch,
             relations_exists=relationship_relations_path(paths).exists(),
             clusters_exists=relationship_clusters_path(paths).exists(),
+            relationship_outputs_current=relationship_outputs_current,
             run_summary=run_summary,
         ),
         "pid": pid,
@@ -4504,7 +3621,8 @@ def analysis_status(
         "activity": build_analysis_activity(paths, log_tail),
         "run_summary": run_summary,
         "relationship_task": relationship_task_status(app_state, paths),
-        "embedding_progress": read_json_file(relationship_embedding_progress_path(paths)),
+        "rag_task": rag_task_status(app_state, paths),
+        "embedding_progress": embedding_progress,
     }
 
 
@@ -5087,6 +4205,9 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self.send_html(HTML_PAGE)
             return
+        if parsed.path in UI_STATIC_ASSETS:
+            self.send_ui_asset(parsed.path)
+            return
         if parsed.path == "/api/config":
             self.send_json(lambda: config_payload(self.state.paths))
             return
@@ -5105,6 +4226,15 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
                     reading_paths_from_payload(self.state, query)
                     or require_paths(self.state),
                     query,
+                )
+            )
+            return
+        if parsed.path == "/api/rag":
+            self.send_json(
+                lambda: build_rag_payload(
+                    self.state,
+                    reading_paths_from_payload(self.state, query)
+                    or require_paths(self.state),
                 )
             )
             return
@@ -5144,6 +4274,12 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/api/analysis/reset":
             self.send_json(lambda: reset_analysis_output(self.state, self.read_json()))
             return
+        if self.path == "/api/test/llm":
+            self.send_json(lambda: test_llm_connection(self.read_json()))
+            return
+        if self.path == "/api/test/vector-store":
+            self.send_json(lambda: test_vector_store_connection(self.state, self.read_json()))
+            return
         if self.path == "/api/relationships/mine":
             self.send_json(
                 lambda: start_relationship_task(self.state, self.read_json(), "mine")
@@ -5151,6 +4287,9 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/relationships/stop":
             self.send_json(lambda: stop_relationship_task(self.state, self.read_json()))
+            return
+        if self.path == "/api/relationships/reset":
+            self.send_json(lambda: reset_relationship_output(self.state, self.read_json()))
             return
         if self.path == "/api/relationships/export-graph":
             self.send_json(
@@ -5165,6 +4304,23 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
                     self.state, self.read_json(), "export_bundle"
                 )
             )
+            return
+        if self.path == "/api/integrations/anydocs/open":
+            self.send_json(lambda: open_anydocs_request(self.state, self.read_json()))
+            return
+        if self.path == "/api/integrations/anydocs/export-bundle":
+            self.send_json(
+                lambda: export_anydocs_bundle_request(self.state, self.read_json())
+            )
+            return
+        if self.path == "/api/rag/build":
+            self.send_json(lambda: start_rag_task(self.state, self.read_json()))
+            return
+        if self.path == "/api/rag/stop":
+            self.send_json(lambda: stop_rag_task(self.state, self.read_json()))
+            return
+        if self.path == "/api/rag/search":
+            self.send_json(lambda: search_rag_request(self.state, self.read_json()))
             return
         if self.path == "/api/mark":
             self.send_json(lambda: mark_document_request(self.state, self.read_json()))
@@ -5206,6 +4362,17 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         encoded = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def send_ui_asset(self, request_path: str) -> None:
+        asset_name, content_type = UI_STATIC_ASSETS[request_path]
+        encoded = read_ui_asset_text(asset_name).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
@@ -5228,6 +4395,11 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         return
 
 
+class DocTriageHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+
+
 def build_handler(app_state: AppState):
     class BoundReadingRequestHandler(ReadingRequestHandler):
         pass
@@ -5238,7 +4410,7 @@ def build_handler(app_state: AppState):
 
 def serve(paths: ReadingPaths | None, host: str, port: int, *, open_browser: bool) -> None:
     app_state = AppState(paths=paths)
-    server = ThreadingHTTPServer((host, port), build_handler(app_state))
+    server = DocTriageHTTPServer((host, port), build_handler(app_state))
     url = f"http://{host}:{server.server_port}/"
     print(f"DocTriage Console: {url}")
     if open_browser:
@@ -5247,6 +4419,8 @@ def serve(paths: ReadingPaths | None, host: str, port: int, *, open_browser: boo
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        server.server_close()
 
 
 def build_parser() -> argparse.ArgumentParser:

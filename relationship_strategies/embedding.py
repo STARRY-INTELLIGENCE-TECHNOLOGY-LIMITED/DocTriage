@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import heapq
 from collections import defaultdict
+from collections.abc import Mapping
 from typing import Any
 
 from .common import cosine_similarity, normalize_pair
@@ -13,13 +14,16 @@ class EmbeddingPairCollector:
     def collect(
         self,
         records: list[Any],
-        embeddings: dict[int, list[float]],
+        embeddings: Mapping[int, list[float]],
         settings: Any,
     ) -> set[tuple[int, int]]:
         pairs: set[tuple[int, int]] = set()
-        indexes = sorted(embeddings)
-        if not indexes or len(indexes) > settings.RELATIONSHIP_EMBEDDING_EXHAUSTIVE_LIMIT:
+        if (
+            not embeddings
+            or len(embeddings) > settings.RELATIONSHIP_EMBEDDING_EXHAUSTIVE_LIMIT
+        ):
             return pairs
+        indexes = sorted(embeddings)
 
         top_k = settings.RELATIONSHIP_EMBEDDING_TOP_K
         neighbors: dict[int, list[tuple[float, int]]] = defaultdict(list)

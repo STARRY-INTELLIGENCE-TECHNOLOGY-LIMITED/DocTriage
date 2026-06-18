@@ -18,4 +18,4 @@ python -m compileall -q .
 - Keep generated state under `OUTPUT_ROOT`.
 - Add tests for resume, copy, bundle, and relationship behavior changes.
 - Prefer optional flags over mandatory heavy dependencies.
-- Keep `doctriage_bundle.v1` backward compatible; if a breaking change is needed, bump the schema version.
+- Keep downstream integrations aligned with the current `doctriage_bundle.v2` contract.

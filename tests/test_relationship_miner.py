@@ -1,4 +1,5 @@
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -14,9 +15,11 @@ from relationship_miner import (
     load_or_build_embeddings,
     load_records,
     mine_relationships,
+    read_relationship_progress,
     resolve_embedding_workers,
     resolve_relationship_workers,
     write_clusters,
+    write_relationship_progress,
 )
 from relationship_strategies.embedding import EmbeddingPairCollector
 
@@ -86,6 +89,48 @@ def test_mine_relationships_without_embeddings(tmp_path: Path) -> None:
 
     clusters = json.loads(clusters_path.read_text(encoding="utf-8"))
     assert clusters["clusters"]
+    progress = json.loads(
+        (output_root / "_relationships" / "progress.json").read_text(encoding="utf-8")
+    )
+    assert progress["schema_version"] == "doctriage_relationship_progress.v1"
+    assert progress["phase"] == "complete"
+    assert progress["percent"] == 100.0
+    assert progress["total_records"] == 3
+    assert progress["candidate_relations"] >= 1
+
+
+def test_relationship_progress_reports_phase_counts_and_elapsed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    progress_path = tmp_path / "_relationships" / "progress.json"
+    times = iter([1000.0, 1012.5])
+    monkeypatch.setattr(relationship_miner.time, "time", lambda: next(times))
+
+    write_relationship_progress(
+        progress_path,
+        phase="loading_decisions",
+        percent=2,
+        total_records=0,
+    )
+    write_relationship_progress(
+        progress_path,
+        phase="scoring_relationships",
+        percent=45,
+        total_records=10,
+        candidate_relations=4,
+        embedded_records=8,
+    )
+
+    progress = read_relationship_progress(progress_path)
+    assert progress["schema_version"] == "doctriage_relationship_progress.v1"
+    assert progress["phase"] == "scoring_relationships"
+    assert progress["percent"] == 45.0
+    assert progress["started_epoch"] == 1000.0
+    assert progress["updated_epoch"] == 1012.5
+    assert progress["elapsed_seconds"] == 12.5
+    assert progress["total_records"] == 10
+    assert progress["candidate_relations"] == 4
+    assert progress["embedded_records"] == 8
 
 
 def test_mine_relationships_with_embeddings_releases_scoring_model_first(
@@ -317,10 +362,109 @@ def test_embedding_progress_and_cache_resume_are_relationship_scoped(
     assert progress["generated"] == 2
     assert progress["missing"] == 0
     assert progress["percent"] == 100.0
+    assert progress["started_epoch"] > 0
+    assert progress["elapsed_seconds"] >= 0
+    assert "items_per_minute" in progress
+    assert progress["eta_human"] == "unknown"
+    assert progress["eta_finish_epoch"] is None
     new_cache_text = cache_path.read_text(encoding="utf-8")
     assert "embedding text 1" not in new_cache_text
     assert len(new_cache_text.strip().splitlines()) == 2
     assert legacy_cache_path.exists()
+
+
+def test_embedding_store_streams_legacy_cache_without_cache_dict(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    records = []
+    for index in range(2):
+        path = source_dir / f"doc{index}.md"
+        path.write_text("placeholder", encoding="utf-8")
+        record = relationship_miner.RelationshipRecord(
+            source_path=path,
+            relative_path=path.name,
+            target_path="",
+            quality=90,
+            category="Design",
+            document_kind="Unknown",
+            topic_tags=[],
+            reason="",
+            summary=f"summary {index}",
+            modified_epoch=float(index),
+            normalized_name=relationship_miner.normalize_name(path.stem),
+        )
+        record.embedding_text = f"embedding text {index}"
+        records.append(record)
+
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        RELATIONSHIP_USE_EMBEDDINGS=True,
+        EMBEDDING_MODEL="nomic-embed-text",
+    )
+    for record, vector in zip(records, ([1.0, 0.0], [0.0, 1.0]), strict=True):
+        relationship_miner.append_embedding_cache(
+            settings.embedding_cache_path,
+            relationship_miner.embedding_cache_key(record),
+            vector,
+        )
+
+    def fail_cache_read(path):
+        raise AssertionError("relationship mining should stream cache into SQLite")
+
+    monkeypatch.setattr(relationship_miner, "load_embedding_cache", fail_cache_read)
+
+    embeddings = load_or_build_embeddings(records, settings)
+
+    try:
+        assert settings.embedding_store_path.exists()
+        assert embeddings == {0: [1.0, 0.0], 1: [0.0, 1.0]}
+        assert json.loads(settings.embedding_progress_path.read_text())["cached"] == 2
+    finally:
+        embeddings.close()
+
+
+def test_embedding_progress_reports_speed_and_eta(
+    tmp_path: Path, monkeypatch
+) -> None:
+    progress_path = tmp_path / "_relationships" / "embedding_progress.json"
+    timestamps = iter([1000.0, 1060.0])
+    monkeypatch.setattr(relationship_miner.time, "time", lambda: next(timestamps))
+
+    relationship_miner.write_embedding_progress(
+        progress_path,
+        phase="loading_cache",
+        total=300,
+        cached=0,
+        generated=0,
+        missing=300,
+        workers=0,
+        enabled=True,
+    )
+    relationship_miner.write_embedding_progress(
+        progress_path,
+        phase="embedding",
+        total=300,
+        cached=0,
+        generated=120,
+        missing=180,
+        workers=4,
+        enabled=True,
+    )
+
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["started_epoch"] == 1000.0
+    assert progress["updated_epoch"] == 1060.0
+    assert progress["elapsed_seconds"] == 60.0
+    assert progress["items_per_minute"] == 120.0
+    assert progress["eta_seconds"] == 90.0
+    assert progress["eta_human"] == "1m30s"
+    assert progress["eta_finish_epoch"] == 1150.0
 
 
 def test_embedding_client_reuses_http_client(monkeypatch, tmp_path: Path) -> None:
@@ -339,8 +483,8 @@ def test_embedding_client_reuses_http_client(monkeypatch, tmp_path: Path) -> Non
             self.closed = False
             created_clients.append(self)
 
-        def post(self, endpoint, *, json, timeout):
-            posts.append({"endpoint": endpoint, "json": json, "timeout": timeout})
+        def post(self, endpoint, *, headers=None, json, timeout):
+            posts.append({"endpoint": endpoint, "headers": headers, "json": json, "timeout": timeout})
             return FakeResponse()
 
         def close(self):
@@ -361,7 +505,113 @@ def test_embedding_client_reuses_http_client(monkeypatch, tmp_path: Path) -> Non
 
     assert len(created_clients) == 1
     assert len(posts) == 2
+    assert posts[0]["headers"] == {"Content-Type": "application/json"}
     assert created_clients[0].closed is True
+
+
+def test_embedding_client_supports_openai_compatible_embeddings(
+    monkeypatch, tmp_path: Path
+) -> None:
+    posts: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self) -> None:
+            return
+
+        def json(self):
+            inputs = self.payload["input"]
+            return {
+                "data": [
+                    {"index": index, "embedding": [float(index), float(len(text))]}
+                    for index, text in enumerate(inputs)
+                ]
+            }
+
+    class FakeHttpClient:
+        def post(self, endpoint, *, headers=None, json, timeout):
+            posts.append(
+                {
+                    "endpoint": endpoint,
+                    "headers": headers,
+                    "json": json,
+                    "timeout": timeout,
+                }
+            )
+            return FakeResponse(json)
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(relationship_miner.httpx, "Client", FakeHttpClient)
+    settings = Settings(
+        LLM_ENDPOINT="https://api.openai.com/v1/chat/completions",
+        LLM_MODEL="gpt-test",
+        LLM_API_KEY="chat-key",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+        EMBEDDING_ENDPOINT="https://api.openai.com/v1/embeddings",
+        EMBEDDING_MODEL="text-embedding-test",
+        EMBEDDING_API_KEY="embedding-key",
+    )
+
+    with relationship_miner.OllamaEmbeddingClient(settings) as client:
+        vectors = client.embed_many(["alpha", "beta"])
+
+    assert vectors == [[0.0, 5.0], [1.0, 4.0]]
+    assert posts == [
+        {
+            "endpoint": "https://api.openai.com/v1/embeddings",
+            "headers": {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer embedding-key",
+            },
+            "json": {
+                "model": "text-embedding-test",
+                "input": ["alpha", "beta"],
+            },
+            "timeout": settings.EMBEDDING_TIMEOUT_SECONDS,
+        }
+    ]
+
+
+def test_embedding_client_openai_compatible_falls_back_to_llm_api_key(
+    monkeypatch, tmp_path: Path
+) -> None:
+    posts: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return
+
+        def json(self):
+            return {"data": [{"embedding": [1, 2, 3]}]}
+
+    class FakeHttpClient:
+        def post(self, endpoint, *, headers=None, json, timeout):
+            posts.append({"headers": headers, "json": json})
+            return FakeResponse()
+
+        def close(self):
+            return
+
+    monkeypatch.setattr(relationship_miner.httpx, "Client", FakeHttpClient)
+    settings = Settings(
+        LLM_ENDPOINT="https://api.openai.com/v1/chat/completions",
+        LLM_MODEL="gpt-test",
+        LLM_API_KEY="shared-key",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+        EMBEDDING_ENDPOINT="https://api.openai.com/v1/embeddings",
+        EMBEDDING_MODEL="text-embedding-test",
+    )
+
+    with relationship_miner.OllamaEmbeddingClient(settings) as client:
+        assert client.embed("alpha") == [1.0, 2.0, 3.0]
+
+    assert posts[0]["headers"]["Authorization"] == "Bearer shared-key"
 
 
 def test_embedding_client_requires_explicit_embedding_model(tmp_path: Path) -> None:
@@ -415,8 +665,8 @@ def test_api_embed_batches_inputs_per_worker(monkeypatch, tmp_path: Path) -> Non
             return {"embeddings": [[float(len(text))] for text in inputs]}
 
     class FakeHttpClient:
-        def post(self, endpoint, *, json, timeout):
-            posts.append({"endpoint": endpoint, "json": json, "timeout": timeout})
+        def post(self, endpoint, *, headers=None, json, timeout):
+            posts.append({"endpoint": endpoint, "headers": headers, "json": json, "timeout": timeout})
             return FakeResponse(json)
 
         def close(self):
@@ -480,8 +730,8 @@ def test_api_embed_batches_inputs_with_single_worker(monkeypatch, tmp_path: Path
             return {"embeddings": [[float(len(text))] for text in inputs]}
 
     class FakeHttpClient:
-        def post(self, endpoint, *, json, timeout):
-            posts.append({"endpoint": endpoint, "json": json, "timeout": timeout})
+        def post(self, endpoint, *, headers=None, json, timeout):
+            posts.append({"endpoint": endpoint, "headers": headers, "json": json, "timeout": timeout})
             return FakeResponse(json)
 
         def close(self):
@@ -904,6 +1154,26 @@ def test_parallel_relationship_scoring_path_matches_serial(
     assert parallel == serial
 
 
+def test_parallel_relationship_scoring_passes_store_path_not_vectors(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+    )
+    with relationship_miner.SQLiteEmbeddingStore(settings.embedding_store_path) as embeddings:
+        embeddings.put_many([(0, "left", [1.0, 0.0]), (1, "right", [0.9, 0.1])])
+
+        initargs = relationship_miner.score_worker_initargs(
+            [], embeddings, settings, {}
+        )
+
+    assert initargs[1] == {}
+    assert initargs[4] == str(settings.embedding_store_path)
+
+
 def test_relationship_workers_are_inferred_from_cpu_count(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -955,6 +1225,115 @@ def test_relationship_cli_concurrency_sets_embedding_worker_limit(
     assert settings.CONCURRENCY_LIMIT == 4
     assert settings.RELATIONSHIP_USE_EMBEDDINGS is True
     assert settings.EMBEDDING_MODEL == "nomic-embed-text"
+
+
+def test_relationship_cli_sets_worker_recycle_limit(
+    tmp_path: Path,
+) -> None:
+    args = relationship_miner.build_parser().parse_args(
+        [
+            "--source-dir",
+            str(tmp_path / "source"),
+            "--output-root",
+            str(tmp_path / "output"),
+            "--llm-endpoint",
+            "http://localhost:11434/api/generate",
+            "--llm-model",
+            "gemma4:e4b",
+            "--relationship-worker-max-tasks",
+            "25",
+        ]
+    )
+
+    settings = relationship_miner.build_settings_from_args(args)
+
+    assert settings.RELATIONSHIP_WORKER_MAX_TASKS == 25
+
+
+def test_relationship_process_pool_recycles_workers(tmp_path: Path, monkeypatch) -> None:
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+        RELATIONSHIP_WORKER_MAX_TASKS=7,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeExecutor:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        relationship_miner,
+        "ProcessPoolExecutor",
+        lambda **kwargs: FakeExecutor(**kwargs),
+    )
+
+    executor = relationship_miner.relationship_process_pool(
+        settings,
+        3,
+        initializer=lambda: None,
+        initargs=(),
+    )
+
+    assert isinstance(executor, FakeExecutor)
+    assert captured["max_workers"] == 3
+    assert captured["max_tasks_per_child"] == 7
+
+
+def test_relationship_task_lease_writes_and_releases_record(tmp_path: Path) -> None:
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+    )
+    settings.SOURCE_DIR.mkdir()
+    record_path = settings.relationship_dir / "task.json"
+
+    with relationship_miner.RelationshipTaskLease(settings):
+        payload = json.loads(record_path.read_text(encoding="utf-8"))
+
+    assert payload["schema_version"] == "doctriage_relationship_task_record.v1"
+    assert payload["pid"] > 0
+    assert payload["kind"] == "mine"
+    assert payload["source_dir"] == str(settings.SOURCE_DIR)
+    assert payload["output_root"] == str(settings.OUTPUT_ROOT)
+    assert not record_path.exists()
+
+
+def test_relationship_task_lease_replaces_stale_current_process_record(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        LLM_MODEL="gemma4:e4b",
+        SOURCE_DIR=tmp_path / "source",
+        OUTPUT_ROOT=tmp_path / "output",
+    )
+    settings.SOURCE_DIR.mkdir()
+    record_path = settings.relationship_dir / "task.json"
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text(
+        json.dumps(
+            {
+                "schema_version": relationship_miner.RELATIONSHIP_TASK_RECORD_VERSION,
+                "pid": os.getpid(),
+                "token": "stale-ui-token",
+                "kind": "mine",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with relationship_miner.RelationshipTaskLease(settings) as task_lease:
+        payload = json.loads(record_path.read_text(encoding="utf-8"))
+        assert payload["pid"] == os.getpid()
+        assert payload["token"] == task_lease.token
+        assert payload["token"] != "stale-ui-token"
+
+    assert not record_path.exists()
 
 
 def test_relationship_cli_requires_embedding_model_for_embeddings(

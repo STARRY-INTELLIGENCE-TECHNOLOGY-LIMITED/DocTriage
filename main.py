@@ -1763,6 +1763,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-root", type=Path, help="Directory for generated state and routed copies.")
     parser.add_argument("--llm-endpoint", help="LLM endpoint, for example http://localhost:11434/api/generate.")
     parser.add_argument("--llm-model", help="LLM model name, for example gemma4:e4b.")
+    parser.add_argument("--llm-api-key", help="LLM API key for OpenAI-compatible endpoints.")
     parser.add_argument("--concurrency", type=int, help="Maximum concurrent LLM requests.")
     parser.add_argument("--limit", type=int, help="Maximum number of files to prepare and score in this run.")
     parser.add_argument("--max-file-size-mb", type=float, help="Skip candidate files larger than this size.")
@@ -1867,6 +1868,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--embedding-endpoint", help="Embedding endpoint, for example http://localhost:11434/api/embeddings.")
     parser.add_argument("--embedding-model", help="Embedding model name.")
+    parser.add_argument("--embedding-api-key", help="Embedding API key. Defaults to LLM_API_KEY when omitted.")
     return parser
 
 
@@ -1887,6 +1889,8 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["LLM_ENDPOINT"] = args.llm_endpoint
     if args.llm_model is not None:
         overrides["LLM_MODEL"] = args.llm_model
+    if args.llm_api_key is not None:
+        overrides["LLM_API_KEY"] = args.llm_api_key
     if args.concurrency is not None:
         overrides["CONCURRENCY_LIMIT"] = args.concurrency
     if args.limit is not None:
@@ -1947,6 +1951,8 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         overrides["EMBEDDING_ENDPOINT"] = args.embedding_endpoint
     if args.embedding_model is not None:
         overrides["EMBEDDING_MODEL"] = args.embedding_model
+    if args.embedding_api_key is not None:
+        overrides["EMBEDDING_API_KEY"] = args.embedding_api_key
 
     if overrides:
         settings = Settings(**overrides)

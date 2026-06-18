@@ -59,7 +59,7 @@ DocTriage 围绕一个实用闭环设计：先进行本地分析，再在阅读�
 ## 环境要求
 
 - Python `>=3.11,<3.15`
-- 本地 LLM 接口，例如 Ollama
+- LLM 接口：本地 Ollama，或 OpenAI-compatible REST 接口
 - 可选：LibreOffice，用于旧 `.ppt` 文件解析
 
 ## 安装
@@ -105,6 +105,16 @@ doctriage `
 .\.venv\Scripts\python.exe main.py --help
 ```
 
+## 模型接口
+
+DocTriage 可以不依赖 Ollama，只要云厂商提供 OpenAI-compatible REST 协议：
+
+- 评分/分类：将 `LLM_ENDPOINT` 设为 `/v1/chat/completions`，填写 `LLM_MODEL` 和 `LLM_API_KEY`；
+- 关系/RAG 向量：将 `EMBEDDING_ENDPOINT` 设为 `/v1/embeddings`，填写 `EMBEDDING_MODEL`，必要时填写 `EMBEDDING_API_KEY`；
+- `EMBEDDING_API_KEY` 为空时，向量请求会复用 `LLM_API_KEY`。
+
+浏览器控制台也提供 API Key 输入框，用于临时运行。密钥只通过环境变量传给后台任务，不会保存到浏览器本地存储。
+
 ## 推荐流程
 
 1. **先跑 plan-only**
@@ -141,6 +151,7 @@ doctriage `
 | `doctriage-relationships` | 挖掘文档关系 |
 | `doctriage-graph` | 导出知识图谱 |
 | `doctriage-bundle` | 导出稳定下游 bundle |
+| `doctriage-rag` | 构建或检索可续跑的 RAG 切片索引 |
 | `doctriage-workflow` | 工作流适配入口 |
 
 每个命令都支持 `--help`。
@@ -163,9 +174,25 @@ OUTPUT_ROOT/
     clusters.json
     knowledge_graph.json
     doctriage_bundle.json
+  _rag/
+    progress.json
+    manifest.json
+    documents.jsonl
+    chunks.jsonl
+    vectors.jsonl
 ```
 
 下游集成应优先读取 `doctriage_bundle.json`，不要直接依赖内部 JSONL 日志。
+
+## 交给 AnyDocsToAgents
+
+浏览器控制台提供 **Agent 编译** 页，可选对接 [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents)。它会导出 `OUTPUT_ROOT/_relationships/doctriage_bundle.json`，并用类似下面的 URL 打开 AnyDocsToAgents：
+
+```text
+http://127.0.0.1:8000/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json&autoplan=1#view-planner
+```
+
+这是松耦合桥接：DocTriage 不启动、不嵌入、不依赖 AnyDocsToAgents。两个项目仍可独立运行。
 
 ## 语言
 

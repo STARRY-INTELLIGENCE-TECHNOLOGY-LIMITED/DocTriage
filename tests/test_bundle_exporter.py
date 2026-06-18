@@ -83,13 +83,20 @@ def test_export_bundle_filters_and_includes_relations(tmp_path: Path) -> None:
     )
 
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "doctriage_bundle.v1"
+    assert payload["schema_version"] == "doctriage_bundle.v2"
     assert payload["statistics"]["document_count"] == 2
     assert payload["statistics"]["relation_count"] == 1
-    assert [item["relative_path"] for item in payload["documents"]] == [
+    assert [item["paths"]["relative"] for item in payload["documents"]] == [
         "first.md",
         "second.md",
     ]
+    assert payload["documents"][0]["classification"]["category"] == "Architecture"
+    assert payload["documents"][0]["scores"]["quality"] == 92
+    assert payload["documents"][0]["text"]["summary"] == "first summary"
+    assert payload["relations"][0]["left_document_id"] == payload["documents"][0]["id"]
+    assert payload["relations"][0]["right_document_id"] == payload["documents"][1]["id"]
+    assert payload["relations"][0]["score"] == 0.9
+    assert payload["relations"][0]["signals"] == ["filename", "category"]
 
 
 def test_bundle_ignores_non_terminal_decisions_and_dedupes_by_relative_path(

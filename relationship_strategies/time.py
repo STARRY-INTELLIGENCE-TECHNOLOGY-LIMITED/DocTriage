@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .common import add_window_pairs
@@ -11,7 +12,7 @@ class TimePairCollector:
     def collect(
         self,
         records: list[Any],
-        embeddings: dict[int, list[float]],
+        embeddings: Mapping[int, list[float]],
         settings: Any,
     ) -> set[tuple[int, int]]:
         pairs: set[tuple[int, int]] = set()
