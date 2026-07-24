@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,7 +31,12 @@ RAG_REDACTION_PLACEHOLDER_ENV = "DOCTRIAGE_RAG_REDACT_PLACEHOLDER"
 RAG_REDACTION_DROP_ENV = "DOCTRIAGE_RAG_REDACT_DROP_MATCHED_DOCUMENTS"
 
 from config import DEFAULT_SUPPORTED_EXTENSIONS, Settings
-from bundle_exporter import BundleSelection, export_bundle
+from bundle_exporter import (
+    BundleSelection,
+    export_bundle,
+    load_latest_decisions as load_bundle_decisions,
+    select_documents,
+)
 from runtime_encoding import (
     configure_utf8_runtime,
     decode_process_output,
@@ -85,6 +91,8 @@ DEFAULT_EMBEDDING_ENDPOINT = "http://localhost:11434/api/embeddings"
 DEFAULT_ANYDOCS_URL = "http://127.0.0.1:8000/"
 HTTP_PROBE_TIMEOUT_SECONDS = 5.0
 HTTP_PROBE_MAX_BYTES = 1024 * 1024
+UPLOAD_WORKSPACE_ROOT = PROJECT_ROOT / ".doctriage_uploads"
+UPLOAD_MANIFEST_NAME = "manifest.json"
 SUBPROCESS_POPEN_TYPE = subprocess.Popen
 COMPLETED_TASK_PROCESS_GRACE_SECONDS = 30.0
 TASK_WATCH_POLL_SECONDS = 2.0
@@ -784,6 +792,7 @@ def build_relationship_payload(
         "task": relationship_task_status(app_state, paths),
         "progress": read_json_file(relationship_progress_path(paths)),
         "embedding_progress": read_json_file(relationship_embedding_progress_path(paths)),
+        "log_tail": read_text_tail(paths.application_log_path, max_lines=80),
     }
 
 
@@ -1167,10 +1176,10 @@ def export_bundle_for_anydocs(paths: ReadingPaths, payload: dict[str, Any]) -> P
         settings,
         output_path=bundle_path_for_output(paths),
         selection=BundleSelection(
-            min_quality=parse_int(
-                str(payload.get("min_quality") or payload.get("quality_threshold") or 0),
-                0,
-            )
+            min_quality=parse_quality_score(
+                payload.get("bundle_min_quality", payload.get("min_quality")),
+                default=0,
+            ),
         ),
     )
 
@@ -1183,6 +1192,29 @@ def export_anydocs_bundle_request(
     return {
         "exported": True,
         "bundle_path": str(bundle_path),
+    }
+
+
+def anydocs_bundle_quality_stats(
+    app_state: AppState, query: dict[str, str]
+) -> dict[str, Any]:
+    paths = reading_paths_from_payload(app_state, query) or require_paths(app_state)
+    documents = select_documents(
+        load_bundle_decisions(paths.decisions_path),
+        BundleSelection(min_quality=0),
+    )
+    histogram = [0] * 101
+    for document in documents:
+        scores = document.get("scores")
+        quality = parse_quality_score(
+            scores.get("quality") if isinstance(scores, dict) else 0,
+            default=0,
+        )
+        histogram[quality] += 1
+    return {
+        "total": len(documents),
+        "histogram": histogram,
+        "excluded_categories": sorted(BundleSelection().exclude_categories),
     }
 
 
@@ -1754,13 +1786,14 @@ def relationship_task_command(
             command.extend(["--concurrency", concurrency])
         if bool(payload.get("relationship_use_text_citations", True)):
             command.append("--use-text-citations")
-        if bool(payload.get("relationship_use_embeddings")):
+        relationship_use_embeddings = bool(payload.get("relationship_use_embeddings"))
+        if relationship_use_embeddings:
             if not embedding_model:
                 raise ValueError(
                     "Embedding model is required when embedding relationships are enabled."
                 )
             command.append("--use-embeddings")
-        if embedding_model:
+        if relationship_use_embeddings:
             if embedding_endpoint:
                 command.extend(["--embedding-endpoint", embedding_endpoint])
             command.extend(["--embedding-model", embedding_model])
@@ -2471,6 +2504,183 @@ def set_reading_output(app_state: AppState, payload: dict[str, Any]) -> dict[str
     return {"source_dir": str(source_dir), "output_root": str(output_root)}
 
 
+def create_upload_workspace(app_state: AppState) -> dict[str, Any]:
+    upload_id = uuid.uuid4().hex
+    workspace = upload_workspace_path(upload_id)
+    source_dir = upload_source_dir(upload_id)
+    output_root = upload_output_root(upload_id)
+    source_dir.mkdir(parents=True, exist_ok=False)
+    output_root.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "upload_id": upload_id,
+        "created_epoch": time.time(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_dir": str(source_dir),
+        "output_root": str(output_root),
+        "file_count": 0,
+        "total_bytes": 0,
+        "files": [],
+        "complete": False,
+    }
+    write_upload_manifest(upload_id, manifest)
+    with app_state.lock:
+        app_state.paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
+    return upload_workspace_payload(upload_id, manifest)
+
+
+def upload_workspace_path(upload_id: str) -> Path:
+    safe_id = validate_upload_id(upload_id)
+    return (UPLOAD_WORKSPACE_ROOT / safe_id).resolve()
+
+
+def upload_source_dir(upload_id: str) -> Path:
+    return upload_workspace_path(upload_id) / "source"
+
+
+def upload_output_root(upload_id: str) -> Path:
+    return upload_workspace_path(upload_id) / "output"
+
+
+def upload_manifest_path(upload_id: str) -> Path:
+    return upload_workspace_path(upload_id) / UPLOAD_MANIFEST_NAME
+
+
+def validate_upload_id(upload_id: str) -> str:
+    text = str(upload_id or "").strip()
+    if not text or any(ch not in "0123456789abcdef" for ch in text.lower()) or len(text) != 32:
+        raise ValueError("Invalid upload id.")
+    return text.lower()
+
+
+def normalize_upload_relative_path(relative_path: str) -> Path:
+    text = str(relative_path or "").replace("\\", "/").strip("/")
+    if not text:
+        raise ValueError("Upload relative path is required.")
+    path = Path(text)
+    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+        raise ValueError("Invalid upload relative path.")
+    return path
+
+
+def resolve_upload_file_path(upload_id: str, relative_path: str) -> tuple[Path, str]:
+    source_dir = upload_source_dir(upload_id)
+    relative = normalize_upload_relative_path(relative_path)
+    target = (source_dir / relative).resolve()
+    try:
+        target.relative_to(source_dir.resolve())
+    except ValueError as exc:
+        raise ValueError("Invalid upload relative path.") from exc
+    return target, relative.as_posix()
+
+
+def read_upload_manifest(upload_id: str) -> dict[str, Any]:
+    path = upload_manifest_path(upload_id)
+    if not path.exists():
+        raise FileNotFoundError(f"Upload workspace does not exist: {upload_id}")
+    payload = read_json_file(path)
+    return payload if isinstance(payload, dict) else {}
+
+
+def write_upload_manifest(upload_id: str, manifest: dict[str, Any]) -> None:
+    path = upload_manifest_path(upload_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def upload_workspace_payload(upload_id: str, manifest: dict[str, Any] | None = None) -> dict[str, Any]:
+    manifest = manifest or read_upload_manifest(upload_id)
+    source_dir = upload_source_dir(upload_id)
+    output_root = upload_output_root(upload_id)
+    return {
+        "upload_id": validate_upload_id(upload_id),
+        "source_dir": str(source_dir),
+        "output_root": str(output_root),
+        "file_count": int(manifest.get("file_count") or 0),
+        "total_bytes": int(manifest.get("total_bytes") or 0),
+        "complete": bool(manifest.get("complete")),
+        "workspace": str(upload_workspace_path(upload_id)),
+    }
+
+
+def save_upload_file(
+    app_state: AppState,
+    upload_id: str,
+    relative_path: str,
+    content: bytes,
+) -> dict[str, Any]:
+    target_path, normalized_relative = resolve_upload_file_path(upload_id, relative_path)
+    manifest = read_upload_manifest(upload_id)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    previous_size = target_path.stat().st_size if target_path.exists() else 0
+    target_path.write_bytes(content)
+    size = len(content)
+    files = [
+        item
+        for item in manifest.get("files", [])
+        if str(item.get("relative_path") or "") != normalized_relative
+    ]
+    files.append(
+        {
+            "relative_path": normalized_relative,
+            "size": size,
+            "uploaded_epoch": time.time(),
+        }
+    )
+    manifest["files"] = files
+    manifest["file_count"] = len(files)
+    manifest["total_bytes"] = max(0, int(manifest.get("total_bytes") or 0) - previous_size + size)
+    manifest["complete"] = False
+    write_upload_manifest(upload_id, manifest)
+    with app_state.lock:
+        app_state.paths = ReadingPaths(
+            source_dir=upload_source_dir(upload_id),
+            output_root=upload_output_root(upload_id),
+        )
+    payload = upload_workspace_payload(upload_id, manifest)
+    payload.update({"relative_path": normalized_relative, "size": size})
+    return payload
+
+
+def complete_upload_workspace(app_state: AppState, upload_id: str) -> dict[str, Any]:
+    manifest = read_upload_manifest(upload_id)
+    if int(manifest.get("file_count") or 0) <= 0:
+        raise ValueError("Upload workspace has no files.")
+    source_dir = upload_source_dir(upload_id)
+    output_root = upload_output_root(upload_id)
+    manifest["complete"] = True
+    manifest["completed_epoch"] = time.time()
+    write_upload_manifest(upload_id, manifest)
+    clear_source_file_scan_cache(source_dir)
+    with app_state.lock:
+        app_state.paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
+    return upload_workspace_payload(upload_id, manifest)
+
+
+def delete_upload_workspace(app_state: AppState, upload_id: str) -> dict[str, Any]:
+    workspace = upload_workspace_path(upload_id)
+    source_dir = upload_source_dir(upload_id)
+    output_root = upload_output_root(upload_id)
+    with app_state.lock:
+        active_paths = app_state.paths
+        if (
+            active_paths is not None
+            and active_paths.output_root.resolve() == output_root.resolve()
+        ):
+            app_state.paths = None
+    clear_source_file_scan_cache(source_dir)
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    return {
+        "deleted": True,
+        "upload_id": validate_upload_id(upload_id),
+        "source_dir": str(source_dir),
+        "output_root": str(output_root),
+    }
+
+
 def infer_source_dir_for_output(app_state: AppState, output_root: Path) -> Path:
     with app_state.lock:
         active_paths = app_state.paths
@@ -2940,12 +3150,13 @@ def build_analysis_command(
     output_language = str(payload.get("output_language") or "auto").strip()
     if output_language:
         command.extend(["--output-language", output_language])
+    relationship_use_embeddings = bool(payload.get("relationship_use_embeddings"))
     embedding_model = str(payload.get("embedding_model") or "").strip()
-    if bool(payload.get("relationship_use_embeddings")) and not embedding_model:
+    if relationship_use_embeddings and not embedding_model:
         raise ValueError(
             "Embedding model is required when embedding relationships are enabled."
         )
-    if embedding_model:
+    if relationship_use_embeddings:
         embedding_endpoint = str(payload.get("embedding_endpoint") or "").strip()
         if embedding_endpoint:
             command.extend(["--embedding-endpoint", embedding_endpoint])
@@ -2978,7 +3189,6 @@ def build_analysis_command(
 
     flag_map = {
         "plan_only": "--plan-only",
-        "document_summary": "--document-summary",
         "force_reprocess": "--force-reprocess",
         "content_hash": "--content-hash",
         "mine_relationships": "--mine-relationships",
@@ -4181,6 +4391,18 @@ def parse_int(value: str | None, default: int) -> int:
         return default
 
 
+def parse_quality_score(value: Any, *, default: int = 0) -> int:
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Quality score must be an integer between 0 and 100.") from exc
+    if not 0 <= parsed <= 100:
+        raise ValueError("Quality score must be between 0 and 100.")
+    return parsed
+
+
 def parse_optional_int(value: str | None) -> int | None:
     if value in {None, ""}:
         return None
@@ -4210,6 +4432,10 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/config":
             self.send_json(lambda: config_payload(self.state.paths))
+            return
+        upload_status_id = self.match_upload_route(parsed.path)
+        if upload_status_id is not None:
+            self.send_json(lambda: upload_workspace_payload(upload_status_id))
             return
         if parsed.path == "/api/analysis/status":
             self.send_json(
@@ -4247,9 +4473,32 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
                 )
             )
             return
+        if parsed.path == "/api/integrations/anydocs/quality-stats":
+            self.send_json(lambda: anydocs_bundle_quality_stats(self.state, query))
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/uploads":
+            self.send_json(lambda: create_upload_workspace(self.state))
+            return
+        upload_file_id = self.match_upload_route(parsed.path, suffix="/files")
+        if upload_file_id is not None:
+            query = self.parse_query(parsed.query)
+            self.send_json(
+                lambda: save_upload_file(
+                    self.state,
+                    upload_file_id,
+                    query.get("relative_path") or "",
+                    self.read_bytes(),
+                )
+            )
+            return
+        upload_complete_id = self.match_upload_route(parsed.path, suffix="/complete")
+        if upload_complete_id is not None:
+            self.send_json(lambda: complete_upload_workspace(self.state, upload_complete_id))
+            return
         if self.path == "/api/pick-folder":
             self.send_json(pick_folder)
             return
@@ -4342,6 +4591,14 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
             return
         self.send_error(404)
 
+    def do_DELETE(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        upload_id = self.match_upload_route(parsed.path)
+        if upload_id is not None:
+            self.send_json(lambda: delete_upload_workspace(self.state, upload_id))
+            return
+        self.send_error(404)
+
     @staticmethod
     def parse_query(query: str) -> dict[str, str]:
         return {
@@ -4357,6 +4614,26 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             raise ValueError("JSON body must be an object")
         return payload
+
+    def read_bytes(self) -> bytes:
+        length = int(self.headers.get("Content-Length") or 0)
+        return self.rfile.read(length)
+
+    @staticmethod
+    def match_upload_route(path: str, suffix: str = "") -> str | None:
+        prefix = "/api/uploads/"
+        if not path.startswith(prefix):
+            return None
+        remainder = path[len(prefix):]
+        if suffix:
+            if not remainder.endswith(suffix):
+                return None
+            upload_id = remainder[: -len(suffix)]
+        else:
+            if "/" in remainder:
+                return None
+            upload_id = remainder
+        return validate_upload_id(upload_id)
 
     def send_html(self, html: str) -> None:
         encoded = html.encode("utf-8")

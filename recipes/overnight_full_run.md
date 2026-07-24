@@ -12,7 +12,6 @@
   --plan-only `
   --no-ocr `
   --skip-manifest-analysis `
-  --document-summary `
   --timeout-seconds 240
 ```
 

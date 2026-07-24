@@ -24,6 +24,28 @@
       "type": "object",
       "additionalProperties": true
     },
+    "pipeline_status": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "is_partial": {"type": "boolean"},
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "exists": {"type": "boolean"},
+          "size_bytes": {"type": "integer"}
+        },
+        "required": ["path", "exists", "size_bytes"],
+        "additionalProperties": false
+      }
+    },
     "statistics": {
       "type": "object",
       "properties": {

@@ -20,6 +20,7 @@ from reading_ui import (
     mark_document,
     mark_documents,
     model_api_key_env,
+    normalize_upload_relative_path,
     open_failure_document,
     reading_paths_from_payload,
     reset_analysis_output,
@@ -30,6 +31,7 @@ from reading_ui import (
     rag_redaction_env,
     run_lock_path,
     row_matches_query,
+    save_upload_file,
     set_reading_output,
     sort_rows,
     start_analysis,
@@ -41,6 +43,9 @@ from reading_ui import (
     stop_relationship_task,
     latest_log_activity,
     subprocess_env_for_payload,
+    complete_upload_workspace,
+    create_upload_workspace,
+    delete_upload_workspace,
 )
 
 
@@ -564,7 +569,7 @@ def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
     assert "--no-ocr" not in command
     assert "--manifest-analysis" in command
     assert "--skip-manifest-analysis" not in command
-    assert "--document-summary" in command
+    assert "--document-summary" not in command
     assert "--mine-relationships" in command
     assert "--relationship-use-text-citations" in command
     assert "--relationship-use-embeddings" in command
@@ -1577,7 +1582,7 @@ def test_start_analysis_preempts_running_relationship_task_for_same_output(
         "pid": 24680,
         "kind": "mine",
     }
-    assert command[command.index("--embedding-model") + 1] == "nomic-embed-text"
+    assert "--embedding-model" not in command
     assert popen_call["stdout_name"] == str(output_root / "_logs" / "doctriage.log")
 
 
@@ -3147,7 +3152,11 @@ def test_export_anydocs_bundle_request_writes_bundle_from_output_only(
 
     payload = reading_ui.export_anydocs_bundle_request(
         AppState(),
-        {"output_root": str(output_root), "quality_threshold": "80"},
+        {
+            "output_root": str(output_root),
+            "quality_threshold": "80",
+            "bundle_min_quality": "80",
+        },
     )
 
     bundle_path = Path(payload["bundle_path"])
@@ -3157,6 +3166,90 @@ def test_export_anydocs_bundle_request_writes_bundle_from_output_only(
     assert bundle["schema_version"] == "doctriage_bundle.v2"
     assert bundle["selection_policy"]["min_quality"] == 80
     assert bundle["documents"][0]["paths"]["source"] == str(source)
+
+
+def test_export_anydocs_bundle_does_not_inherit_analysis_quality_threshold(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    state_dir = output_root / "_state"
+    source_dir.mkdir()
+    state_dir.mkdir(parents=True)
+    source = source_dir / "relevant-low-score.md"
+    source.write_text("exactly relevant", encoding="utf-8")
+    (state_dir / "decisions.jsonl").write_text(
+        json.dumps(
+            {
+                "source_path": str(source),
+                "relative_path": source.name,
+                "status": "planned",
+                "quality": 45,
+                "category": "Thinking",
+                "summary": "Relevant despite its engineering quality score.",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = reading_ui.export_anydocs_bundle_request(
+        AppState(),
+        {"output_root": str(output_root), "quality_threshold": "75"},
+    )
+
+    bundle = json.loads(Path(payload["bundle_path"]).read_text(encoding="utf-8"))
+    assert bundle["selection_policy"]["min_quality"] == 0
+    assert [item["paths"]["relative"] for item in bundle["documents"]] == [
+        source.name
+    ]
+
+
+def test_anydocs_bundle_quality_stats_matches_export_selection(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    state_dir = output_root / "_state"
+    source_dir.mkdir()
+    state_dir.mkdir(parents=True)
+    decisions = [
+        {
+            "source_path": str(source_dir / "low.md"),
+            "relative_path": "low.md",
+            "status": "planned",
+            "quality": 25,
+            "category": "Thinking",
+        },
+        {
+            "source_path": str(source_dir / "high.md"),
+            "relative_path": "high.md",
+            "status": "planned",
+            "quality": 90,
+            "category": "Architecture",
+        },
+        {
+            "source_path": str(source_dir / "excluded.md"),
+            "relative_path": "excluded.md",
+            "status": "planned",
+            "quality": 100,
+            "category": "LowQuality",
+        },
+    ]
+    (state_dir / "decisions.jsonl").write_text(
+        "".join(json.dumps(item) + "\n" for item in decisions),
+        encoding="utf-8",
+    )
+
+    stats = reading_ui.anydocs_bundle_quality_stats(
+        AppState(),
+        {"source_dir": str(source_dir), "output_root": str(output_root)},
+    )
+
+    assert stats["total"] == 2
+    assert stats["histogram"][25] == 1
+    assert stats["histogram"][90] == 1
+    assert stats["histogram"][100] == 0
+    assert stats["excluded_categories"] == ["LowQuality"]
 
 
 def test_infer_source_dir_from_decisions_without_relative_path(tmp_path: Path) -> None:
@@ -3186,16 +3279,82 @@ def test_config_payload_reports_capabilities() -> None:
     assert "reveal_file" in payload["capabilities"]
 
 
+def test_upload_workspace_lifecycle_uses_server_managed_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(reading_ui, "UPLOAD_WORKSPACE_ROOT", tmp_path / "uploads")
+    app_state = AppState()
+
+    created = create_upload_workspace(app_state)
+    upload_id = created["upload_id"]
+    assert Path(created["source_dir"]).is_dir()
+    assert Path(created["output_root"]).is_dir()
+    assert app_state.paths is not None
+    assert app_state.paths.source_dir == Path(created["source_dir"])
+
+    uploaded = save_upload_file(
+        app_state,
+        upload_id,
+        "folder/doc.md",
+        b"# hello",
+    )
+    assert uploaded["file_count"] == 1
+    assert uploaded["total_bytes"] == len(b"# hello")
+    assert (Path(created["source_dir"]) / "folder" / "doc.md").read_bytes() == b"# hello"
+
+    completed = complete_upload_workspace(app_state, upload_id)
+    assert completed["complete"] is True
+    assert completed["source_dir"] == created["source_dir"]
+    assert completed["output_root"] == created["output_root"]
+
+    deleted = delete_upload_workspace(app_state, upload_id)
+    assert deleted["deleted"] is True
+    assert not Path(created["source_dir"]).exists()
+    assert app_state.paths is None
+
+
+def test_upload_relative_paths_reject_traversal() -> None:
+    assert normalize_upload_relative_path("folder/doc.md").as_posix() == "folder/doc.md"
+    with pytest.raises(ValueError, match="Invalid upload relative path"):
+        normalize_upload_relative_path("../secret.txt")
+    with pytest.raises(ValueError, match="Invalid upload relative path"):
+        normalize_upload_relative_path("folder/../../secret.txt")
+    with pytest.raises(ValueError, match="Upload relative path is required"):
+        normalize_upload_relative_path("")
+
+
 def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     html = frontend_source()
     compact_html = frontend_source_compact()
 
     assert "挖掘关系" in html
     assert "输出到 _relationships/relations.jsonl 与 clusters.json" in html
-    assert "建议在首轮评分稳定后、关系质量比速度更重要时再勾选" in html
+    assert "留空则只使用默认关系挖掘和标题引用" in html
     assert "内容检测除了时间和大小，还计算文件内容哈希" not in html
     assert "变更检测除了时间和大小，还计算文件内容哈希" not in html
     assert 'id="run_embedding_model"' in html
+    assert 'id="analysis_advanced_panel"' in html
+    assert 'data-i18n="analysis_advanced">高级参数' in html
+    assert 'id="source_mode_path_btn"' in html
+    assert 'id="source_mode_files_btn"' in html
+    assert 'id="source_mode_folder_btn"' in html
+    assert 'id="upload_files_input" class="hidden-sync-input" type="file" multiple' in html
+    assert 'id="upload_folder_input" class="hidden-sync-input" type="file" multiple webkitdirectory directory' in html
+    assert 'id="uploadStats"' in html
+    assert 'id="uploadBar"' in html
+    assert "function setSourceMode(mode)" in html
+    assert "async function uploadSelectedFiles" in html
+    assert 'fetch("/api/uploads", {method: "POST"})' in html
+    assert 'fetch(`/api/uploads/${workspace.upload_id}/files?relative_path=${encodeURIComponent(relativePath)}`' in html
+    assert 'fetch(`/api/uploads/${workspace.upload_id}/complete`, {method: "POST"})' in html
+    assert 'fetch(`/api/uploads/${uploadId}`, {method: "DELETE"})' in html
+    assert "applyUploadWorkspacePaths(payload);" in html
+    assert 'if (sourceMode !== "path" && (!currentUploadWorkspace || !currentUploadWorkspace.complete))' in html
+    assert 'id="shared_target_panel"' in html
+    assert 'id="global_output_root"' in html
+    assert 'id="pick_global_output_btn" onclick="pickFolder(\'global_output_root\')"' in html
+    assert "function setSharedTarget" in html
+    assert "function applySharedOutput" in html
     assert 'id="toggle_advanced_btn"' not in html
     assert "选择模板" not in html
     assert "应用模板" not in html
@@ -3205,58 +3364,60 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert "应用路径" not in html
     assert 'id="start_analysis_btn" class="primary" onclick="toggleAnalysis()"' in html
     assert 'id="stop_analysis_btn"' not in html
-    assert 'id="early_relationships_btn" class="primary" onclick="toggleRelationships()"' in html
+    assert 'id="early_relationships_btn"' not in html
     assert 'id="stop_relationships_btn"' not in html
-    assert 'id="reset_relationships_btn" class="danger"' in html
+    assert 'id="reset_relationships_btn"' not in html
     assert 'id="graph_mine_btn" class="primary" onclick="toggleGraphRelationships()"' in html
+    assert 'id="reset_graph_btn" class="danger" onclick="resetGraph()"' in html
+    assert 'id="graph_exports_panel"' not in html
+    assert 'id="graph_export_graph_btn"' not in html
+    assert 'id="graph_export_bundle_btn"' not in html
+    assert 'id="anydocs_export_bundle_btn"' in html
     assert 'id="graph_stop_relationships_btn"' not in html
     assert 'data-i18n="apply_graph_output"' not in html
     assert "应用图谱目录" not in html
     assert 'class="graph-target-row"' in html
     assert 'class="graph-actions-row"' in html
-    assert html.index('id="reset_analysis_btn"') < html.index('id="early_relationships_btn"')
-    assert html.index('id="early_relationships_btn"') < html.index('id="reset_relationships_btn"')
-    assert html.index('id="reset_analysis_btn"') < html.index('<div class="relationship-toolbar">')
-    assert 'class="advanced-run relationship-option"><input id="run_plan_only" type="checkbox" checked' in html
-    assert 'class="advanced-run relationship-option"><input id="run_document_summary" type="checkbox" checked' in html
-    assert html.index('id="run_plan_only"') < html.index('id="run_document_summary"')
-    assert 'class="advanced-run relationship-option"><input id="run_ocr_enabled"' in html
-    assert 'class="advanced-run relationship-option"><input id="run_manifest_analysis"' in html
+    assert html.index('id="run_embedding_model"') > html.index('id="section-graph"')
+    assert html.index('id="run_embedding_model"') < html.index('id="graph_q"')
+    assert html.index('id="graph_q"') < html.index('id="graph_min_size"')
+    assert 'id="run_plan_only" type="checkbox" checked' in html
+    assert 'id="run_document_summary"' not in html
+    assert 'data-i18n="summary">摘要' not in html
+    assert 'id="run_ocr_enabled"' in html
+    assert 'id="run_manifest_analysis"' not in html
     assert 'id="run_force_reprocess"' not in html
     assert 'id="run_content_hash"' not in html
     assert "强制重跑" not in html
     assert "内容 Hash" not in html
-    assert '<input id="run_mine_relationships" type="checkbox" checked' in html
-    assert '<input id="run_relationship_text" type="checkbox" checked' in html
-    assert '<input id="run_relationship_embeddings" type="checkbox" checked' not in html
+    assert 'id="run_mine_relationships"' not in html
+    assert 'id="run_relationship_text"' not in html
+    assert 'id="run_relationship_embeddings"' not in html
     assert 'data-i18n="limit">数量上限' in html
     assert 'data-i18n="plan_only">仅评分，不复制文件' in html
     assert 'data-i18n="ocr_enabled">开启OCR' in html
-    assert 'data-i18n="manifest_analysis">开启目录分析' in html
+    assert 'data-i18n="manifest_analysis">开启目录分析' not in html
     assert 'limit: "数量上限"' in html
     assert 'plan_only: "仅评分，不复制文件"' in html
     assert 'ocr_enabled: "开启OCR"' in html
-    assert 'manifest_analysis: "开启目录分析"' in html
     assert 'limit: "Limit"' in html
     assert 'plan_only: "Score only, do not copy files"' in html
     assert 'ocr_enabled: "Enable OCR"' in html
-    assert 'manifest_analysis: "Enable directory analysis"' in html
-    assert 'class="relationship-embedding-row"' in html
-    assert 'justify-content: flex-start' in html
-    assert "width: clamp(120px, 16vw, 180px); min-width: 120px;" in compact_html
-    assert ".relationship-actions { display: inline-flex; gap: 8px; flex: 0 0 auto;" in compact_html
     assert 'endpoint.replace(/\\/v1\\/chat\\/completions\\/?$/i, "/v1/embeddings")' in html
-    assert html.index('id="run_relationship_embeddings"') < html.index('id="run_embedding_model"')
-    assert html.index('id="run_embedding_model"') < html.index('id="early_relationships_btn"')
     assert "不会自动沿用这里的模型" in html
-    assert "必须填写向量模型" in html
+    assert "Embedding 关系" not in html
+    assert "向量模型" in html
+    assert "填写向量模型后启用" in html
     assert 'data-i18n="refresh_status"' not in html
     assert "刷新状态" not in html
     assert 'data-i18n="test_llm"' not in html
     assert "测试LLM" not in html
     assert 'id="embeddingProgressWrap"' in html
+    assert 'id="graphLog"' in html
+    assert 'id="graph_log_panel"' in html
+    assert 'class="panel graph-run-panel"' in html
     assert "重置分析" in html
-    assert "重置关系" in html
+    assert "重置图谱" in html
     assert "关系图谱" in html
     assert 'id="graphClusters"' in html
     assert "header { padding: 16px 20px 0;" in compact_html
@@ -3293,9 +3454,12 @@ def test_rag_tab_exposes_independent_index_controls() -> None:
     assert "敏感词过滤和映射会在分片入库前执行" not in html
     assert "RAG 索引单独写入 `_rag/`" not in html
     assert 'class="rag-target-row"' in html
-    assert 'class="rag-options-row"' in html
+    assert 'id="rag_build_advanced_panel"' in html
+    assert 'class="panel-body rag-options-row"' in html
+    assert 'id="rag_vector_panel"' in html
+    assert 'data-i18n="vector_store_advanced">向量库测试' in html
     assert ".rag-target-row button { min-width: 96px; white-space: nowrap; }" in compact_html
-    assert ".rag-options-row { display: grid; grid-template-columns: minmax(180px, 220px)" in compact_html
+    assert ".rag-options-row { display: grid; grid-template-columns: minmax(180px, 240px)" in compact_html
     assert ".rag-options-row select[multiple] { height: 32px; }" in compact_html
     assert '<select id="rag_categories" multiple>' in html
     assert '<option value="Architecture">Architecture</option>' in html
@@ -3306,8 +3470,9 @@ def test_rag_tab_exposes_independent_index_controls() -> None:
     assert "function ragPathPayload()" in html
     assert "function ragPayload()" in html
     assert "async function toggleAnalysis()" in html
-    assert "async function toggleRelationships()" in html
+    assert "async function toggleGraphRelationships()" in html
     assert "async function resetRelationships()" in html
+    assert "async function resetGraph()" in html
     assert "function updateAnalysisButtons(payload)" in html
     assert "function loadRagStatus()" in html
     assert "async function toggleRagIndex()" in html
@@ -3328,6 +3493,7 @@ def test_rag_tab_exposes_independent_index_controls() -> None:
     assert 'fetch("/api/rag/stop"' in html
     assert 'fetch("/api/rag/search"' in html
     assert 'const RAG_TARGET_STORAGE_KEY = "doctriage_rag_target";' in html
+    assert "initSharedTargetPersistence();" in html
     assert "initRagTargetPersistence();" in html
     assert 'if (targetId === "rag_output_root") {' in html
     assert 'id="rag_advanced_panel"' in html
@@ -3350,11 +3516,28 @@ def test_anydocs_bridge_ui_is_optional_and_first_class() -> None:
     assert 'data-i18n="tab_agents">Agent 编译' in html
     assert 'class="anydocs-toolbar"' in html
     assert 'class="anydocs-target-row"' in html
-    assert ".anydocs-target-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(96px, auto) minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: end; }" in compact_html
+    assert ".anydocs-target-row { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.3fr); gap: 8px; align-items: end; }" in compact_html
     assert ".anydocs-target-row input { width: 100%; min-width: 0; }" in compact_html
     assert 'id="anydocs_output_root"' in html
     assert 'id="anydocs_url"' in html
     assert 'id="anydocs_bundle_path" readonly' in html
+    assert 'id="anydocs_bundle_min_quality" type="range" min="0" max="100" step="1" value="0"' in html
+    assert 'id="anydocs_bundle_min_quality_number" type="number"' in html
+    assert 'id="anydocs_sync_reading_quality"' not in html
+    assert "sync_reading_quality" not in html
+    assert 'bundle_min_quality: anydocsBundleMinQuality()' in compact_html
+    assert 'fetch("/api/integrations/anydocs/quality-stats?" + params.toString())' in compact_html
+    assert "function renderAnydocsQualityStats()" in html
+    assert '"--quality-progress", value + "%"' in compact_html
+    assert "center / 100% 4px no-repeat" in compact_html
+    anydocs_export_body = compact_html.split("async function exportAnydocsBundle()", 1)[1].split(
+        "async function openAnyDocs", 1
+    )[0]
+    assert "...runPayload()" not in anydocs_export_body
+    export_body = Path(reading_ui.__file__).read_text(encoding="utf-8").split(
+        "def export_bundle_for_anydocs", 1
+    )[1].split("def export_anydocs_bundle_request", 1)[0]
+    assert 'payload.get("quality_threshold")' not in export_body
     assert 'onclick="exportAnydocsBundle()"' in html
     assert 'onclick="openAnyDocs(false)"' in html
     assert 'onclick="openAnyDocs(true)"' in html
@@ -3374,7 +3557,9 @@ def test_reading_tab_uses_compact_filter_layout() -> None:
     html = frontend_source()
     compact_html = frontend_source_compact()
 
-    assert 'class="panel reading-target"' in html
+    assert 'class="panel shared-target-panel"' in html
+    assert 'data-i18n="current_output_root">当前输出目录' in html
+    assert 'class="panel reading-target hidden-target-panel"' in html
     assert 'class="panel reading-filter-panel"' in html
     assert 'class="reading-filter-primary"' in html
     assert 'class="reading-filter-secondary"' in html
@@ -3422,7 +3607,8 @@ def test_frontend_status_and_graph_requests_include_current_paths() -> None:
     assert "const query = graphQuery();" in html
     assert 'const response = await fetch("/api/relationships" + (query ? "?" + query : ""));' in html
     assert "const query = new URLSearchParams(graphPathPayload());" in html
-    assert "const requestPayload = {...runPayload(), ...graphPathPayload()};" in html
+    assert "function graphRelationshipPayload()" in html
+    assert "? graphRelationshipPayload()" in html
     assert 'const response = await fetch("/api/state?" + readingParams());' in html
     assert 'query.set("cluster", String(clusterId));' in html
     assert 'pairs.set("source_dir", paths.source_dir);' in html
@@ -3476,6 +3662,31 @@ def test_reading_tab_loads_rows_after_config_backfills_existing_output() -> None
     assert "if (readingPathPayload().output_root) loadRows();" in helper_body
 
 
+def test_shared_output_directory_drives_secondary_tabs_without_analysis_backfill() -> None:
+    html = frontend_source()
+
+    assert 'id="global_output_root"' in html
+    assert 'onclick="pickFolder(\'global_output_root\')"' in html
+    assert "function syncSharedTargetFromGlobalInput" in html
+    assert "async function applySharedOutput" in html
+    assert "function normalizeSharedTargetFromTargets" in html
+    assert 'fetch("/api/reading-output"' in html
+    assert 'body: JSON.stringify({output_root: outputRoot})' in html
+    assert 'for (const id of ["reading_output_root", "graph_output_root", "rag_output_root", "anydocs_output_root"])' in html
+    assert 'if (targetId === "global_output_root") {' in html
+    assert "await applySharedOutput();" in html
+    assert 'for (const id of ["pick_source_btn", "pick_output_btn", "pick_global_output_btn"])' in html
+    assert 'syncGlobalOutputFrom(sharedOutputRootFromTargets());' in html
+    assert 'if (sharedTargetPanel) sharedTargetPanel.hidden = name === "analysis";' in html
+
+    apply_start = html.index("async function applySharedOutput")
+    apply_end = html.index("function applyStoredRunFormState", apply_start)
+    apply_body = html[apply_start:apply_end]
+    assert '$("run_output_root").value' not in apply_body
+    assert '$("run_source_dir").value' not in apply_body
+    assert "setSharedTarget(payload.source_dir || \"\", payload.output_root || outputRoot);" in apply_body
+
+
 def test_graph_output_does_not_backfill_analysis_or_reading_paths() -> None:
     html = frontend_source()
 
@@ -3524,7 +3735,8 @@ def test_analysis_run_form_persists_previous_values() -> None:
     html = frontend_source()
 
     assert 'const RUN_FORM_STORAGE_KEY = "doctriage_run_form";' in html
-    assert "const RUN_FORM_STORAGE_VERSION = 3;" in html
+    assert "const RUN_FORM_STORAGE_VERSION = 4;" in html
+    assert "const GRAPH_FORM_VALUE_FIELDS = [" in html
     assert "function readStoredRunFormState()" in html
     assert "function applyStoredRunFormState()" in html
     assert "function saveRunFormState()" in html
@@ -3545,28 +3757,38 @@ def test_analysis_run_form_persists_previous_values() -> None:
         "run_quality_threshold",
         "run_timeout_seconds",
         "run_plan_only",
-        "run_document_summary",
         "run_ocr_enabled",
+    ]:
+        assert f'"{field_id}"' in html
+    for removed_id in [
+        "run_document_summary",
         "run_manifest_analysis",
         "run_mine_relationships",
         "run_relationship_text",
         "run_relationship_embeddings",
     ]:
-        assert f'"{field_id}"' in html
+        assert f'id="{removed_id}"' not in html
     assert html.count("applyStoredRunFormState();") >= 2
     assert "initRunFormPersistence();" in html
     assert 'if (targetId.startsWith("run_")) saveRunFormState();' in html
     assert "syncEmbeddingModelVisibility" not in html
-    assert 'embedding_model: $("run_embedding_model").value.trim(),' in html
+    assert 'embedding_model: "",' in html
+    assert 'payload.embedding_model = embeddingModel;' in html
     assert 'embedding_model: $("run_relationship_embeddings").checked ? $("run_embedding_model").value.trim() : ""' not in html
-    assert 'saveRunFormState();\n  const requestPayload = runPayload();' in html
+    analysis_start = html.index("async function startAnalysis(currentPayload = null)")
+    analysis_end = html.index("function shouldPreemptRelationshipsForAnalysis", analysis_start)
+    analysis_body = html[analysis_start:analysis_end]
+    assert "saveRunFormState();" in analysis_body
+    assert 'if (sourceMode !== "path" && (!currentUploadWorkspace || !currentUploadWorkspace.complete))' in analysis_body
+    assert "const requestPayload = runPayload();" in analysis_body
+    assert analysis_body.index("currentUploadWorkspace") < analysis_body.index("const requestPayload = runPayload();")
     assert 'if (!validateEmbeddingModelSelection(requestPayload)) return;' in html
     assert 'const response = await fetch("/api/analysis/start"' in html
     assert "function applyTemplate()" not in html
     assert 'ocr_enabled: $("run_ocr_enabled").checked,' in html
-    assert 'manifest_analysis: $("run_manifest_analysis").checked,' in html
+    assert 'manifest_analysis: false,' in html
     assert 'no_ocr: !$("run_ocr_enabled").checked,' in html
-    assert 'skip_manifest_analysis: !$("run_manifest_analysis").checked,' in html
+    assert 'skip_manifest_analysis: true,' in html
     assert "force_reprocess: false," in html
     assert "content_hash: false," in html
     assert 'concurrency_pill: "并发"' in html
@@ -3586,28 +3808,28 @@ def test_analysis_paths_auto_apply_on_blur_without_button() -> None:
     assert 'data-i18n="apply_paths"' not in html
 
 
-def test_early_relationship_payload_respects_embedding_checkbox() -> None:
+def test_graph_relationship_payload_uses_embedding_input() -> None:
     html = frontend_source()
 
-    payload_start = html.index("function earlyRelationshipPayload()")
-    payload_end = html.index("function pathPayload()", payload_start)
+    payload_start = html.index("function graphRelationshipPayload()")
+    payload_end = html.index("function validateEmbeddingModelSelection(payload)", payload_start)
     payload_body = html[payload_start:payload_end]
-    action_start = html.index("async function startEarlyRelationships(currentPayload = null)")
-    action_end = html.index("function showRelationshipLaunchPending(payload)", action_start)
+    action_start = html.index("async function startGraphTask(taskName)")
+    action_end = html.index("async function toggleGraphRelationships()", action_start)
     action_body = html[action_start:action_end]
 
-    assert "const payload = runPayload();" in payload_body
-    assert 'payload.embedding_model = $("run_embedding_model").value.trim();' in payload_body
+    assert 'const embeddingModel = $("run_embedding_model") ? $("run_embedding_model").value.trim() : "";' in payload_body
+    assert "...runPayload()," in payload_body
+    assert "...graphPathPayload()" in payload_body
+    assert "payload.embedding_model = embeddingModel;" in payload_body
     assert "payload.mine_relationships = true;" in payload_body
     assert "payload.relationship_use_text_citations = true;" in payload_body
-    assert "payload.relationship_use_embeddings = true;" not in payload_body
+    assert "payload.relationship_use_embeddings = !!embeddingModel;" in payload_body
     assert 'run_mine_relationships").checked' not in payload_body
     assert 'run_relationship_text").checked' not in payload_body
-    assert "const requestPayload = earlyRelationshipPayload();" in action_body
+    assert "? graphRelationshipPayload()" in action_body
     assert "if (!validateEmbeddingModelSelection(requestPayload)) return;" in action_body
-    assert "if (!confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(requestPayload)) return;" in action_body
     assert "body: JSON.stringify(requestPayload)" in action_body
-    assert "body: JSON.stringify(earlyRelationshipPayload())" not in action_body
     assert "body: JSON.stringify(runPayload())" not in action_body
 
 
@@ -3615,17 +3837,11 @@ def test_embedding_model_validation_before_embedding_requests() -> None:
     html = frontend_source()
 
     validate_start = html.index("function validateEmbeddingModelSelection(payload)")
-    validate_end = html.index("function confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(payload)", validate_start)
+    validate_end = html.index("function inferEmbeddingEndpoint(llmEndpoint)", validate_start)
     validate_body = html[validate_start:validate_end]
-    confirm_start = html.index("function confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(payload)")
-    confirm_end = html.index("function pathPayload()", confirm_start)
-    confirm_body = html[confirm_start:confirm_end]
     analysis_start = html.index("async function startAnalysis(currentPayload = null)")
     analysis_end = html.index("function shouldPreemptRelationshipsForAnalysis", analysis_start)
     analysis_body = html[analysis_start:analysis_end]
-    early_start = html.index("async function startEarlyRelationships(currentPayload = null)")
-    early_end = html.index("function showRelationshipLaunchPending(payload)", early_start)
-    early_body = html[early_start:early_end]
     graph_start = html.index("async function startGraphTask(taskName)")
     graph_end = html.index("function renderGraphEmptyState()", graph_start)
     graph_body = html[graph_start:graph_end]
@@ -3634,35 +3850,24 @@ def test_embedding_model_validation_before_embedding_requests() -> None:
     assert 'if (String(payload.embedding_model || "").trim()) return true;' in validate_body
     assert 'showToast(tr("embedding_model_required"));' in validate_body
     assert "return false;" in validate_body
-    assert "if (!payload || payload.relationship_use_embeddings) return true;" in confirm_body
-    assert 'if (String(payload.embedding_model || "").trim()) return true;' in confirm_body
-    assert 'return window.confirm(tr("early_relationships_without_embedding_confirm"));' in confirm_body
-    assert "已勾选 Embedding 关系，请先填写 Embedding 模型。" in html
-    assert "本次将只生成关系挖掘和标题引用，不生成 Embedding 向量" in html
-    assert "Embedding relationships are selected. Enter an embedding model first." in html
-    assert "without generating embedding vectors" in html
+    assert "请先填写 Embedding 模型。" in html
+    assert "Enter an embedding model first." in html
+    assert "early_relationships_without_embedding_confirm" not in html
     assert "const requestPayload = runPayload();" in analysis_body
     assert "requestPayload.preempt_relationships = true;" in analysis_body
     assert "const preemptRelationships = shouldPreemptRelationshipsForAnalysis(currentPayload);" in analysis_body
     assert "if (preemptRelationships) {" in analysis_body
     assert "showToast(tr(\"analysis_preempting_relationships\"));" in analysis_body
-    assert "if (!validateEmbeddingModelSelection(requestPayload)) return;" in analysis_body
+    assert "if (!validateEmbeddingModelSelection(requestPayload)) return;" not in analysis_body
     assert "await requestStopRelationships(requestPayload, {showToastMessage: false, refresh: false});" in analysis_body
     assert "async function ensureEndpointReady" in html
     assert 'fetch("/api/test/llm"' in html
-    assert 'endpoint: requestPayload.embedding_endpoint' in analysis_body
+    assert 'endpoint: requestPayload.embedding_endpoint' not in analysis_body
     assert analysis_body.index("requestStopRelationships") < analysis_body.index("ensureEndpointReady")
     assert analysis_body.index("ensureEndpointReady") < analysis_body.index('fetch("/api/analysis/start"')
-    assert analysis_body.index("validateEmbeddingModelSelection") < analysis_body.index('fetch("/api/analysis/start"')
-    assert "const requestPayload = earlyRelationshipPayload();" in early_body
-    assert "if (!validateEmbeddingModelSelection(requestPayload)) return;" in early_body
-    assert "if (!confirmEarlyRelationshipsWithoutEmbeddingIfNeeded(requestPayload)) return;" in early_body
-    assert 'endpoint: requestPayload.embedding_endpoint' in early_body
-    assert early_body.index("ensureEndpointReady") < early_body.index('fetch("/api/analysis/early-relationships"')
-    assert early_body.index("validateEmbeddingModelSelection") < early_body.index("confirmEarlyRelationshipsWithoutEmbeddingIfNeeded")
-    assert early_body.index("confirmEarlyRelationshipsWithoutEmbeddingIfNeeded") < early_body.index('fetch("/api/analysis/early-relationships"')
-    assert "const requestPayload = {...runPayload(), ...graphPathPayload()};" in graph_body
-    assert 'if (taskName === "mine" && !validateEmbeddingModelSelection(requestPayload)) return;' in graph_body
+    assert "? graphRelationshipPayload()" in graph_body
+    assert "if (!validateEmbeddingModelSelection(requestPayload)) return;" in graph_body
+    assert 'endpoint: requestPayload.embedding_endpoint' in graph_body
     assert graph_body.index("validateEmbeddingModelSelection") < graph_body.index('fetch(`/api/relationships/${taskName.replace("_", "-")}`')
 
 
@@ -3770,8 +3975,6 @@ def test_relationship_buttons_use_independent_task_state() -> None:
     render_body = html[render_start:render_end]
 
     assert 'updateAnalysisButtons(payload);' in render_body
-    assert 'relationshipActive ? "stop_relationships" : "early_relationships"' in html
-    assert 'relationshipActive ? "danger" : "primary"' in html
     assert 'analysisActive ? "stop_analysis" : "start_analysis"' in html
     assert 'analysisActive ? "danger" : "primary"' in html
     assert "analysisActionBusy || inlineRelationshipActive" in html
@@ -3803,14 +4006,16 @@ def test_relationship_buttons_use_independent_task_state() -> None:
     assert "async function toggleGraphRelationships()" in html
     assert "const payload = await loadGraph();" in html
     assert 'const response = await fetch("/api/relationships/stop"' in html
-    assert 'const payload = await refreshAnalysisStatus();' in html
+    assert 'id="reset_graph_btn"' in html
+    assert 'graphTaskStats").innerHTML' in html
+    assert 'if ($("graphLog")) $("graphLog").textContent = payload.log_tail || "";' in html
 
 
-def test_early_relationship_click_shows_pending_feedback_immediately() -> None:
+def test_graph_relationship_click_shows_pending_feedback_immediately() -> None:
     html = frontend_source()
 
-    action_start = html.index("async function startEarlyRelationships(currentPayload = null)")
-    action_end = html.index("function showRelationshipLaunchPending(payload)", action_start)
+    action_start = html.index("async function startGraphTask(taskName)")
+    action_end = html.index("async function toggleGraphRelationships()", action_start)
     action_body = html[action_start:action_end]
     pending_start = html.index("function showRelationshipLaunchPending(payload)")
     pending_end = html.index("function clearRelationshipLaunchPendingState()", pending_start)
@@ -3819,13 +4024,13 @@ def test_early_relationship_click_shows_pending_feedback_immediately() -> None:
     assert "let relationshipLaunchPending = null;" in html
     assert "showRelationshipLaunchPending(requestPayload);" in action_body
     assert "clearRelationshipLaunchPending(token);" in action_body
-    assert 'return showToast(responsePayload.error || tr("early_relationships_failed"));' in action_body
+    assert 'return showToast(responsePayload.error || tr("graph_task_start_failed"));' in action_body
     assert 'analysis_preempting_relationships: "正在停止生成关系并准备开始分析"' in html
     assert 'analysis_preempting_relationships: "Stopping relationship generation and preparing analysis"' in html
     assert "relationshipLaunchPending = {" in pending_body
     assert "useEmbeddings: !!(payload && payload.relationship_use_embeddings)" in pending_body
-    assert "renderAnalysis(lastAnalysisPayload);" in pending_body
-    assert "renderEmbeddingProgress(pendingEmbeddingProgress(), task);" in pending_body
+    assert "if (lastAnalysisPayload) renderAnalysis(lastAnalysisPayload);" in pending_body
+    assert "renderGraphTaskStats(graphMeta || {task});" in pending_body
     assert "function pendingRelationshipTask()" in html
     assert 'command: relationshipLaunchPending.useEmbeddings ? ["--use-embeddings"] : []' in html
     assert "function pendingEmbeddingProgress()" in html
@@ -3917,8 +4122,8 @@ def test_path_and_analysis_action_messages_use_i18n_labels() -> None:
     assert 'tr("analysis_start_failed")' in action_body
     assert 'tr("analysis_started")' in action_body
     assert 'tr("analysis_preempting_relationships")' in action_body
-    assert 'tr("early_relationships_failed")' in action_body
-    assert 'tr("early_relationships_started")' in action_body
+    assert 'tr("graph_task_start_failed")' in html
+    assert 'trf("graph_task_started"' in html
     assert 'tr("relationship_stop_requested")' in action_body
     assert 'tr("relationship_stop_failed")' in action_body
     assert 'tr("stop_requested")' in action_body
@@ -3956,7 +4161,7 @@ def test_path_and_analysis_action_messages_use_i18n_labels() -> None:
     assert 'pick_failed: "Selection failed"' in html
     assert 'reset_relationships: "Reset relationships"' in html
     assert 'reset_confirm: "This will clear logs, status, and relationship results in the output directory:' in html
-    assert 'relationships_reset: "Relationship outputs reset"' in html
+    assert 'relationships_reset: "Graph and relationship outputs reset"' in html
     assert 'ph_reading_output_root: "Select or enter an analyzed output directory"' in html
     assert 'data-i18n-placeholder="ph_reading_output_root"' in html
     assert 'data-i18n-placeholder="ph_text_search"' in html

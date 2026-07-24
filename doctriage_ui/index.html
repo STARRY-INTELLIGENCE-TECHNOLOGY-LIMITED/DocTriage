@@ -27,17 +27,19 @@
     </div>
   </header>
   <main>
+    <div id="shared_target_panel" class="panel shared-target-panel" hidden>
+      <label><span class="label-row"><span data-i18n="current_output_root">当前输出目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_current_output_root" data-tip="阅读台、关系图谱、RAG 索引和 Agent 编译共用的已分析输出目录。切换这里不会改动分析页的源目录和输出目录。">?</span></span><input id="global_output_root" placeholder="选择或输入已分析输出目录" data-i18n-placeholder="ph_graph_output_root" /></label>
+      <button id="pick_global_output_btn" onclick="pickFolder('global_output_root')" data-i18n="pick_folder">选择目录</button>
+    </div>
     <section id="section-analysis" class="active">
       <div class="panel">
-        <div class="run-grid">
+        <div class="run-grid run-primary-grid">
           <label><span class="label-row"><span data-i18n="source_dir">源目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_source_dir" data-tip="待分析的原始文档目录。程序会递归扫描其下支持的文件类型。不要把输出目录放到这个目录里面。">?</span></span><input id="run_source_dir" placeholder="请选择源文档目录" data-i18n-placeholder="ph_source_dir" /></label>
           <button id="pick_source_btn" onclick="pickFolder('run_source_dir')" data-i18n="pick_source_dir">选择源目录</button>
           <label><span class="label-row"><span data-i18n="output_dir">输出目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_dir" data-tip="写入进度、日志、评分结果和可选复制结果的目录。同一输出目录会自动续跑；同一时间只允许一个分析进程写入。">?</span></span><input id="run_output_root" placeholder="请选择输出目录" data-i18n-placeholder="ph_output_dir" /></label>
           <button id="pick_output_btn" onclick="pickFolder('run_output_root')" data-i18n="pick_output_dir">选择输出目录</button>
           <label><span class="label-row">LLM Endpoint <span class="help" tabindex="0" data-i18n-tip="tip_llm_endpoint" data-tip="文档评分调用的文本模型接口。Ollama 默认是 /api/generate；如果你切换服务地址，这里要一起改。">?</span></span><input id="run_llm_endpoint" value="http://localhost:11434/api/generate" /></label>
-          <label><span class="label-row"><span data-i18n="model">模型</span> <span class="help" tabindex="0" data-i18n-tip="tip_model" data-tip="用于文档分类、打分和摘要理解的模型名。Embedding 关系需要单独填写向量模型，不会自动沿用这里的模型。">?</span></span><input id="run_llm_model" value="gemma4:e4b" /></label>
-          <label class="advanced-run"><span class="label-row">LLM API Key <span class="help" tabindex="0" data-i18n-tip="tip_llm_api_key" data-tip="OpenAI 或兼容云接口的 Bearer Token。本地 Ollama 可留空；不会保存到浏览器本地存储。">?</span></span><input id="run_llm_api_key" type="password" autocomplete="off" placeholder="本地 Ollama 可留空" data-i18n-placeholder="ph_api_key_optional" /></label>
-          <label class="advanced-run"><span class="label-row">Embedding API Key <span class="help" tabindex="0" data-i18n-tip="tip_embedding_api_key" data-tip="向量接口的 Bearer Token。留空时沿用 LLM API Key；不会保存到浏览器本地存储。">?</span></span><input id="run_embedding_api_key" type="password" autocomplete="off" placeholder="留空沿用 LLM API Key" data-i18n-placeholder="ph_embedding_api_key" /></label>
+          <label><span class="label-row"><span data-i18n="model">模型</span> <span class="help" tabindex="0" data-i18n-tip="tip_model" data-tip="用于文档分类、打分和摘要理解的模型名。向量关系需要单独填写向量模型，不会自动沿用这里的模型。">?</span></span><input id="run_llm_model" value="gemma4:e4b" /></label>
           <label><span class="label-row"><span data-i18n="output_language">输出语言</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_language" data-tip="摘要和原因的输出语言。自动会根据文档主体语言推断；也可以强制指定一种语言。">?</span></span>
             <select id="run_output_language">
               <option value="auto" data-i18n="lang_auto">自动</option>
@@ -50,46 +52,54 @@
               <option value="es" data-i18n="lang_es">Español</option>
             </select>
           </label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="concurrency">并发</span> <span class="help" tabindex="0" data-i18n-tip="tip_concurrency" data-tip="同时向 LLM 发起的请求数。大目录和本地模型首跑建议 1；模型空闲且显存足够时再逐步上调。">?</span></span><input id="run_concurrency" type="number" value="1" min="1" max="64" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="limit">数量上限</span> <span class="help" tabindex="0" data-i18n-tip="tip_limit" data-tip="只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。">?</span></span><input id="run_limit" type="number" min="1" placeholder="空为全量" data-i18n-placeholder="ph_limit" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="max_mb">最大 MB</span> <span class="help" tabindex="0" data-i18n-tip="tip_max_mb" data-tip="跳过超过这个体积的候选文件，避免极大 PDF 或 Office 文档拖慢首轮筛选。">?</span></span><input id="run_max_file_size_mb" type="number" value="80" min="1" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="quality_threshold">质量阈值</span> <span class="help" tabindex="0" data-i18n-tip="tip_quality_threshold" data-tip="达到这个分数的文档会被视为高价值候选。仅评分模式下用于评分分层和后续筛选，不生成分类目录。">?</span></span><input id="run_quality_threshold" type="number" value="75" min="0" max="100" /></label>
-          <label class="advanced-run"><span class="label-row"><span data-i18n="timeout_seconds">超时秒</span> <span class="help" tabindex="0" data-i18n-tip="tip_timeout_seconds" data-tip="单个 LLM 请求最长等待时间。模型较慢或文档较大时可以调高；过高会让失败请求卡更久。">?</span></span><input id="run_timeout_seconds" type="number" value="240" min="5" /></label>
-          <label class="advanced-run relationship-option"><input id="run_plan_only" type="checkbox" checked /><span class="label-row"><span data-i18n="plan_only">仅评分，不复制文件</span> <span class="help" tabindex="0" data-i18n-tip="tip_plan_only" data-tip="只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。">?</span></span></label>
-          <label class="advanced-run relationship-option"><input id="run_document_summary" type="checkbox" checked /><span class="label-row"><span data-i18n="summary">摘要</span> <span class="help" tabindex="0" data-i18n-tip="tip_summary" data-tip="把本地短摘要写入 decisions.jsonl，后续做关系挖掘、公开写作筛选和人工复核时更有用。会多占一点状态文件空间。">?</span></span></label>
-          <label class="advanced-run relationship-option"><input id="run_ocr_enabled" type="checkbox" /><span class="label-row"><span data-i18n="ocr_enabled">开启OCR</span> <span class="help" tabindex="0" data-i18n-tip="tip_ocr_enabled" data-tip="启用 OCR 解析纯图片或扫描版 PDF。会明显增加处理时间；普通带文本层的 PDF 和 Office 文档通常不需要。">?</span></span></label>
-          <label class="advanced-run relationship-option"><input id="run_manifest_analysis" type="checkbox" /><span class="label-row"><span data-i18n="manifest_analysis">开启目录分析</span> <span class="help" tabindex="0" data-i18n-tip="tip_manifest_analysis" data-tip="启用目录级系列/集合分析，再进入文件级评分。适合需要识别同一目录下系列资料的场景；大目录首轮可以先不勾选。">?</span></span></label>
         </div>
+        <div class="source-mode-panel">
+          <div class="segmented-control" role="group" aria-label="Source mode">
+            <button id="source_mode_path_btn" class="active" onclick="setSourceMode('path')" data-i18n="source_mode_path">服务器路径</button>
+            <button id="source_mode_files_btn" onclick="setSourceMode('files')" data-i18n="source_mode_files">上传文件</button>
+            <button id="source_mode_folder_btn" onclick="setSourceMode('folder')" data-i18n="source_mode_folder">上传文件夹</button>
+          </div>
+          <div id="upload_panel" class="upload-panel" hidden>
+            <input id="upload_files_input" class="hidden-sync-input" type="file" multiple />
+            <input id="upload_folder_input" class="hidden-sync-input" type="file" multiple webkitdirectory directory />
+            <div class="upload-actions">
+              <button id="pick_upload_files_btn" onclick="pickUploadFiles()" data-i18n="pick_upload_files">选择文件</button>
+              <button id="pick_upload_folder_btn" onclick="pickUploadFolder()" data-i18n="pick_upload_folder">选择文件夹</button>
+              <button id="clear_upload_workspace_btn" onclick="clearUploadWorkspace()" data-i18n="clear_upload_workspace">清理上传</button>
+            </div>
+            <div id="uploadStats" class="stats"></div>
+            <div class="progress upload-progress"><div id="uploadBar"></div></div>
+          </div>
+        </div>
+        <details id="analysis_advanced_panel" class="collapsible-panel analysis-advanced-panel">
+          <summary><span data-i18n="analysis_advanced">高级参数</span></summary>
+          <div class="panel-body">
+            <div class="run-grid run-advanced-grid">
+              <label class="advanced-run"><span class="label-row">LLM API Key <span class="help" tabindex="0" data-i18n-tip="tip_llm_api_key" data-tip="OpenAI 或兼容云接口的 Bearer Token。本地 Ollama 可留空；不会保存到浏览器本地存储。">?</span></span><input id="run_llm_api_key" type="password" autocomplete="off" placeholder="本地 Ollama 可留空" data-i18n-placeholder="ph_api_key_optional" /></label>
+              <label class="advanced-run"><span class="label-row">Embedding API Key <span class="help" tabindex="0" data-i18n-tip="tip_embedding_api_key" data-tip="向量接口的 Bearer Token。留空时沿用 LLM API Key；不会保存到浏览器本地存储。">?</span></span><input id="run_embedding_api_key" type="password" autocomplete="off" placeholder="留空沿用 LLM API Key" data-i18n-placeholder="ph_embedding_api_key" /></label>
+              <label class="advanced-run"><span class="label-row"><span data-i18n="concurrency">并发</span> <span class="help" tabindex="0" data-i18n-tip="tip_concurrency" data-tip="同时向 LLM 发起的请求数。大目录和本地模型首跑建议 1；模型空闲且显存足够时再逐步上调。">?</span></span><input id="run_concurrency" type="number" value="1" min="1" max="64" /></label>
+              <label class="advanced-run"><span class="label-row"><span data-i18n="limit">数量上限</span> <span class="help" tabindex="0" data-i18n-tip="tip_limit" data-tip="只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。">?</span></span><input id="run_limit" type="number" min="1" placeholder="空为全量" data-i18n-placeholder="ph_limit" /></label>
+              <label class="advanced-run"><span class="label-row"><span data-i18n="max_mb">最大 MB</span> <span class="help" tabindex="0" data-i18n-tip="tip_max_mb" data-tip="跳过超过这个体积的候选文件，避免极大 PDF 或 Office 文档拖慢首轮筛选。">?</span></span><input id="run_max_file_size_mb" type="number" value="80" min="1" /></label>
+              <label class="advanced-run"><span class="label-row"><span data-i18n="quality_threshold">质量阈值</span> <span class="help" tabindex="0" data-i18n-tip="tip_quality_threshold" data-tip="达到这个分数的文档会被视为高价值候选。仅评分模式下用于评分分层和后续筛选，不生成分类目录。">?</span></span><input id="run_quality_threshold" type="number" value="75" min="0" max="100" /></label>
+              <label class="advanced-run"><span class="label-row"><span data-i18n="timeout_seconds">超时秒</span> <span class="help" tabindex="0" data-i18n-tip="tip_timeout_seconds" data-tip="单个 LLM 请求最长等待时间。模型较慢或文档较大时可以调高；过高会让失败请求卡更久。">?</span></span><input id="run_timeout_seconds" type="number" value="240" min="5" /></label>
+              <label class="advanced-run relationship-option"><input id="run_plan_only" type="checkbox" checked /><span class="label-row"><span data-i18n="plan_only">仅评分，不复制文件</span> <span class="help" tabindex="0" data-i18n-tip="tip_plan_only" data-tip="只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。">?</span></span></label>
+              <label class="advanced-run relationship-option"><input id="run_ocr_enabled" type="checkbox" /><span class="label-row"><span data-i18n="ocr_enabled">开启OCR</span> <span class="help" tabindex="0" data-i18n-tip="tip_ocr_enabled" data-tip="启用 OCR 解析纯图片或扫描版 PDF。会明显增加处理时间；普通带文本层的 PDF 和 Office 文档通常不需要。">?</span></span></label>
+            </div>
+          </div>
+        </details>
         <div class="run-toolbar">
           <button id="start_analysis_btn" class="primary" onclick="toggleAnalysis()" data-i18n="start_analysis">开始分析</button>
           <button id="reset_analysis_btn" class="danger" onclick="resetAnalysis()" data-i18n="reset_analysis">重置分析</button>
-          <div class="relationship-toolbar">
-            <div class="relationship-options">
-              <label class="relationship-option"><input id="run_mine_relationships" type="checkbox" checked /><span class="label-row"><span data-i18n="mine_relationships">挖掘关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_mine_relationships" data-tip="在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。">?</span></span></label>
-              <label class="relationship-option"><input id="run_relationship_text" type="checkbox" checked /><span class="label-row"><span data-i18n="title_citations">标题引用</span> <span class="help" tabindex="0" data-i18n-tip="tip_title_citations" data-tip="启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。">?</span></span></label>
-              <div class="relationship-embedding-row">
-                <label class="relationship-option embedding-option"><input id="run_relationship_embeddings" type="checkbox" /><span class="label-row"><span data-i18n="embedding_relationships">Embedding 关系</span> <span class="help" tabindex="0" data-i18n-tip="tip_embedding_relationships" data-tip="给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。必须填写向量模型；更耗时、也更吃模型资源。建议在首轮评分稳定后、关系质量比速度更重要时再勾选。">?</span></span><input id="run_embedding_model" type="text" placeholder="填写向量模型后才能启用" data-i18n-placeholder="ph_embedding_model" /></label>
-                <span class="relationship-actions">
-                  <button id="early_relationships_btn" class="primary" onclick="toggleRelationships()" data-i18n="early_relationships">生成关系</button>
-                  <button id="reset_relationships_btn" class="danger" onclick="resetRelationships()" data-i18n="reset_relationships">重置关系</button>
-                </span>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
       <div class="panel">
         <div id="analysisStats" class="stats"></div>
         <div class="progress"><div id="analysisBar"></div></div>
-        <div id="embeddingProgressWrap" class="embedding-progress-wrap">
-          <div id="embeddingProgressStats" class="stats"></div>
-          <div class="progress embedding"><div id="embeddingProgressBar"></div></div>
-        </div>
         <pre id="analysisLog"></pre>
       </div>
     </section>
     <section id="section-reading">
-      <div class="panel reading-target">
+      <div class="panel reading-target hidden-target-panel">
         <label><span data-i18n="reading_output_root">阅读目标输出目录</span> <input id="reading_output_root" placeholder="选择或输入已分析输出目录" data-i18n-placeholder="ph_reading_output_root" /></label>
         <button id="pick_reading_output_btn" onclick="pickFolder('reading_output_root')" data-i18n="pick_folder">选择目录</button>
       </div>
@@ -170,23 +180,17 @@
     <section id="section-graph">
       <div class="panel">
         <div class="graph-toolbar">
+          <input id="graph_output_root" class="hidden-sync-input" tabindex="-1" aria-hidden="true" />
           <div class="graph-target-row">
-            <label><span data-i18n="graph_output_root">图谱分析目录</span> <input id="graph_output_root" placeholder="选择或输入已分析输出目录" data-i18n-placeholder="ph_graph_output_root" /></label>
-            <button id="pick_graph_output_btn" onclick="pickFolder('graph_output_root')" data-i18n="pick_folder">选择目录</button>
+            <label><span class="label-row"><span data-i18n="vector_model">向量模型</span> <span class="help" tabindex="0" data-i18n-tip="tip_embedding_relationships" data-tip="给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。填写向量模型后启用；留空则只使用默认关系挖掘和标题引用。">?</span></span><input id="run_embedding_model" type="text" placeholder="填写向量模型后启用" data-i18n-placeholder="ph_embedding_model" /></label>
             <label><span data-i18n="graph_search">簇搜索</span> <input id="graph_q" placeholder="路径/分类/标签" data-i18n-placeholder="ph_graph_search" /></label>
             <label><span data-i18n="graph_min_size">最小簇大小</span> <input id="graph_min_size" type="number" min="2" value="2" /></label>
           </div>
           <div class="graph-actions-row">
             <button id="graph_mine_btn" class="primary" onclick="toggleGraphRelationships()" data-i18n="generate_relationships">生成图谱</button>
-            <button id="graph_export_graph_btn" onclick="startGraphTask('export_graph')" data-i18n="export_kg">导出知识图谱</button>
-            <button id="graph_export_bundle_btn" onclick="startGraphTask('export_bundle')" data-i18n="export_bundle">导出 Bundle</button>
             <button onclick="loadGraph()" data-i18n="refresh_graph">刷新图谱</button>
+            <button id="reset_graph_btn" class="danger" onclick="resetGraph()" data-i18n="reset_graph">重置图谱</button>
           </div>
-        </div>
-        <div id="graphTaskStats" class="stats" style="margin-top:10px;"></div>
-        <div id="graphProgressWrap" class="graph-progress-wrap">
-          <div class="progress graph-progress"><div id="graphProgressBar"></div></div>
-          <div id="graphProgressStats" class="stats inline-stats"></div>
         </div>
       </div>
       <div class="graph-layout">
@@ -203,18 +207,36 @@
           <div id="graphDocDetail" class="graph-detail"></div>
         </div>
       </div>
+      <div class="panel graph-run-panel">
+        <div id="graphTaskStats" class="stats"></div>
+        <div id="graphProgressWrap" class="graph-progress-wrap">
+          <div class="progress graph-progress"><div id="graphProgressBar"></div></div>
+          <div id="graphProgressStats" class="stats inline-stats"></div>
+        </div>
+        <div id="embeddingProgressWrap" class="embedding-progress-wrap">
+          <div id="embeddingProgressStats" class="stats"></div>
+          <div class="progress embedding"><div id="embeddingProgressBar"></div></div>
+        </div>
+        <details id="graph_log_panel" class="collapsible-panel graph-log-panel">
+          <summary><span data-i18n="graph_log">日志</span></summary>
+          <div class="panel-body">
+            <pre id="graphLog"></pre>
+          </div>
+        </details>
+      </div>
     </section>
     <section id="section-rag">
       <div class="panel">
         <div class="rag-toolbar">
           <div class="rag-target-row">
-            <label><span class="label-row"><span data-i18n="rag_output_root">RAG 索引目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_rag_output_root" data-tip="指向已经跑过分析的输出目录。索引会写入该目录下的 _rag。">?</span></span><input id="rag_output_root" placeholder="选择或输入已分析输出目录" data-i18n-placeholder="ph_rag_output_root" /></label>
-            <button id="pick_rag_output_btn" onclick="pickFolder('rag_output_root')" data-i18n="pick_folder">选择目录</button>
-            <button id="start_rag_btn" class="primary" onclick="toggleRagIndex()" data-i18n="build_rag">构建索引</button>
-          </div>
-          <div class="rag-options-row">
+            <input id="rag_output_root" class="hidden-sync-input" tabindex="-1" aria-hidden="true" />
             <label><span class="label-row"><span data-i18n="rag_embedding_model">Embedding 模型</span> <span class="help" tabindex="0" data-i18n-tip="tip_rag_embedding_model" data-tip="留空则只构建文档与切片，不生成向量；填写后会额外写入 _rag/vectors.jsonl，并可用语义检索。">?</span></span><input id="rag_embedding_model" placeholder="留空则仅构建文本索引" data-i18n-placeholder="ph_rag_embedding_model" /></label>
             <label><span data-i18n="rag_min_quality">最低质量</span> <input id="rag_min_quality" type="number" min="0" max="100" value="75" /></label>
+            <button id="start_rag_btn" class="primary" onclick="toggleRagIndex()" data-i18n="build_rag">构建索引</button>
+          </div>
+          <details id="rag_build_advanced_panel" class="collapsible-panel compact-collapsible">
+            <summary><span data-i18n="rag_build_advanced">索引参数</span></summary>
+            <div class="panel-body rag-options-row">
             <label><span data-i18n="rag_categories">分类过滤</span>
               <select id="rag_categories" multiple>
                 <option value="Architecture">Architecture</option>
@@ -231,10 +253,11 @@
             <label><span data-i18n="rag_limit">文档上限</span> <input id="rag_limit" type="number" min="1" placeholder="空为全量" data-i18n-placeholder="ph_limit" /></label>
             <label><span data-i18n="rag_chunk_max_chars">切片长度</span> <input id="rag_chunk_max_chars" type="number" min="200" value="1400" /></label>
             <label><span data-i18n="rag_chunk_overlap_chars">重叠长度</span> <input id="rag_chunk_overlap_chars" type="number" min="0" value="180" /></label>
-          </div>
+            </div>
+          </details>
         </div>
         <details id="rag_advanced_panel" class="collapsible-panel">
-          <summary><span data-i18n="rag_advanced">高级功能</span></summary>
+          <summary><span data-i18n="rag_advanced">敏感词防火墙</span></summary>
           <div class="panel-body">
             <div class="rag-advanced-grid">
               <label class="relationship-option"><input id="rag_redaction_enabled" type="checkbox" /><span class="label-row"><span data-i18n="rag_redaction_enabled">启用敏感词防火墙</span> <span class="help" tabindex="0" data-i18n-tip="tip_rag_redaction_enabled" data-tip="只作用于 RAG 索引链路，不改原始分析结果。写入 _rag 和送入向量库前，会先对文本做过滤、替换或映射。">?</span></span></label>
@@ -246,20 +269,23 @@
             </div>
           </div>
         </details>
-        <div class="rag-vector-toolbar">
-          <label><span class="label-row"><span data-i18n="vector_store_type">向量库类型</span> <span class="help" tabindex="0" data-i18n-tip="tip_vector_store_type" data-tip="测试 RAG 产物要流转到的向量库。本地 JSONL 会只读检查当前输出目录下的 _rag；Qdrant、Chroma 和 HTTP 会检查网络连通性。">?</span></span>
-            <select id="rag_vector_store_type">
-              <option value="local_jsonl" data-i18n="vector_store_local">本地 JSONL</option>
-              <option value="qdrant">Qdrant</option>
-              <option value="chroma">Chroma</option>
-              <option value="http">HTTP</option>
-            </select>
-          </label>
-          <label><span class="label-row"><span data-i18n="vector_store_url">向量库地址</span> <span class="help" tabindex="0" data-i18n-tip="tip_vector_store_url" data-tip="外部向量库服务地址，例如 Qdrant 的 http://localhost:6333 或 Chroma 的 http://localhost:8000。本地 JSONL 不需要填写。">?</span></span><input id="rag_vector_store_url" placeholder="本地 JSONL 可留空" data-i18n-placeholder="ph_vector_store_url" /></label>
-          <label><span class="label-row"><span data-i18n="vector_store_collection">集合</span> <span class="help" tabindex="0" data-i18n-tip="tip_vector_store_collection" data-tip="可选。填写后会进一步检查集合是否存在；留空则只检查服务是否可达。">?</span></span><input id="rag_vector_store_collection" placeholder="可选" data-i18n-placeholder="ph_vector_store_collection" /></label>
-          <button id="test_vector_store_btn" onclick="testVectorStore()" data-i18n="test_vector_store">测试向量库</button>
-          <div id="vectorStoreTestStats" class="stats inline-stats"></div>
-        </div>
+        <details id="rag_vector_panel" class="collapsible-panel compact-collapsible">
+          <summary><span data-i18n="vector_store_advanced">向量库测试</span></summary>
+          <div class="panel-body rag-vector-toolbar">
+            <label><span class="label-row"><span data-i18n="vector_store_type">向量库类型</span> <span class="help" tabindex="0" data-i18n-tip="tip_vector_store_type" data-tip="测试 RAG 产物要流转到的向量库。本地 JSONL 会只读检查当前输出目录下的 _rag；Qdrant、Chroma 和 HTTP 会检查网络连通性。">?</span></span>
+              <select id="rag_vector_store_type">
+                <option value="local_jsonl" data-i18n="vector_store_local">本地 JSONL</option>
+                <option value="qdrant">Qdrant</option>
+                <option value="chroma">Chroma</option>
+                <option value="http">HTTP</option>
+              </select>
+            </label>
+            <label><span class="label-row"><span data-i18n="vector_store_url">向量库地址</span> <span class="help" tabindex="0" data-i18n-tip="tip_vector_store_url" data-tip="外部向量库服务地址，例如 Qdrant 的 http://localhost:6333 或 Chroma 的 http://localhost:8000。本地 JSONL 不需要填写。">?</span></span><input id="rag_vector_store_url" placeholder="本地 JSONL 可留空" data-i18n-placeholder="ph_vector_store_url" /></label>
+            <label><span class="label-row"><span data-i18n="vector_store_collection">集合</span> <span class="help" tabindex="0" data-i18n-tip="tip_vector_store_collection" data-tip="可选。填写后会进一步检查集合是否存在；留空则只检查服务是否可达。">?</span></span><input id="rag_vector_store_collection" placeholder="可选" data-i18n-placeholder="ph_vector_store_collection" /></label>
+            <button id="test_vector_store_btn" onclick="testVectorStore()" data-i18n="test_vector_store">测试向量库</button>
+            <div id="vectorStoreTestStats" class="stats inline-stats"></div>
+          </div>
+        </details>
         <div class="rag-searchbar">
           <label><span class="label-row"><span data-i18n="rag_search_query">检索测试</span> <span class="help" tabindex="0" data-i18n-tip="tip_rag_search_query" data-tip="优先使用向量检索；当没有向量或未填写向量模型时，会自动退回到词法匹配。">?</span></span><input id="rag_query" placeholder="输入问题、主题或关键词" data-i18n-placeholder="ph_rag_query" /></label>
           <label><span data-i18n="rag_top_k">Top K</span> <input id="rag_top_k" type="number" min="1" max="50" value="8" /></label>
@@ -278,10 +304,16 @@
       <div class="panel">
         <div class="anydocs-toolbar">
           <div class="anydocs-target-row">
-            <label><span data-i18n="anydocs_output_root">DocTriage 输出目录</span> <input id="anydocs_output_root" placeholder="选择或输入已分析输出目录" data-i18n-placeholder="ph_graph_output_root" /></label>
-            <button id="pick_anydocs_output_btn" onclick="pickFolder('anydocs_output_root')" data-i18n="pick_folder">选择目录</button>
+            <input id="anydocs_output_root" class="hidden-sync-input" tabindex="-1" aria-hidden="true" />
             <label><span data-i18n="anydocs_url">AnyDocsToAgents 地址</span> <input id="anydocs_url" value="http://127.0.0.1:8000/" /></label>
             <label><span data-i18n="anydocs_bundle_path">Bundle 路径</span> <input id="anydocs_bundle_path" readonly /></label>
+          </div>
+          <div class="anydocs-selection-row">
+            <label class="quality-threshold-field">
+              <span class="label-row"><span data-i18n="bundle_min_quality">Bundle 最低质量</span> <span id="anydocs_bundle_quality_help" class="help" tabindex="0" data-i18n-tip="tip_bundle_min_quality" data-tip="只导出达到此分数的文档。默认为 0，即不按质量分过滤；不会自动继承分析页或阅读台阈值。">?</span></span>
+              <span class="quality-threshold-control"><input id="anydocs_bundle_min_quality" type="range" min="0" max="100" step="1" value="0" /><input id="anydocs_bundle_min_quality_number" type="number" min="0" max="100" value="0" aria-label="Bundle 最低质量精确值" /></span>
+              <span id="anydocs_bundle_quality_stats" class="quality-threshold-stats" data-i18n="quality_stats_loading">正在统计可导出文档...</span>
+            </label>
           </div>
           <div class="graph-actions-row">
             <button id="anydocs_export_bundle_btn" onclick="exportAnydocsBundle()" data-i18n="export_bundle">导出 Bundle</button>

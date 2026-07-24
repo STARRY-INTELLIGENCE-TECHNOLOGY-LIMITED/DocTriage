@@ -212,6 +212,7 @@ pending_docs/
 _state/
 _logs/
 _relationships/
+.doctriage_uploads/
 *.jsonl
 
 # Ruff stuff:

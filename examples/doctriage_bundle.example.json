@@ -17,7 +17,32 @@
     ],
     "limit": 50,
     "prefer_target_path": false,
-    "include_summaries": true
+    "include_summaries": true,
+    "exclude_categories": [
+      "LowQuality"
+    ],
+    "allow_partial": false
+  },
+  "pipeline_status": {
+    "analysis": "complete",
+    "relations": "complete",
+    "rag": "not_run"
+  },
+  "is_partial": true,
+  "warnings": [
+    "RAG index is not available."
+  ],
+  "artifacts": {
+    "decisions": {
+      "path": "D:\\doctriage_runs\\real_run_plan\\_state\\decisions.jsonl",
+      "exists": true,
+      "size_bytes": 123456
+    },
+    "relations": {
+      "path": "D:\\doctriage_runs\\real_run_plan\\_relationships\\relations.jsonl",
+      "exists": true,
+      "size_bytes": 45678
+    }
   },
   "statistics": {
     "document_count": 2,

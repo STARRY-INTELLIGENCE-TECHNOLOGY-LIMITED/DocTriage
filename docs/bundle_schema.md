@@ -13,6 +13,10 @@ DocTriage owns document triage, scoring, classification, relationship mining, an
   "generated_at": "2026-05-01T00:00:00+00:00",
   "source": {},
   "selection_policy": {},
+  "pipeline_status": {},
+  "is_partial": false,
+  "warnings": [],
+  "artifacts": {},
   "statistics": {},
   "documents": [],
   "relations": []
@@ -39,6 +43,15 @@ Required fields:
 - `scores`: Numeric quality and risk dimensions from DocTriage.
 - `text.summary`: Optional short summary.
 - `text.reason`: Scoring/classification reason.
+
+## Export Status
+
+- `pipeline_status.analysis`, `pipeline_status.relations`, and `pipeline_status.rag` report the last known phase for each pipeline.
+- `is_partial` is true when the bundle has warnings, for example when relationship output or the RAG manifest is unavailable.
+- `warnings` contains human-readable degradation notices. Consumers should surface these before relying on relations or full-text retrieval.
+- `artifacts` records the expected output path, existence, and byte size for decisions, relations, clusters, the projected graph, and the RAG manifest.
+- Relationship phase `error` blocks normal export. Use `doctriage-bundle --allow-partial` only when a metadata-only handoff is intentional.
+- `selection_policy.exclude_categories` defaults to `['LowQuality']`; pass `--exclude-categories` to change it (an empty value disables category exclusion).
 
 The `scores` object includes:
 

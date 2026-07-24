@@ -10,8 +10,7 @@
   --llm-model gemma4:e4b `
   --plan-only `
   --no-ocr `
-  --skip-manifest-analysis `
-  --document-summary
+  --skip-manifest-analysis
 ```
 
 导出 RAG 候选 JSONL：

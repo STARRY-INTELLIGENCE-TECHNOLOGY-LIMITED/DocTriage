@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     LLM_NUM_CTX: int | None = Field(default=8192, ge=1024, le=131072)
     MANIFEST_MAX_FILES: int = Field(default=250, ge=20, le=5000)
     SKIP_MANIFEST_ANALYSIS: bool = Field(default=True)
-    DOCUMENT_SUMMARY_ENABLED: bool = Field(default=False)
+    DOCUMENT_SUMMARY_ENABLED: bool = Field(default=True)
     DOCUMENT_SUMMARY_MAX_CHARS: int = Field(default=600, ge=40, le=2000)
     OUTPUT_LANGUAGE: str = Field(default="auto")
     QUALITY_THRESHOLD: int = Field(default=75, ge=0, le=100)

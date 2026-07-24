@@ -194,6 +194,19 @@ http://127.0.0.1:8000/?doctriage_bundle_path=D:\doctriage_run\_relationships\doc
 
 这是松耦合桥接：DocTriage 不启动、不嵌入、不依赖 AnyDocsToAgents。两个项目仍可独立运行。
 
+对于已经完成的长耗时分析，只需导出 bundle，不会重新执行分类：
+
+```powershell
+doctriage-bundle `
+  --source-dir "D:\example_docs" `
+  --output-root "D:\doctriage_run" `
+  --llm-endpoint http://localhost:11434/api/generate `
+  --llm-model gemma4:e4b `
+  --min-quality 75
+```
+
+bundle 默认排除 `LowQuality`。只有下游明确需要时才用 `--exclude-categories ""` 取消该过滤。若关系挖掘的最终状态为 `error`，常规导出会停止，避免把不完整图谱伪装成完整结果；只有明确需要 metadata-only bundle 时才传 `--allow-partial`，下游应展示其 warning，并在重新生成关系前以摘要检索为主。
+
 ## 语言
 
 DocTriage 有两个独立语言控制：

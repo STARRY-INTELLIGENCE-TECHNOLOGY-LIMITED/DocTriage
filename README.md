@@ -194,6 +194,19 @@ http://127.0.0.1:8000/?doctriage_bundle_path=D:\doctriage_run\_relationships\doc
 
 This is intentionally a loose bridge: DocTriage does not start, embed, or depend on AnyDocsToAgents. Both projects can still run independently.
 
+For an existing completed run, exporting the bundle is fast and does not rerun classification:
+
+```powershell
+doctriage-bundle `
+  --source-dir "D:\example_docs" `
+  --output-root "D:\doctriage_run" `
+  --llm-endpoint http://localhost:11434/api/generate `
+  --llm-model gemma4:e4b `
+  --min-quality 75
+```
+
+Bundles exclude the `LowQuality` category by default. Use `--exclude-categories ""` only when a downstream workflow intentionally needs it. If relationship mining ended in the explicit `error` phase, normal export stops to prevent a misleading graph handoff. Use `--allow-partial` only for a metadata-only bundle; downstream consumers should surface its warnings and rely on summary retrieval until relationships are regenerated.
+
 ## Language
 
 DocTriage has two separate language controls:

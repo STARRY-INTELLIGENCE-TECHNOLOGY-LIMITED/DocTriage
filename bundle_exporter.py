@@ -34,6 +34,8 @@ class BundleSelection:
     limit: int | None = None
     prefer_target_path: bool = False
     include_summaries: bool = True
+    exclude_categories: set[str] = field(default_factory=lambda: {"LowQuality"})
+    allow_partial: bool = False
 
 
 def export_bundle(
@@ -50,12 +52,20 @@ def export_bundle(
     decisions = load_latest_decisions(decisions_path)
     documents = select_documents(decisions, current_selection)
     relations = load_relations_for_documents(relations_path, documents)
+    pipeline_status = build_pipeline_status(current_settings)
+    relation_phase = str(pipeline_status.get("relations") or "").lower()
+    if relation_phase == "error" and not current_selection.allow_partial:
+        raise RuntimeError(
+            "Relationship mining failed. Re-run it or pass --allow-partial to export "
+            "a metadata-only bundle."
+        )
     payload = build_bundle_payload(
         title=title,
         settings=current_settings,
         selection=current_selection,
         documents=documents,
         relations=relations,
+        pipeline_status=pipeline_status,
     )
     resolved_output = output_path or (
         current_settings.relationship_dir / "doctriage_bundle.json"
@@ -103,6 +113,8 @@ def select_documents(
         if quality < selection.min_quality:
             continue
         if selection.categories and category not in selection.categories:
+            continue
+        if category in selection.exclude_categories:
             continue
         sensitivity_risk = coerce_int(decision.get("sensitivity_risk"), 0)
         public_writing_suitability = coerce_int(
@@ -242,7 +254,15 @@ def build_bundle_payload(
     selection: BundleSelection,
     documents: list[dict[str, Any]],
     relations: list[dict[str, Any]],
+    pipeline_status: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    current_pipeline_status = pipeline_status or build_pipeline_status(settings)
+    warnings = build_bundle_warnings(
+        settings=settings,
+        documents=documents,
+        relations=relations,
+        pipeline_status=current_pipeline_status,
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "title": title,
@@ -256,7 +276,13 @@ def build_bundle_payload(
             "limit": selection.limit,
             "prefer_target_path": selection.prefer_target_path,
             "include_summaries": selection.include_summaries,
+            "exclude_categories": sorted(selection.exclude_categories),
+            "allow_partial": selection.allow_partial,
         },
+        "pipeline_status": current_pipeline_status,
+        "is_partial": bool(warnings),
+        "warnings": warnings,
+        "artifacts": build_artifact_metadata(settings),
         "statistics": {
             "document_count": len(documents),
             "relation_count": len(relations),
@@ -269,6 +295,98 @@ def build_bundle_payload(
         "documents": documents,
         "relations": relations,
     }
+
+
+def build_pipeline_status(settings: Settings) -> dict[str, str]:
+    analysis_summary = read_json_object(settings.state_dir / "run_summary.json")
+    relationship_progress = read_json_object(settings.relationship_progress_path)
+    rag_manifest = read_json_object(settings.rag_manifest_path)
+    unresolved_failures = unresolved_analysis_failures(analysis_summary)
+    analysis_status = (
+        "partial"
+        if analysis_summary and unresolved_failures > 0
+        else "complete" if analysis_summary else "unknown"
+    )
+    relationship_status = str(relationship_progress.get("phase") or "not_run")
+    rag_status = "complete" if rag_manifest else "not_run"
+    return {
+        "analysis": analysis_status,
+        "relations": relationship_status,
+        "rag": rag_status,
+    }
+
+
+def build_bundle_warnings(
+    *,
+    settings: Settings,
+    documents: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    pipeline_status: dict[str, str],
+) -> list[str]:
+    warnings: list[str] = []
+    if str(pipeline_status.get("analysis") or "").lower() == "partial":
+        analysis_summary = read_json_object(settings.state_dir / "run_summary.json")
+        unresolved_failures = unresolved_analysis_failures(analysis_summary)
+        detail = (
+            f" ({unresolved_failures} unresolved)" if unresolved_failures else ""
+        )
+        warnings.append(
+            f"Document analysis completed with failures{detail}; "
+            "document metadata may be incomplete."
+        )
+    relation_phase = str(pipeline_status.get("relations") or "").lower()
+    if relation_phase == "error":
+        warnings.append("Relationship mining failed; relations may be incomplete.")
+    elif not settings.relationship_relations_path.exists():
+        warnings.append("Relationship artifact is not available.")
+    if not relations:
+        warnings.append("Bundle contains no selected document relations.")
+    if not settings.rag_manifest_path.exists():
+        warnings.append("RAG index is not available.")
+    if any(
+        not str(document.get("text", {}).get("summary") or "").strip()
+        for document in documents
+    ):
+        warnings.append("Some selected documents have no summary.")
+    return warnings
+
+
+def unresolved_analysis_failures(summary: dict[str, Any]) -> int:
+    return max(
+        0,
+        coerce_int(
+            summary.get("unresolved_failures"),
+            coerce_int(summary.get("failed"), 0),
+        ),
+    )
+
+
+def build_artifact_metadata(settings: Settings) -> dict[str, dict[str, Any]]:
+    paths = {
+        "decisions": settings.state_dir / "decisions.jsonl",
+        "relations": settings.relationship_relations_path,
+        "clusters": settings.relationship_clusters_path,
+        "knowledge_graph": settings.relationship_dir / "knowledge_graph.json",
+        "rag_manifest": settings.rag_manifest_path,
+    }
+    return {
+        name: {
+            "path": str(path),
+            "exists": path.is_file(),
+            "size_bytes": path.stat().st_size if path.is_file() else 0,
+        }
+        for name, path in paths.items()
+    }
+
+
+def read_json_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def document_id(decision: dict[str, Any]) -> str:
@@ -394,6 +512,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--categories",
         help="Comma-separated category allow-list, for example Architecture,Thinking,Series.",
     )
+    parser.add_argument(
+        "--exclude-categories",
+        default="LowQuality",
+        help="Comma-separated category deny-list; defaults to LowQuality.",
+    )
+    parser.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="Allow export when relationship mining explicitly failed.",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument(
         "--max-sensitivity-risk",
@@ -444,6 +572,8 @@ def main(argv: list[str] | None = None) -> None:
         limit=args.limit,
         prefer_target_path=args.prefer_target_path,
         include_summaries=not args.no_summaries,
+        exclude_categories=parse_categories(args.exclude_categories),
+        allow_partial=args.allow_partial,
     )
     output_path = export_bundle(
         build_settings_from_args(args),
