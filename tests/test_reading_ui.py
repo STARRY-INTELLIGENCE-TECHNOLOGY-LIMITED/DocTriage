@@ -847,6 +847,85 @@ def test_llm_connection_checks_openai_compatible_models_with_embedding_key(
     ]
 
 
+def test_llm_connection_probes_unlisted_openai_embedding_model(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def fake_http_json_request(url, **kwargs):
+        calls.append((url, kwargs.get("method", "GET"), kwargs.get("payload")))
+        if url.endswith("/models"):
+            return {
+                "reachable": True,
+                "status_code": 200,
+                "json": {"data": [{"id": "qwen-plus"}]},
+                "text": "",
+                "error": "",
+            }
+        return {
+            "reachable": True,
+            "status_code": 200,
+            "json": {"data": [{"embedding": [0.1, 0.2]}]},
+            "text": "",
+            "error": "",
+        }
+
+    monkeypatch.setattr(reading_ui, "http_json_request", fake_http_json_request)
+
+    payload = reading_ui.test_llm_connection(
+        {
+            "role": "embedding",
+            "endpoint": "https://example.com/compatible-mode/v1/embeddings",
+            "model": "text-embedding-v4",
+        }
+    )
+
+    assert payload["ok"] is True
+    assert payload["model_checked"] is True
+    assert payload["model_exists"] is True
+    assert calls == [
+        ("https://example.com/compatible-mode/v1/models", "GET", None),
+        (
+            "https://example.com/compatible-mode/v1/embeddings",
+            "POST",
+            {"model": "text-embedding-v4", "input": "DocTriage endpoint probe"},
+        ),
+    ]
+
+
+def test_llm_connection_reports_failed_unlisted_embedding_probe(monkeypatch) -> None:
+    def fake_http_json_request(url, **kwargs):
+        if url.endswith("/models"):
+            return {
+                "reachable": True,
+                "status_code": 200,
+                "json": {"data": []},
+                "text": "",
+                "error": "",
+            }
+        return {
+            "reachable": True,
+            "status_code": 400,
+            "json": {"error": {"message": "unknown model"}},
+            "text": "unknown model",
+            "error": "HTTP Error 400",
+        }
+
+    monkeypatch.setattr(reading_ui, "http_json_request", fake_http_json_request)
+
+    payload = reading_ui.test_llm_connection(
+        {
+            "role": "embedding",
+            "endpoint": "https://example.com/v1",
+            "model": "missing-embedding-model",
+        }
+    )
+
+    assert payload["ok"] is False
+    assert payload["reachable"] is True
+    assert payload["model_checked"] is True
+    assert payload["model_exists"] is False
+    assert payload["status_code"] == 400
+
+
 def test_vector_store_connection_checks_local_rag_jsonl(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"
@@ -3245,11 +3324,13 @@ def test_anydocs_bundle_quality_stats_matches_export_selection(tmp_path: Path) -
         {"source_dir": str(source_dir), "output_root": str(output_root)},
     )
 
-    assert stats["total"] == 2
+    assert stats["total"] == 3
+    assert stats["source_total"] == 3
+    assert stats["excluded_category_count"] == 0
     assert stats["histogram"][25] == 1
     assert stats["histogram"][90] == 1
-    assert stats["histogram"][100] == 0
-    assert stats["excluded_categories"] == ["LowQuality"]
+    assert stats["histogram"][100] == 1
+    assert stats["excluded_categories"] == []
 
 
 def test_infer_source_dir_from_decisions_without_relative_path(tmp_path: Path) -> None:
@@ -3302,6 +3383,16 @@ def test_upload_workspace_lifecycle_uses_server_managed_paths(
     assert uploaded["total_bytes"] == len(b"# hello")
     assert (Path(created["source_dir"]) / "folder" / "doc.md").read_bytes() == b"# hello"
 
+    uploaded = save_upload_file(
+        app_state,
+        upload_id,
+        "another/nested/doc.md",
+        b"# second",
+    )
+    assert uploaded["file_count"] == 2
+    assert uploaded["root_count"] == 2
+    assert uploaded["roots"] == ["another", "folder"]
+
     completed = complete_upload_workspace(app_state, upload_id)
     assert completed["complete"] is True
     assert completed["source_dir"] == created["source_dir"]
@@ -3323,6 +3414,39 @@ def test_upload_relative_paths_reject_traversal() -> None:
         normalize_upload_relative_path("")
 
 
+def test_upload_manifest_roots_ignores_invalid_entries() -> None:
+    manifest = {
+        "files": [
+            None,
+            "folder/doc.md",
+            {},
+            {"relative_path": "../secret.md"},
+            {"relative_path": "first/doc.md"},
+            {"relative_path": r"second\nested\doc.pdf"},
+            {"relative_path": "root-file.txt"},
+        ]
+    }
+
+    assert reading_ui.upload_manifest_roots(manifest) == ["first", "second"]
+
+
+def test_upload_can_continue_after_invalid_manifest_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(reading_ui, "UPLOAD_WORKSPACE_ROOT", tmp_path / "uploads")
+    app_state = AppState()
+    created = create_upload_workspace(app_state)
+    upload_id = created["upload_id"]
+    manifest = reading_ui.read_upload_manifest(upload_id)
+    manifest["files"] = [None, "invalid", {"relative_path": "old/doc.md"}]
+    reading_ui.write_upload_manifest(upload_id, manifest)
+
+    uploaded = save_upload_file(app_state, upload_id, "new/doc.md", b"new")
+
+    assert uploaded["file_count"] == 2
+    assert uploaded["roots"] == ["new", "old"]
+
+
 def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     html = frontend_source()
     compact_html = frontend_source_compact()
@@ -3336,10 +3460,18 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert 'id="analysis_advanced_panel"' in html
     assert 'data-i18n="analysis_advanced">高级参数' in html
     assert 'id="source_mode_path_btn"' in html
-    assert 'id="source_mode_files_btn"' in html
-    assert 'id="source_mode_folder_btn"' in html
+    assert 'id="source_mode_upload_btn"' in html
+    assert 'id="source_mode_files_btn"' not in html
+    assert 'id="source_mode_folder_btn"' not in html
     assert 'id="upload_files_input" class="hidden-sync-input" type="file" multiple' in html
     assert 'id="upload_folder_input" class="hidden-sync-input" type="file" multiple webkitdirectory directory' in html
+    assert 'id="pick_upload_btn" type="button" aria-haspopup="menu"' in html
+    assert 'id="upload_source_menu" class="upload-source-menu" role="menu" hidden' in html
+    assert 'data-i18n="add_upload_documents">添加文档' in html
+    assert 'data-i18n="pick_upload_folder">选择文件夹' in html
+    assert "function buildFolderRootAliases(fileList)" in html
+    assert "currentUploadWorkspace?.roots" in html
+    assert 'data-i18n="upload_folder_hint"' not in html
     assert 'id="uploadStats"' in html
     assert 'id="uploadBar"' in html
     assert "function setSourceMode(mode)" in html
@@ -3349,7 +3481,10 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert 'fetch(`/api/uploads/${workspace.upload_id}/complete`, {method: "POST"})' in html
     assert 'fetch(`/api/uploads/${uploadId}`, {method: "DELETE"})' in html
     assert "applyUploadWorkspacePaths(payload);" in html
-    assert 'if (sourceMode !== "path" && (!currentUploadWorkspace || !currentUploadWorkspace.complete))' in html
+    assert 'if (sourceMode === "upload" && (!currentUploadWorkspace || !currentUploadWorkspace.complete))' in html
+    assert 'if (id === "run_source_dir" || id === "run_output_root") syncSourceModeFromRunPaths();' in html
+    assert 'function runPathsMatchUploadWorkspace()' in html
+    assert 'setSourceMode(runPathsMatchUploadWorkspace() ? "upload" : "path");' in html
     assert 'id="shared_target_panel"' in html
     assert 'id="global_output_root"' in html
     assert 'id="pick_global_output_btn" onclick="pickFolder(\'global_output_root\')"' in html
@@ -3421,8 +3556,10 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert "关系图谱" in html
     assert 'id="graphClusters"' in html
     assert "header { padding: 16px 20px 0;" in compact_html
-    assert ".tabs { display: flex; gap: 18px; align-items: flex-end; margin-bottom: 0; border-bottom: 1px solid var(--line); }" in compact_html
-    assert ".tab { height: 36px; border: 0; border-bottom: 3px solid transparent;" in compact_html
+    assert ".tabs { display: flex; gap: 18px; align-items: flex-end;" in compact_html
+    assert "overflow-x: auto;" in compact_html
+    assert ".tab { flex: 0 0 auto;" in compact_html
+    assert "height: 36px; border: 0; border-bottom: 3px solid transparent;" in compact_html
     assert ".tab.active { border-bottom-color: var(--blue); color: var(--blue); background: var(--surface-soft); }" in compact_html
     assert ".tab.active { background: var(--blue);" not in compact_html
     assert "function setAdvancedRunOptionsVisible" not in html
@@ -3460,12 +3597,22 @@ def test_rag_tab_exposes_independent_index_controls() -> None:
     assert 'data-i18n="vector_store_advanced">向量库测试' in html
     assert ".rag-target-row button { min-width: 96px; white-space: nowrap; }" in compact_html
     assert ".rag-options-row { display: grid; grid-template-columns: minmax(180px, 240px)" in compact_html
-    assert ".rag-options-row select[multiple] { height: 32px; }" in compact_html
+    assert "align-items: start;" in compact_html
+    assert ".rag-options-row select[multiple] { height: 32px; }" not in compact_html
+    assert "select[multiple] { height: 72px;" in compact_html
     assert '<select id="rag_categories" multiple>' in html
+    assert 'onclick="selectMulti(\'rag_categories\', true)"' in html
+    assert 'onclick="invertMulti(\'rag_categories\')"' in html
+    assert 'id="rag_categories_dialog"' not in html
     assert '<option value="Architecture">Architecture</option>' in html
     assert '<option value="Research">Research</option>' in html
     assert "function selectedValues(id)" in html
     assert "function setSelectedValues(id, values)" in html
+    assert "function handleMultiSelectionChanged(id)" in html
+    assert 'if (id === "rag_categories") {' in html
+    assert "saveRagTargetState();" in html
+    assert "function openRagCategoryDialog()" not in html
+    assert ".choice-dialog-list {" not in compact_html
     assert 'rag_categories: selectedValues("rag_categories").join(",")' in html
     assert "function ragPathPayload()" in html
     assert "function ragPayload()" in html
@@ -3551,6 +3698,10 @@ def test_anydocs_bridge_ui_is_optional_and_first_class() -> None:
     assert 'initAnydocsTargetPersistence();' in html
     assert 'fetch("/api/integrations/anydocs/export-bundle"' in html
     assert 'fetch("/api/integrations/anydocs/open"' in html
+    assert 'id="toast" class="toast" role="status" aria-live="polite"' in html
+    assert "top: max(16px, env(safe-area-inset-top));" in html
+    assert "left: 50%;" in html
+    assert 'toast.classList.add("show");' in html
 
 
 def test_reading_tab_uses_compact_filter_layout() -> None:
@@ -3779,7 +3930,7 @@ def test_analysis_run_form_persists_previous_values() -> None:
     analysis_end = html.index("function shouldPreemptRelationshipsForAnalysis", analysis_start)
     analysis_body = html[analysis_start:analysis_end]
     assert "saveRunFormState();" in analysis_body
-    assert 'if (sourceMode !== "path" && (!currentUploadWorkspace || !currentUploadWorkspace.complete))' in analysis_body
+    assert 'if (sourceMode === "upload" && (!currentUploadWorkspace || !currentUploadWorkspace.complete))' in analysis_body
     assert "const requestPayload = runPayload();" in analysis_body
     assert analysis_body.index("currentUploadWorkspace") < analysis_body.index("const requestPayload = runPayload();")
     assert 'if (!validateEmbeddingModelSelection(requestPayload)) return;' in html
@@ -4268,6 +4419,58 @@ def test_windows_folder_picker_uses_powershell(monkeypatch) -> None:
     assert reading_ui.can_use_folder_picker() is True
     assert reading_ui.pick_folder() == {"path": "C:\\Docs"}
     assert "-STA" in commands[0][0]
+
+
+def test_macos_folder_picker_uses_osascript(monkeypatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = b"/Users/lin/Documents\n"
+        stderr = b""
+
+    commands = []
+    monkeypatch.setattr(reading_ui.os, "name", "posix", raising=False)
+    monkeypatch.setattr(reading_ui.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        reading_ui.shutil,
+        "which",
+        lambda name: "/usr/bin/osascript" if name == "osascript" else None,
+    )
+    monkeypatch.setattr(
+        reading_ui.subprocess,
+        "run",
+        lambda command, **kwargs: commands.append((command, kwargs)) or Result(),
+    )
+
+    assert reading_ui.can_use_folder_picker() is True
+    assert reading_ui.pick_folder() == {"path": "/Users/lin/Documents"}
+    assert commands[0][0][0] == "/usr/bin/osascript"
+
+
+def test_linux_folder_picker_uses_zenity(monkeypatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = b"/home/lin/Documents\n"
+        stderr = b""
+
+    commands = []
+    monkeypatch.setattr(reading_ui.os, "name", "posix", raising=False)
+    monkeypatch.setattr(reading_ui.sys, "platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(
+        reading_ui.shutil,
+        "which",
+        lambda name: "/usr/bin/zenity" if name == "zenity" else None,
+    )
+    monkeypatch.setattr(
+        reading_ui.subprocess,
+        "run",
+        lambda command, **kwargs: commands.append((command, kwargs)) or Result(),
+    )
+
+    assert reading_ui.can_use_folder_picker() is True
+    assert reading_ui.pick_folder() == {"path": "/home/lin/Documents"}
+    assert "--directory" in commands[0][0]
 
 
 def test_build_relationship_payload_returns_cluster_and_edge_details(tmp_path: Path) -> None:

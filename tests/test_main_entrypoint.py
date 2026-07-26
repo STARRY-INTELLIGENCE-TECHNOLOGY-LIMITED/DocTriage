@@ -34,7 +34,7 @@ def test_is_doctriage_ui_running_detects_config_endpoint(monkeypatch) -> None:
 
     monkeypatch.setattr(main.urllib.request, "urlopen", lambda url, timeout: FakeResponse())
 
-    assert main.is_doctriage_ui_running("http://127.0.0.1:8765/") is True
+    assert main.is_doctriage_ui_running("http://127.0.0.1:18765/") is True
 
 
 def test_is_doctriage_ui_running_rejects_other_service(monkeypatch) -> None:
@@ -50,7 +50,7 @@ def test_is_doctriage_ui_running_rejects_other_service(monkeypatch) -> None:
 
     monkeypatch.setattr(main.urllib.request, "urlopen", lambda url, timeout: FakeResponse())
 
-    assert main.is_doctriage_ui_running("http://127.0.0.1:8765/") is False
+    assert main.is_doctriage_ui_running("http://127.0.0.1:18765/") is False
 
 
 def test_stale_run_lock_is_ignored_when_process_is_gone(tmp_path: Path) -> None:

@@ -75,8 +75,11 @@ h1 {
   align-items: flex-end;
   margin-bottom: 0;
   border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .tab {
+  flex: 0 0 auto;
   height: 36px;
   border: 0;
   border-bottom: 3px solid transparent;
@@ -162,6 +165,45 @@ h1 {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: flex-start;
+}
+.upload-source-picker {
+  position: relative;
+}
+#pick_upload_btn {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+}
+.menu-chevron {
+  color: var(--muted);
+  font-size: 11px;
+}
+.upload-source-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 152px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+}
+.upload-source-menu[hidden] {
+  display: none !important;
+}
+.upload-source-menu button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.upload-source-menu button:hover,
+.upload-source-menu button:focus-visible {
+  background: var(--surface-soft);
 }
 .upload-progress {
   margin: 0;
@@ -511,15 +553,12 @@ section.active {
   display: grid;
   grid-template-columns: minmax(180px, 240px) minmax(100px, 130px) minmax(110px, 140px) minmax(110px, 140px);
   gap: 8px;
-  align-items: end;
+  align-items: start;
   justify-content: start;
 }
 .rag-options-row input, .rag-options-row select {
   width: 100%;
   min-width: 0;
-}
-.rag-options-row select[multiple] {
-  height: 32px;
 }
 .rag-target-row button {
   min-width: 96px;
@@ -873,14 +912,28 @@ td.name {
 }
 .toast {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  top: max(16px, env(safe-area-inset-top));
+  left: 50%;
+  z-index: 1000;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 24px));
   background: #172033;
   color: #fff;
   padding: 10px 12px;
   border-radius: var(--radius);
-  display: none;
-  max-width: 520px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.2);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, -10px);
+  transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
+  overflow-wrap: anywhere;
+  text-align: center;
+  pointer-events: none;
+}
+.toast.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
 }
 @media (max-width: 1200px) {
   .graph-layout {

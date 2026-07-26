@@ -34,7 +34,7 @@ from runtime_encoding import configure_utf8_runtime, decode_process_output
 
 LOGGER = logging.getLogger("doctriage")
 DEFAULT_UI_HOST = "127.0.0.1"
-DEFAULT_UI_PORT = 8765
+DEFAULT_UI_PORT = 18765
 
 
 @dataclass(slots=True)

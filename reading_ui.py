@@ -88,7 +88,7 @@ _SOURCE_FILE_SCAN_CACHE: dict[Path, tuple[float, list[Path]]] = {}
 _SOURCE_FILE_SCAN_CACHE_LOCK = threading.Lock()
 DEFAULT_LLM_ENDPOINT = "http://localhost:11434/api/generate"
 DEFAULT_EMBEDDING_ENDPOINT = "http://localhost:11434/api/embeddings"
-DEFAULT_ANYDOCS_URL = "http://127.0.0.1:8000/"
+DEFAULT_ANYDOCS_URL = "http://127.0.0.1:18766/"
 HTTP_PROBE_TIMEOUT_SECONDS = 5.0
 HTTP_PROBE_MAX_BYTES = 1024 * 1024
 UPLOAD_WORKSPACE_ROOT = PROJECT_ROOT / ".doctriage_uploads"
@@ -1199,9 +1199,11 @@ def anydocs_bundle_quality_stats(
     app_state: AppState, query: dict[str, str]
 ) -> dict[str, Any]:
     paths = reading_paths_from_payload(app_state, query) or require_paths(app_state)
+    decisions = load_bundle_decisions(paths.decisions_path)
+    selection = BundleSelection(min_quality=0)
     documents = select_documents(
-        load_bundle_decisions(paths.decisions_path),
-        BundleSelection(min_quality=0),
+        decisions,
+        selection,
     )
     histogram = [0] * 101
     for document in documents:
@@ -1213,8 +1215,14 @@ def anydocs_bundle_quality_stats(
         histogram[quality] += 1
     return {
         "total": len(documents),
+        "source_total": len(decisions),
+        "excluded_category_count": sum(
+            1
+            for decision in decisions
+            if str(decision.get("category") or "") in selection.exclude_categories
+        ),
         "histogram": histogram,
-        "excluded_categories": sorted(BundleSelection().exclude_categories),
+        "excluded_categories": sorted(selection.exclude_categories),
     }
 
 
@@ -1328,6 +1336,39 @@ def infer_openai_models_url(endpoint: str) -> str | None:
     models_path = "/" + "/".join(path_parts[: v1_index + 1] + ["models"])
     return urllib.parse.urlunparse(
         (parsed.scheme, parsed.netloc, models_path, "", "", "")
+    )
+
+
+def infer_openai_operation_url(endpoint: str, operation: str) -> str | None:
+    parsed = urllib.parse.urlparse(endpoint)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    path_parts = [part for part in parsed.path.split("/") if part]
+    lower_parts = [part.lower() for part in path_parts]
+    if "v1" not in lower_parts:
+        return None
+    v1_index = lower_parts.index("v1")
+    operation_path = "/" + "/".join(
+        path_parts[: v1_index + 1] + [operation.strip("/")]
+    )
+    return urllib.parse.urlunparse(
+        (parsed.scheme, parsed.netloc, operation_path, "", "", "")
+    )
+
+
+def probe_openai_embedding_model(
+    endpoint: str,
+    model: str,
+    headers: dict[str, str],
+) -> dict[str, Any] | None:
+    embeddings_url = infer_openai_operation_url(endpoint, "embeddings")
+    if not embeddings_url:
+        return None
+    return http_json_request(
+        embeddings_url,
+        method="POST",
+        payload={"model": model, "input": "DocTriage endpoint probe"},
+        headers=headers,
     )
 
 
@@ -1468,6 +1509,36 @@ def test_llm_connection(payload: dict[str, Any]) -> dict[str, Any]:
             names = extract_model_names(probe.get("json"))
             checked = bool(model)
             exists = model in names if checked else None
+            if role == "embedding" and checked and not exists:
+                embedding_probe = probe_openai_embedding_model(
+                    endpoint,
+                    model,
+                    headers,
+                )
+                if embedding_probe is not None:
+                    embedding_status = embedding_probe.get("status_code")
+                    embedding_ok = (
+                        bool(embedding_probe.get("reachable"))
+                        and embedding_status == 200
+                    )
+                    return {
+                        "ok": embedding_ok,
+                        "reachable": bool(embedding_probe.get("reachable")),
+                        "provider": "openai-compatible",
+                        "role": role,
+                        "endpoint": endpoint,
+                        "model": model,
+                        "model_checked": True,
+                        "model_exists": embedding_ok,
+                        "status_code": embedding_status,
+                        "models": names[:50],
+                        "message": (
+                            f"Model '{model}' accepted an embedding request even though it was not listed in /v1/models."
+                            if embedding_ok
+                            else f"Model '{model}' was not listed and the /v1/embeddings probe failed: "
+                            f"{embedding_probe.get('error') or f'HTTP {embedding_status}'}"
+                        ),
+                    }
             return {
                 "ok": not checked or bool(exists),
                 "reachable": True,
@@ -2334,6 +2405,14 @@ def can_use_folder_picker() -> bool:
         return False
     if os.name == "nt":
         return windows_folder_picker_command() is not None
+    if sys.platform == "darwin" and macos_folder_picker_command() is not None:
+        return True
+    if sys.platform.startswith("linux") and linux_folder_picker_command() is not None:
+        return True
+    return tkinter_folder_picker_available()
+
+
+def tkinter_folder_picker_available() -> bool:
     try:
         import tkinter  # noqa: F401
         root = tkinter.Tk()
@@ -2594,15 +2673,37 @@ def upload_workspace_payload(upload_id: str, manifest: dict[str, Any] | None = N
     manifest = manifest or read_upload_manifest(upload_id)
     source_dir = upload_source_dir(upload_id)
     output_root = upload_output_root(upload_id)
+    roots = upload_manifest_roots(manifest)
     return {
         "upload_id": validate_upload_id(upload_id),
         "source_dir": str(source_dir),
         "output_root": str(output_root),
         "file_count": int(manifest.get("file_count") or 0),
         "total_bytes": int(manifest.get("total_bytes") or 0),
+        "root_count": len(roots),
+        "roots": roots,
         "complete": bool(manifest.get("complete")),
         "workspace": str(upload_workspace_path(upload_id)),
     }
+
+
+def upload_manifest_roots(manifest: dict[str, Any]) -> list[str]:
+    roots: set[str] = set()
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        return []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        try:
+            relative_path = normalize_upload_relative_path(
+                str(item.get("relative_path") or "")
+            )
+        except ValueError:
+            continue
+        if len(relative_path.parts) > 1:
+            roots.add(relative_path.parts[0])
+    return sorted(roots, key=str.casefold)
 
 
 def save_upload_file(
@@ -2617,11 +2718,13 @@ def save_upload_file(
     previous_size = target_path.stat().st_size if target_path.exists() else 0
     target_path.write_bytes(content)
     size = len(content)
+    manifest_files = manifest.get("files")
     files = [
         item
-        for item in manifest.get("files", [])
-        if str(item.get("relative_path") or "") != normalized_relative
-    ]
+        for item in manifest_files
+        if isinstance(item, dict)
+        and str(item.get("relative_path") or "") != normalized_relative
+    ] if isinstance(manifest_files, list) else []
     files.append(
         {
             "relative_path": normalized_relative,
@@ -3872,6 +3975,14 @@ def pick_folder() -> dict[str, str]:
         )
     if os.name == "nt":
         return {"path": pick_folder_windows()}
+    if sys.platform == "darwin" and macos_folder_picker_command() is not None:
+        return {"path": pick_folder_macos()}
+    if sys.platform.startswith("linux") and linux_folder_picker_command() is not None:
+        return {"path": pick_folder_linux()}
+    return {"path": pick_folder_tkinter()}
+
+
+def pick_folder_tkinter() -> str:
     try:
         import tkinter as tk
         from tkinter import filedialog
@@ -3885,7 +3996,77 @@ def pick_folder() -> dict[str, str]:
         selected = filedialog.askdirectory()
     finally:
         root.destroy()
-    return {"path": selected or ""}
+    return selected or ""
+
+
+def macos_folder_picker_command() -> str | None:
+    return shutil.which("osascript")
+
+
+def pick_folder_macos() -> str:
+    command = macos_folder_picker_command()
+    if command is None:
+        raise RuntimeError("macOS folder picker requires osascript.")
+    return run_folder_picker_command(
+        [
+            command,
+            "-e",
+            'POSIX path of (choose folder with prompt "Select DocTriage folder")',
+        ],
+        label="macOS",
+        cancel_codes={1},
+    )
+
+
+def linux_folder_picker_command() -> tuple[str, str] | None:
+    zenity = shutil.which("zenity")
+    if zenity:
+        return "zenity", zenity
+    kdialog = shutil.which("kdialog")
+    if kdialog:
+        return "kdialog", kdialog
+    return None
+
+
+def pick_folder_linux() -> str:
+    picker = linux_folder_picker_command()
+    if picker is None:
+        raise RuntimeError("Linux folder picker requires zenity or kdialog.")
+    kind, command = picker
+    arguments = (
+        [command, "--file-selection", "--directory", "--title=Select DocTriage folder"]
+        if kind == "zenity"
+        else [command, "--getexistingdirectory", ".", "--title", "Select DocTriage folder"]
+    )
+    return run_folder_picker_command(
+        arguments,
+        label="Linux",
+        cancel_codes={1},
+    )
+
+
+def run_folder_picker_command(
+    command: list[str],
+    *,
+    label: str,
+    cancel_codes: set[int],
+) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=False,
+            timeout=None,
+        )
+    except OSError as exc:
+        raise RuntimeError(f"{label} folder picker failed to start: {exc}") from exc
+    stdout = decode_process_output(result.stdout).strip()
+    stderr = decode_process_output(result.stderr).strip()
+    if result.returncode in cancel_codes and not stdout:
+        return ""
+    if result.returncode != 0:
+        raise RuntimeError(f"{label} folder picker failed: {stderr or stdout}")
+    return stdout
 
 
 def windows_folder_picker_command() -> str | None:
@@ -4708,7 +4889,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-dir", type=Path)
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=18765)
     parser.add_argument("--no-open-browser", action="store_true")
     return parser
 

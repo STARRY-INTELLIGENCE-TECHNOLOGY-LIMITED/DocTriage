@@ -78,10 +78,17 @@ Linux 和 macOS 使用同样流程，将激活命令换成 `source .venv/bin/act
 启动浏览器控制台：
 
 ```powershell
-doctriage-reading-ui --host 127.0.0.1 --port 8765
+doctriage-reading-ui --host 127.0.0.1 --port 18765
 ```
 
-打开 `http://127.0.0.1:8765/`。
+打开 `http://127.0.0.1:18765/`。
+
+### 文件夹输入与跨平台路径
+
+- “服务器路径”读取 DocTriage 服务所在机器的目录，并递归扫描所有子目录。核心任务使用一个源根目录，以保持相对路径、续跑状态和关系结果稳定。
+- 需要同时处理多个根目录时，切换到“上传文档”，从“添加文档”菜单选择文件夹。浏览器支持时可一次多选，也可以重复添加；它们会合并到一个受管上传工作区，同名根目录自动改为 `目录 (2)`，不会覆盖已有内容。
+- 浏览器上传的是当前电脑中的文件内容；“服务器路径”则必须是服务器可访问的路径。远程部署时，两者不要混用。
+- Windows 路径示例为 `D:\资料`，Linux 为 `/home/name/documents`，macOS 为 `/Users/name/Documents`。Linux 无图形桌面时可直接填写路径；macOS 优先使用系统目录对话框，Linux 优先使用 Zenity/KDialog，并在不可用时回退 Tk。
 
 大型目录建议首轮使用 plan-only：
 
@@ -101,7 +108,7 @@ doctriage `
 如果命令行入口没有进入 `PATH`，可以直接从仓库运行：
 
 ```powershell
-.\.venv\Scripts\python.exe reading_ui.py --host 127.0.0.1 --port 8765
+.\.venv\Scripts\python.exe reading_ui.py --host 127.0.0.1 --port 18765
 .\.venv\Scripts\python.exe main.py --help
 ```
 
@@ -189,7 +196,7 @@ OUTPUT_ROOT/
 浏览器控制台提供 **Agent 编译** 页，可选对接 [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents)。它会导出 `OUTPUT_ROOT/_relationships/doctriage_bundle.json`，并用类似下面的 URL 打开 AnyDocsToAgents：
 
 ```text
-http://127.0.0.1:8000/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json&autoplan=1#view-planner
+http://127.0.0.1:18766/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json&autoplan=1#view-planner
 ```
 
 这是松耦合桥接：DocTriage 不启动、不嵌入、不依赖 AnyDocsToAgents。两个项目仍可独立运行。
@@ -205,7 +212,7 @@ doctriage-bundle `
   --min-quality 75
 ```
 
-bundle 默认排除 `LowQuality`。只有下游明确需要时才用 `--exclude-categories ""` 取消该过滤。若关系挖掘的最终状态为 `error`，常规导出会停止，避免把不完整图谱伪装成完整结果；只有明确需要 metadata-only bundle 时才传 `--allow-partial`，下游应展示其 warning，并在重新生成关系前以摘要检索为主。
+bundle 默认不排除任何类别，因此 `--min-quality 0` 也会包含 `LowQuality` 文档。只有下游明确需要时才使用 `--exclude-categories LowQuality`。`is_partial` 与 `warnings` 只表示必需文档数据不完整；关系、RAG 或摘要等可选能力缺失或失败会写入 `advisories`，不会阻止导出。下游应同时展示两种信息，但不应把可选能力缺失误判为 bundle 失败。
 
 ## 语言
 

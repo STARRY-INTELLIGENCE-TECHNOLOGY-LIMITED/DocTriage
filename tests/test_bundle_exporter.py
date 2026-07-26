@@ -142,7 +142,7 @@ def test_bundle_ignores_non_terminal_decisions_and_dedupes_by_relative_path(
     assert latest[0]["category"] == "Architecture"
 
 
-def test_bundle_defaults_to_excluding_low_quality_documents(tmp_path: Path) -> None:
+def test_bundle_includes_low_quality_unless_explicitly_excluded(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"
     state_dir = output_root / "_state"
@@ -179,13 +179,23 @@ def test_bundle_defaults_to_excluding_low_quality_documents(tmp_path: Path) -> N
     )
     payload = json.loads(export_bundle(settings).read_text(encoding="utf-8"))
 
-    assert [item["paths"]["relative"] for item in payload["documents"]] == [
+    assert {
+        item["paths"]["relative"] for item in payload["documents"]
+    } == {"good.md", "low.md"}
+    assert payload["selection_policy"]["exclude_categories"] == []
+
+    filtered_path = export_bundle(
+        settings,
+        selection=BundleSelection(exclude_categories={"LowQuality"}),
+    )
+    filtered = json.loads(filtered_path.read_text(encoding="utf-8"))
+    assert [item["paths"]["relative"] for item in filtered["documents"]] == [
         "good.md"
     ]
-    assert payload["selection_policy"]["exclude_categories"] == ["LowQuality"]
+    assert filtered["selection_policy"]["exclude_categories"] == ["LowQuality"]
 
 
-def test_bundle_blocks_failed_relationship_phase_unless_partial_is_explicit(
+def test_bundle_reports_failed_relationship_phase_as_optional_advisory(
     tmp_path: Path,
 ) -> None:
     source_dir = tmp_path / "source"
@@ -217,17 +227,12 @@ def test_bundle_blocks_failed_relationship_phase_unless_partial_is_explicit(
         OUTPUT_ROOT=output_root,
     )
 
-    with pytest.raises(RuntimeError, match="Relationship mining failed"):
-        export_bundle(settings)
-
-    output_path = export_bundle(
-        settings,
-        selection=BundleSelection(allow_partial=True),
-    )
+    output_path = export_bundle(settings)
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["pipeline_status"]["relations"] == "error"
-    assert payload["is_partial"] is True
-    assert any("failed" in warning.lower() for warning in payload["warnings"])
+    assert payload["is_partial"] is False
+    assert payload["warnings"] == []
+    assert any("failed" in item.lower() for item in payload["advisories"])
     assert payload["artifacts"]["relations"]["exists"] is False
 
 
@@ -262,6 +267,7 @@ def test_bundle_payload_exposes_pipeline_and_artifact_metadata(tmp_path: Path) -
         "pipeline_status",
         "is_partial",
         "warnings",
+        "advisories",
         "artifacts",
     }
     assert payload["pipeline_status"] == {
@@ -269,6 +275,8 @@ def test_bundle_payload_exposes_pipeline_and_artifact_metadata(tmp_path: Path) -
         "relations": "not_run",
         "rag": "not_run",
     }
+    assert payload["is_partial"] is False
+    assert any("RAG" in item for item in payload["advisories"])
     assert payload["artifacts"]["decisions"]["exists"] is True
 
 

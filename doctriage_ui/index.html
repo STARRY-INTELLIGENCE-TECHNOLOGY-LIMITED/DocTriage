@@ -56,15 +56,19 @@
         <div class="source-mode-panel">
           <div class="segmented-control" role="group" aria-label="Source mode">
             <button id="source_mode_path_btn" class="active" onclick="setSourceMode('path')" data-i18n="source_mode_path">服务器路径</button>
-            <button id="source_mode_files_btn" onclick="setSourceMode('files')" data-i18n="source_mode_files">上传文件</button>
-            <button id="source_mode_folder_btn" onclick="setSourceMode('folder')" data-i18n="source_mode_folder">上传文件夹</button>
+            <button id="source_mode_upload_btn" onclick="setSourceMode('upload')" data-i18n="source_mode_upload">上传文档</button>
           </div>
           <div id="upload_panel" class="upload-panel" hidden>
             <input id="upload_files_input" class="hidden-sync-input" type="file" multiple />
             <input id="upload_folder_input" class="hidden-sync-input" type="file" multiple webkitdirectory directory />
             <div class="upload-actions">
-              <button id="pick_upload_files_btn" onclick="pickUploadFiles()" data-i18n="pick_upload_files">选择文件</button>
-              <button id="pick_upload_folder_btn" onclick="pickUploadFolder()" data-i18n="pick_upload_folder">选择文件夹</button>
+              <div class="upload-source-picker">
+                <button id="pick_upload_btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="upload_source_menu" onclick="toggleUploadSourceMenu(event)"><span data-i18n="add_upload_documents">添加文档</span><span class="menu-chevron" aria-hidden="true">▾</span></button>
+                <div id="upload_source_menu" class="upload-source-menu" role="menu" hidden>
+                  <button id="pick_upload_files_btn" type="button" role="menuitem" onclick="pickUploadFiles()" data-i18n="pick_upload_files">选择文件</button>
+                  <button id="pick_upload_folder_btn" type="button" role="menuitem" onclick="pickUploadFolder()" data-i18n="pick_upload_folder">选择文件夹</button>
+                </div>
+              </div>
               <button id="clear_upload_workspace_btn" onclick="clearUploadWorkspace()" data-i18n="clear_upload_workspace">清理上传</button>
             </div>
             <div id="uploadStats" class="stats"></div>
@@ -249,6 +253,7 @@
                 <option value="Thinking">Thinking</option>
                 <option value="Series">Series</option>
               </select>
+              <span class="multi-actions"><button onclick="selectMulti('rag_categories', true)" data-i18n="select_all">全选</button><button onclick="invertMulti('rag_categories')" data-i18n="invert">反选</button></span>
             </label>
             <label><span data-i18n="rag_limit">文档上限</span> <input id="rag_limit" type="number" min="1" placeholder="空为全量" data-i18n-placeholder="ph_limit" /></label>
             <label><span data-i18n="rag_chunk_max_chars">切片长度</span> <input id="rag_chunk_max_chars" type="number" min="200" value="1400" /></label>
@@ -305,7 +310,7 @@
         <div class="anydocs-toolbar">
           <div class="anydocs-target-row">
             <input id="anydocs_output_root" class="hidden-sync-input" tabindex="-1" aria-hidden="true" />
-            <label><span data-i18n="anydocs_url">AnyDocsToAgents 地址</span> <input id="anydocs_url" value="http://127.0.0.1:8000/" /></label>
+            <label><span data-i18n="anydocs_url">AnyDocsToAgents 地址</span> <input id="anydocs_url" value="http://127.0.0.1:18766/" /></label>
             <label><span data-i18n="anydocs_bundle_path">Bundle 路径</span> <input id="anydocs_bundle_path" readonly /></label>
           </div>
           <div class="anydocs-selection-row">
@@ -332,7 +337,7 @@
     </section>
   </main>
   <div id="tooltip" class="floating-tip"></div>
-  <div id="toast" class="toast"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/assets/app.js"></script>
 </body>
 </html>

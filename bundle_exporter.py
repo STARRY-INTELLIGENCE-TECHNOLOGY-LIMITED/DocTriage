@@ -34,7 +34,7 @@ class BundleSelection:
     limit: int | None = None
     prefer_target_path: bool = False
     include_summaries: bool = True
-    exclude_categories: set[str] = field(default_factory=lambda: {"LowQuality"})
+    exclude_categories: set[str] = field(default_factory=set)
     allow_partial: bool = False
 
 
@@ -53,12 +53,6 @@ def export_bundle(
     documents = select_documents(decisions, current_selection)
     relations = load_relations_for_documents(relations_path, documents)
     pipeline_status = build_pipeline_status(current_settings)
-    relation_phase = str(pipeline_status.get("relations") or "").lower()
-    if relation_phase == "error" and not current_selection.allow_partial:
-        raise RuntimeError(
-            "Relationship mining failed. Re-run it or pass --allow-partial to export "
-            "a metadata-only bundle."
-        )
     payload = build_bundle_payload(
         title=title,
         settings=current_settings,
@@ -263,6 +257,12 @@ def build_bundle_payload(
         relations=relations,
         pipeline_status=current_pipeline_status,
     )
+    advisories = build_bundle_advisories(
+        settings=settings,
+        documents=documents,
+        relations=relations,
+        pipeline_status=current_pipeline_status,
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "title": title,
@@ -282,6 +282,7 @@ def build_bundle_payload(
         "pipeline_status": current_pipeline_status,
         "is_partial": bool(warnings),
         "warnings": warnings,
+        "advisories": advisories,
         "artifacts": build_artifact_metadata(settings),
         "statistics": {
             "document_count": len(documents),
@@ -324,6 +325,8 @@ def build_bundle_warnings(
     pipeline_status: dict[str, str],
 ) -> list[str]:
     warnings: list[str] = []
+    if not documents:
+        warnings.append("Bundle contains no selected documents.")
     if str(pipeline_status.get("analysis") or "").lower() == "partial":
         analysis_summary = read_json_object(settings.state_dir / "run_summary.json")
         unresolved_failures = unresolved_analysis_failures(analysis_summary)
@@ -334,21 +337,32 @@ def build_bundle_warnings(
             f"Document analysis completed with failures{detail}; "
             "document metadata may be incomplete."
         )
+    return warnings
+
+
+def build_bundle_advisories(
+    *,
+    settings: Settings,
+    documents: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    pipeline_status: dict[str, str],
+) -> list[str]:
+    advisories: list[str] = []
     relation_phase = str(pipeline_status.get("relations") or "").lower()
     if relation_phase == "error":
-        warnings.append("Relationship mining failed; relations may be incomplete.")
+        advisories.append("Relationship mining failed; relation signals are unavailable.")
     elif not settings.relationship_relations_path.exists():
-        warnings.append("Relationship artifact is not available.")
+        advisories.append("Relationship artifact is not available.")
     if not relations:
-        warnings.append("Bundle contains no selected document relations.")
+        advisories.append("Bundle contains no selected document relations.")
     if not settings.rag_manifest_path.exists():
-        warnings.append("RAG index is not available.")
+        advisories.append("RAG index is not available.")
     if any(
         not str(document.get("text", {}).get("summary") or "").strip()
         for document in documents
     ):
-        warnings.append("Some selected documents have no summary.")
-    return warnings
+        advisories.append("Some selected documents have no summary.")
+    return advisories
 
 
 def unresolved_analysis_failures(summary: dict[str, Any]) -> int:
@@ -514,8 +528,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--exclude-categories",
-        default="LowQuality",
-        help="Comma-separated category deny-list; defaults to LowQuality.",
+        default="",
+        help="Optional comma-separated category deny-list; defaults to no exclusions.",
     )
     parser.add_argument(
         "--allow-partial",

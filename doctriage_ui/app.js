@@ -11,11 +11,13 @@ const I18N = {
     output_dir: "输出目录",
     current_output_root: "当前输出目录",
     source_mode_path: "服务器路径",
-    source_mode_files: "上传文件",
-    source_mode_folder: "上传文件夹",
+    source_mode_upload: "上传文档",
+    add_upload_documents: "添加文档",
     pick_upload_files: "选择文件",
     pick_upload_folder: "选择文件夹",
     clear_upload_workspace: "清理上传",
+    upload_empty: "尚未添加文档",
+    folders_unit: "文件夹",
     pick_source_dir: "选择源目录",
     pick_output_dir: "选择输出目录",
     model: "模型",
@@ -45,6 +47,7 @@ const I18N = {
     quality_stats_unavailable: "暂无可用的质量分布。",
     quality_current_stats: "当前 {value}+：{count}/{total} 篇（{percent}%）",
     quality_distribution: "累计分布（阈值及以上）",
+    quality_category_exclusions: "类别预排除：{count}/{total} 篇（{categories}）",
     pick_folder: "选择目录",
     reading_scope: "阅读范围",
     scope_analysis: "分析结果",
@@ -336,7 +339,7 @@ const I18N = {
     folder_picker_unavailable: "当前环境不支持图形目录选择，请手工输入路径",
     operation_failed: "操作失败",
     tip_current_output_root: "阅读台、关系图谱、RAG 索引和 Agent 编译共用的已分析输出目录。切换这里不会改动分析页的源目录和输出目录。",
-    tip_bundle_min_quality: "只导出达到此分数的文档。默认为 0，即不按质量分过滤；不会自动继承分析页或阅读台阈值。",
+    tip_bundle_min_quality: "默认为 0，即不按质量分或类别过滤；不会继承分析页或阅读台阈值。",
     tip_upload_source: "浏览器会把选中文件上传到服务器工作区，分析任务读取服务器端副本。适合 DocTriage 运行在远程服务器时使用。",
     tip_source_dir: "待分析的原始文档目录。程序会递归扫描其下支持的文件类型。不要把输出目录放到这个目录里面。",
     tip_output_dir: "写入进度、日志、评分结果和可选复制结果的目录。同一输出目录会自动续跑；同一时间只允许一个分析进程写入。",
@@ -398,11 +401,13 @@ const I18N = {
     output_dir: "Output directory",
     current_output_root: "Current output directory",
     source_mode_path: "Server path",
-    source_mode_files: "Upload files",
-    source_mode_folder: "Upload folder",
+    source_mode_upload: "Upload documents",
+    add_upload_documents: "Add documents",
     pick_upload_files: "Choose files",
     pick_upload_folder: "Choose folder",
     clear_upload_workspace: "Clear upload",
+    upload_empty: "No documents added",
+    folders_unit: "Folders",
     pick_source_dir: "Pick source",
     pick_output_dir: "Pick output",
     model: "Model",
@@ -432,6 +437,7 @@ const I18N = {
     quality_stats_unavailable: "Quality distribution is unavailable.",
     quality_current_stats: "Current {value}+: {count}/{total} docs ({percent}%)",
     quality_distribution: "Cumulative distribution (threshold and above)",
+    quality_category_exclusions: "Category pre-filter: {count}/{total} docs ({categories})",
     pick_folder: "Pick folder",
     reading_scope: "Reading scope",
     scope_analysis: "Analysis results",
@@ -723,7 +729,7 @@ const I18N = {
     folder_picker_unavailable: "Folder picker is unavailable here; type the path manually",
     operation_failed: "Operation failed",
     tip_current_output_root: "Shared analyzed output directory for Reading, Graph, RAG, and Agent compile. Changing it does not alter the Analysis source/output fields.",
-    tip_bundle_min_quality: "Export only documents at or above this score. The default is 0, so quality score does not filter the handoff; Analysis and Reading thresholds are not inherited automatically.",
+    tip_bundle_min_quality: "The default is 0, so neither quality score nor category filters the bundle. Analysis and Reading thresholds are not inherited.",
     tip_upload_source: "The browser uploads selected files into a server workspace, and analysis reads the server-side copy. Use this when DocTriage runs on a remote server.",
     tip_source_dir: "Original document directory. DocTriage recursively scans supported file types under this folder.",
     tip_output_dir: "Directory for progress, logs, scoring results, and optional routed copies. A run can resume from the same output directory.",
@@ -806,6 +812,9 @@ let lastSyncedAnydocsOutputRoot = "";
 let anydocsStandaloneBundleMinQuality = "0";
 let anydocsBundleQualityHistogram = [];
 let anydocsBundleQualityTotal = 0;
+let anydocsBundleSourceTotal = 0;
+let anydocsBundleExcludedCategoryCount = 0;
+let anydocsBundleExcludedCategories = [];
 let anydocsQualityStatsKey = "";
 let lastAnalysisPayload = null;
 let relationshipLaunchPending = null;
@@ -818,7 +827,7 @@ let graphActionBusy = false;
 let ragActionBusy = false;
 let relationshipLaunchToken = 0;
 let configuredEmbeddingEndpoint = "";
-let sourceMode = localStorage.getItem("doctriage_source_mode") || "path";
+let sourceMode = "path";
 let currentUploadWorkspace = null;
 let uploadBusy = false;
 const DEFAULT_EMBEDDING_ENDPOINT = "http://localhost:11434/api/embeddings";
@@ -828,7 +837,7 @@ const READING_TARGET_STORAGE_KEY = "doctriage_reading_target";
 const GRAPH_TARGET_STORAGE_KEY = "doctriage_graph_target";
 const RAG_TARGET_STORAGE_KEY = "doctriage_rag_target";
 const ANYDOCS_TARGET_STORAGE_KEY = "doctriage_anydocs_target";
-const DEFAULT_ANYDOCS_URL = "http://127.0.0.1:8000/";
+const DEFAULT_ANYDOCS_URL = "http://127.0.0.1:18766/";
 const RUN_FORM_VALUE_FIELDS = [
   "run_source_dir",
   "run_output_root",
@@ -1411,6 +1420,7 @@ function initRunFormPersistence() {
     if (!element) continue;
     const eventName = element.tagName === "INPUT" && element.type !== "checkbox" ? "input" : "change";
     element.addEventListener(eventName, () => {
+      if (id === "run_source_dir" || id === "run_output_root") syncSourceModeFromRunPaths();
       if (id === "run_output_root") syncReadingTargetFromRunOutput({force: true});
       if (id === "run_source_dir") syncReadingSourceFromRunIfLinked();
       saveRunFormState();
@@ -1651,6 +1661,7 @@ async function loadConfig() {
   if (!ragApplied) syncRagTargetFromReadingOutput({force: true});
   if (!anydocsApplied) syncAnydocsTargetFromGraphOutput({force: true});
   normalizeSharedTargetFromTargets({persist: true});
+  syncSourceModeFromRunPaths();
   for (const id of ["pick_source_btn", "pick_output_btn", "pick_global_output_btn"]) {
     if ($(id)) {
       $(id).disabled = capabilities.folder_picker === false;
@@ -1667,6 +1678,9 @@ async function loadConfig() {
 }
 
 async function pickFolder(targetId) {
+  if (targetId === "run_source_dir" || targetId === "run_output_root") {
+    setSourceMode("path");
+  }
   const response = await fetch("/api/pick-folder", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -1916,25 +1930,54 @@ async function ensureEndpointReady(_requestPayload, {role = "analysis", endpoint
 }
 
 function setSourceMode(mode) {
-  sourceMode = ["path", "files", "folder"].includes(mode) ? mode : "path";
-  localStorage.setItem("doctriage_source_mode", sourceMode);
+  sourceMode = mode === "upload" ? "upload" : "path";
   renderSourceMode();
 }
 
 function renderSourceMode() {
-  for (const mode of ["path", "files", "folder"]) {
+  for (const mode of ["path", "upload"]) {
     const button = $(`source_mode_${mode}_btn`);
     if (button) button.classList.toggle("active", sourceMode === mode);
   }
   const uploadPanel = $("upload_panel");
   if (uploadPanel) uploadPanel.hidden = sourceMode === "path";
-  if ($("pick_source_btn")) $("pick_source_btn").disabled = sourceMode !== "path" || capabilities.folder_picker === false;
-  if ($("run_source_dir")) $("run_source_dir").readOnly = sourceMode !== "path";
-  if ($("run_output_root")) $("run_output_root").readOnly = sourceMode !== "path";
+  if ($("pick_source_btn")) $("pick_source_btn").disabled = capabilities.folder_picker === false;
+  if (sourceMode === "path") closeUploadSourceMenu();
   renderUploadStats();
 }
 
+function runPathsMatchUploadWorkspace() {
+  if (!currentUploadWorkspace) return false;
+  return runPathKey($("run_source_dir").value, $("run_output_root").value) === runPathKey(
+    currentUploadWorkspace.source_dir,
+    currentUploadWorkspace.output_root
+  );
+}
+
+function syncSourceModeFromRunPaths() {
+  setSourceMode(runPathsMatchUploadWorkspace() ? "upload" : "path");
+}
+
+function setUploadSourceMenuOpen(open) {
+  const menu = $("upload_source_menu");
+  const button = $("pick_upload_btn");
+  if (menu) menu.hidden = !open;
+  if (button) button.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function closeUploadSourceMenu() {
+  setUploadSourceMenuOpen(false);
+}
+
+function toggleUploadSourceMenu(event) {
+  if (uploadBusy) return;
+  if (event) event.stopPropagation();
+  const menu = $("upload_source_menu");
+  setUploadSourceMenuOpen(!menu || menu.hidden);
+}
+
 function pickUploadFiles() {
+  closeUploadSourceMenu();
   const input = $("upload_files_input");
   if (!input || uploadBusy) return;
   input.value = "";
@@ -1942,6 +1985,7 @@ function pickUploadFiles() {
 }
 
 function pickUploadFolder() {
+  closeUploadSourceMenu();
   const input = $("upload_folder_input");
   if (!input || uploadBusy) return;
   input.value = "";
@@ -1953,6 +1997,10 @@ function initUploadControls() {
   if (fileInput) fileInput.addEventListener("change", () => uploadSelectedFiles(fileInput.files, {folder: false}));
   const folderInput = $("upload_folder_input");
   if (folderInput) folderInput.addEventListener("change", () => uploadSelectedFiles(folderInput.files, {folder: true}));
+  document.addEventListener("click", closeUploadSourceMenu);
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") closeUploadSourceMenu();
+  });
   renderSourceMode();
 }
 
@@ -1966,27 +2014,49 @@ async function ensureUploadWorkspace() {
   return payload;
 }
 
-function uploadRelativePath(file, {folder = false} = {}) {
+function uploadRelativePath(file, {folder = false, rootAliases = new Map()} = {}) {
   const rawPath = folder && file.webkitRelativePath ? file.webkitRelativePath : file.name;
-  return String(rawPath || file.name || "upload.bin").replace(/\\/g, "/").replace(/^\/+/, "");
+  const normalized = String(rawPath || file.name || "upload.bin").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!folder || !normalized.includes("/")) return normalized;
+  const parts = normalized.split("/");
+  parts[0] = rootAliases.get(parts[0]) || parts[0];
+  return parts.join("/");
+}
+
+function buildFolderRootAliases(fileList) {
+  const existingRoots = new Set(currentUploadWorkspace?.roots || []);
+  const aliases = new Map();
+  for (const file of Array.from(fileList || [])) {
+    const relativePath = String(file.webkitRelativePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+    const root = relativePath.includes("/") ? relativePath.split("/", 1)[0] : "";
+    if (!root || aliases.has(root)) continue;
+    let alias = root;
+    let suffix = 2;
+    while (existingRoots.has(alias)) {
+      alias = `${root} (${suffix})`;
+      suffix += 1;
+    }
+    aliases.set(root, alias);
+    existingRoots.add(alias);
+  }
+  return aliases;
 }
 
 async function uploadSelectedFiles(fileList, {folder = false} = {}) {
   const files = Array.from(fileList || []);
   if (!files.length) return showToast(tr("upload_no_files"));
-  sourceMode = folder ? "folder" : "files";
-  localStorage.setItem("doctriage_source_mode", sourceMode);
-  renderSourceMode();
+  setSourceMode("upload");
   uploadBusy = true;
   updateUploadButtons();
   if ($("uploadBar")) $("uploadBar").style.width = "0%";
   try {
     const workspace = await ensureUploadWorkspace();
+    const rootAliases = folder ? buildFolderRootAliases(files) : new Map();
     renderUploadStats(trf("upload_started", {count: files.length}));
     let uploaded = 0;
     let uploadedBytes = 0;
     for (const file of files) {
-      const relativePath = uploadRelativePath(file, {folder});
+      const relativePath = uploadRelativePath(file, {folder, rootAliases});
       const response = await fetch(`/api/uploads/${workspace.upload_id}/files?relative_path=${encodeURIComponent(relativePath)}`, {
         method: "POST",
         headers: {"Content-Type": "application/octet-stream"},
@@ -2027,6 +2097,7 @@ function applyUploadWorkspacePaths(payload) {
   if (!payload) return;
   if ($("run_source_dir")) $("run_source_dir").value = payload.source_dir || "";
   if ($("run_output_root")) $("run_output_root").value = payload.output_root || "";
+  setSourceMode("upload");
   lastAppliedRunPathKey = runPathKey($("run_source_dir").value, $("run_output_root").value);
   saveRunFormState();
   syncReadingTargetFromRunOutput({force: true});
@@ -2035,6 +2106,7 @@ function applyUploadWorkspacePaths(payload) {
 async function clearUploadWorkspace() {
   if (!currentUploadWorkspace || !currentUploadWorkspace.upload_id || uploadBusy) {
     currentUploadWorkspace = null;
+    setSourceMode("path");
     if ($("uploadBar")) $("uploadBar").style.width = "0%";
     renderUploadStats();
     return;
@@ -2044,13 +2116,14 @@ async function clearUploadWorkspace() {
   const payload = await response.json();
   if (!response.ok) return showToast(payload.error || tr("upload_failed"));
   currentUploadWorkspace = null;
+  setSourceMode("path");
   if ($("uploadBar")) $("uploadBar").style.width = "0%";
   renderUploadStats();
   showToast(tr("upload_cleared"));
 }
 
 function updateUploadButtons() {
-  for (const id of ["pick_upload_files_btn", "pick_upload_folder_btn", "clear_upload_workspace_btn"]) {
+  for (const id of ["pick_upload_btn", "pick_upload_files_btn", "pick_upload_folder_btn", "clear_upload_workspace_btn"]) {
     const button = $(id);
     if (button) button.disabled = uploadBusy;
   }
@@ -2064,11 +2137,18 @@ function renderUploadStats(message = "") {
   if (currentUploadWorkspace && currentUploadWorkspace.upload_id) {
     parts.push(`ID ${currentUploadWorkspace.upload_id.slice(0, 8)}`);
     parts.push(`${tr("documents_unit")} ${Number(currentUploadWorkspace.file_count || 0)}`);
+    if (Number(currentUploadWorkspace.root_count || 0) > 0) {
+      parts.push(`${tr("folders_unit")} ${Number(currentUploadWorkspace.root_count)}`);
+    }
     parts.push(formatBytes(currentUploadWorkspace.total_bytes || 0));
   } else if (sourceMode !== "path") {
-    parts.push(tr("tip_upload_source"));
+    parts.push(tr("upload_empty"));
   }
   target.innerHTML = parts.map(item => `<span class="pill">${escapeHtml(item)}</span>`).join("");
+  const clearButton = $("clear_upload_workspace_btn");
+  if (clearButton) {
+    clearButton.disabled = uploadBusy || !currentUploadWorkspace?.upload_id;
+  }
 }
 
 function formatBytes(value) {
@@ -2307,7 +2387,7 @@ async function toggleAnalysis() {
 
 async function startAnalysis(currentPayload = null) {
   saveRunFormState();
-  if (sourceMode !== "path" && (!currentUploadWorkspace || !currentUploadWorkspace.complete)) {
+  if (sourceMode === "upload" && (!currentUploadWorkspace || !currentUploadWorkspace.complete)) {
     return showToast(tr("upload_no_files"));
   }
   const requestPayload = runPayload();
@@ -3266,12 +3346,18 @@ function renderAnydocsQualityStats() {
       + anydocsBundleQualityTotal.toLocaleString() + " ("
       + qualityPercent(count, anydocsBundleQualityTotal) + "%)";
   });
-  helpElement.dataset.tip = [
-    tr("tip_bundle_min_quality"),
-    "",
-    tr("quality_distribution"),
-    ...bands
-  ].join("\n");
+  const categoryExclusion = anydocsBundleExcludedCategoryCount > 0
+    || anydocsBundleExcludedCategories.length
+    ? trf("quality_category_exclusions", {
+      count: anydocsBundleExcludedCategoryCount.toLocaleString(),
+      total: anydocsBundleSourceTotal.toLocaleString(),
+      categories: anydocsBundleExcludedCategories.join(", ") || "-"
+    })
+    : "";
+  const helpLines = [tr("tip_bundle_min_quality")];
+  if (categoryExclusion) helpLines.push(categoryExclusion);
+  helpLines.push("", tr("quality_distribution"), ...bands);
+  helpElement.dataset.tip = helpLines.join("\n");
   refreshHelpTooltip();
 }
 
@@ -3280,6 +3366,9 @@ async function loadAnydocsQualityStats() {
   if (!paths.output_root) {
     anydocsBundleQualityHistogram = [];
     anydocsBundleQualityTotal = 0;
+    anydocsBundleSourceTotal = 0;
+    anydocsBundleExcludedCategoryCount = 0;
+    anydocsBundleExcludedCategories = [];
     renderAnydocsQualityStats();
     return;
   }
@@ -3298,10 +3387,18 @@ async function loadAnydocsQualityStats() {
     if (!response.ok) throw new Error(payload.error || tr("quality_stats_unavailable"));
     anydocsBundleQualityHistogram = Array.isArray(payload.histogram) ? payload.histogram : [];
     anydocsBundleQualityTotal = Number(payload.total || 0);
+    anydocsBundleSourceTotal = Number(payload.source_total || anydocsBundleQualityTotal);
+    anydocsBundleExcludedCategoryCount = Number(payload.excluded_category_count || 0);
+    anydocsBundleExcludedCategories = Array.isArray(payload.excluded_categories)
+      ? payload.excluded_categories
+      : [];
     anydocsQualityStatsKey = statsKey;
   } catch (error) {
     anydocsBundleQualityHistogram = [];
     anydocsBundleQualityTotal = 0;
+    anydocsBundleSourceTotal = 0;
+    anydocsBundleExcludedCategoryCount = 0;
+    anydocsBundleExcludedCategories = [];
     anydocsQualityStatsKey = "";
   }
   renderAnydocsQualityStats();
@@ -3835,14 +3932,21 @@ function populateMultiSelect(id, values) {
 
 function selectMulti(id, checked) {
   Array.from($(id).options).forEach(option => option.selected = checked);
+  handleMultiSelectionChanged(id);
+}
+
+function handleMultiSelectionChanged(id) {
+  if (id === "rag_categories") {
+    saveRagTargetState();
+    return;
+  }
   currentPage = 1;
   applyClientFilters();
 }
 
 function invertMulti(id) {
   Array.from($(id).options).forEach(option => option.selected = !option.selected);
-  currentPage = 1;
-  applyClientFilters();
+  handleMultiSelectionChanged(id);
 }
 
 function countStatus(rows) {
@@ -4134,9 +4238,10 @@ function labelStatus(status) {
 
 function showToast(text) {
   const toast = $("toast");
+  window.clearTimeout(showToast.timer);
   toast.textContent = text;
-  toast.style.display = "block";
-  setTimeout(() => toast.style.display = "none", 2600);
+  toast.classList.add("show");
+  showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 2600);
 }
 
 function hideHelpTooltip() {

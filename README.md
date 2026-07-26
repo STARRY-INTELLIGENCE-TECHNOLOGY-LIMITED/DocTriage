@@ -78,10 +78,17 @@ Linux and macOS use the same flow with `source .venv/bin/activate` and `cp .env.
 Start the browser console:
 
 ```powershell
-doctriage-reading-ui --host 127.0.0.1 --port 8765
+doctriage-reading-ui --host 127.0.0.1 --port 18765
 ```
 
-Open `http://127.0.0.1:8765/`.
+Open `http://127.0.0.1:18765/`.
+
+### Folder input and cross-platform paths
+
+- **Server path** reads a directory on the machine running DocTriage and recursively scans all subdirectories. A run keeps one source root so relative paths, resume state, and relationship artifacts remain stable.
+- To process multiple roots together, switch to **Upload documents** and choose folders from the **Add documents** menu. Select several folders at once when supported, or add them repeatedly. They are merged into one managed upload workspace; duplicate root names become `Folder (2)` instead of overwriting existing files.
+- Browser upload sends file contents from the operator's computer. A server path must already be accessible to the server, so these inputs are not interchangeable in a remote deployment.
+- Example paths are `D:\documents` on Windows, `/home/name/documents` on Linux, and `/Users/name/Documents` on macOS. Headless Linux accepts manual paths; macOS prefers the system picker, while Linux prefers Zenity/KDialog and falls back to Tk when available.
 
 Recommended first pass for a large folder:
 
@@ -101,7 +108,7 @@ doctriage `
 If console scripts are not on `PATH`, run the modules from the checkout:
 
 ```powershell
-.\.venv\Scripts\python.exe reading_ui.py --host 127.0.0.1 --port 8765
+.\.venv\Scripts\python.exe reading_ui.py --host 127.0.0.1 --port 18765
 .\.venv\Scripts\python.exe main.py --help
 ```
 
@@ -189,7 +196,7 @@ Downstream integrations should prefer `doctriage_bundle.json` over internal JSON
 The browser console has an **Agent compile** tab for optional handoff to [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents). It exports `OUTPUT_ROOT/_relationships/doctriage_bundle.json` and opens AnyDocsToAgents with a URL such as:
 
 ```text
-http://127.0.0.1:8000/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json&autoplan=1#view-planner
+http://127.0.0.1:18766/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json&autoplan=1#view-planner
 ```
 
 This is intentionally a loose bridge: DocTriage does not start, embed, or depend on AnyDocsToAgents. Both projects can still run independently.
@@ -205,7 +212,7 @@ doctriage-bundle `
   --min-quality 75
 ```
 
-Bundles exclude the `LowQuality` category by default. Use `--exclude-categories ""` only when a downstream workflow intentionally needs it. If relationship mining ended in the explicit `error` phase, normal export stops to prevent a misleading graph handoff. Use `--allow-partial` only for a metadata-only bundle; downstream consumers should surface its warnings and rely on summary retrieval until relationships are regenerated.
+Bundles do not exclude any category by default, so `--min-quality 0` includes `LowQuality` documents as well. Use `--exclude-categories LowQuality` only when a downstream workflow explicitly needs that policy. `is_partial` and `warnings` describe required document-data incompleteness; missing or failed optional relation, RAG, and summary capabilities are listed under `advisories` and do not block export. Downstream consumers should surface both levels without treating optional capabilities as a failed bundle.
 
 ## Language
 
