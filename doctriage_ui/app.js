@@ -201,6 +201,7 @@ const I18N = {
     reset_relationships_blocked_relationships: "关系生成运行中，请先停止生成再重置关系。",
     status_load_failed: "状态加载失败",
     rows_load_failed: "加载失败",
+    rows_loading: "正在加载阅读列表...",
     graph_load_failed: "图谱加载失败",
     graph_relations_exists: "存在 relations.jsonl",
     graph_clusters_exists: "存在 clusters.json",
@@ -598,6 +599,7 @@ const I18N = {
     reset_relationships_blocked_relationships: "Relationship generation is running. Stop generation before resetting relationships.",
     status_load_failed: "Failed to load status",
     rows_load_failed: "Failed to load rows",
+    rows_loading: "Loading reading list...",
     graph_load_failed: "Failed to load graph",
     graph_relations_exists: "relations.jsonl exists",
     graph_clusters_exists: "clusters.json exists",
@@ -799,6 +801,7 @@ let uiLanguage = localStorage.getItem("doctriage_ui_language") || "zh-CN";
 let allRows = [];
 let filteredRows = [];
 let currentRows = [];
+let readingRowsLoading = false;
 let capabilities = {};
 let currentPage = 1;
 let pageSize = Number(localStorage.getItem("doctriage_page_size") || 100);
@@ -2628,6 +2631,7 @@ function clearReadingRows() {
 
 function renderReadingError(message) {
   const text = String(message || tr("rows_load_failed"));
+  readingRowsLoading = false;
   allRows = [];
   filteredRows = [];
   currentRows = [];
@@ -2636,7 +2640,35 @@ function renderReadingError(message) {
   $("pagerTop").innerHTML = "";
   $("pagerBottom").innerHTML = "";
   renderSortMarks();
+  $("rows").setAttribute("aria-busy", "false");
   $("rows").innerHTML = `<tr><td colspan="10" class="status-failed">${escapeHtml(text)}</td></tr>`;
+}
+
+function renderReadingLoading() {
+  readingRowsLoading = true;
+  currentRows = [];
+  $("stats").innerHTML = `
+    <span class="pill reading-loading-status" role="status">
+      <span class="reading-loading-spinner" aria-hidden="true"></span>
+      ${escapeHtml(tr("rows_loading"))}
+    </span>`;
+  $("pagerTop").innerHTML = "";
+  $("pagerBottom").innerHTML = "";
+  $("rows").setAttribute("aria-busy", "true");
+  $("rows").setAttribute("aria-label", tr("rows_loading"));
+  $("rows").innerHTML = Array.from({length: 6}, (_, index) => `
+    <tr class="reading-loading-row" aria-hidden="true">
+      <td><span class="reading-loading-spinner"></span></td>
+      <td><span class="reading-loading-placeholder short"></span></td>
+      <td><span class="reading-loading-placeholder short"></span></td>
+      <td><span class="reading-loading-placeholder medium"></span></td>
+      <td><span class="reading-loading-placeholder medium"></span></td>
+      <td><span class="reading-loading-placeholder short"></span></td>
+      <td class="name"><span class="reading-loading-placeholder long"></span></td>
+      <td><span class="reading-loading-placeholder medium"></span></td>
+      <td><span class="reading-loading-placeholder ${index % 2 ? "medium" : "long"}"></span></td>
+      <td class="actions"><span class="reading-loading-placeholder long"></span></td>
+    </tr>`).join("");
 }
 
 function hasGraphPayload() {
@@ -2923,19 +2955,28 @@ function localizedActivityDetail(detail) {
 
 async function loadRows() {
   syncReadingScopeControls();
-  const response = await fetch("/api/state?" + readingParams());
-  const payload = await response.json();
-  if (!response.ok) {
-    const message = payload.error || tr("rows_load_failed");
+  renderReadingLoading();
+  try {
+    const response = await fetch("/api/state?" + readingParams());
+    const payload = await response.json();
+    if (!response.ok) {
+      const message = payload.error || tr("rows_load_failed");
+      showToast(message);
+      renderReadingError(message);
+      return null;
+    }
+    allRows = payload.rows || [];
+    populateFacetOptions(allRows);
+    currentPage = 1;
+    readingRowsLoading = false;
+    applyClientFilters();
+    return payload;
+  } catch (error) {
+    const message = error?.message || tr("rows_load_failed");
     showToast(message);
     renderReadingError(message);
     return null;
   }
-  allRows = payload.rows || [];
-  populateFacetOptions(allRows);
-  currentPage = 1;
-  applyClientFilters();
-  return payload;
 }
 
 function syncReadingScopeControls() {
@@ -3765,6 +3806,7 @@ function renderGraphDetail() {
 }
 
 function applyClientFilters() {
+  if (readingRowsLoading) return;
   filteredRows = sortRowsClient(allRows.filter(rowMatchesFilters), sortKey);
   const pageCount = pageCountFor(filteredRows.length);
   currentPage = Math.min(Math.max(currentPage, 1), pageCount);
@@ -4112,6 +4154,9 @@ function rowExplanation(row) {
 }
 
 function renderRows(rows) {
+  readingRowsLoading = false;
+  $("rows").setAttribute("aria-busy", "false");
+  $("rows").removeAttribute("aria-label");
   $("rows").innerHTML = rows.map(row => {
     const explanation = rowExplanation(row);
     return `

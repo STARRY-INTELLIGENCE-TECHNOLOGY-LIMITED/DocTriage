@@ -3923,6 +3923,28 @@ def test_reading_tab_uses_compact_filter_layout() -> None:
     assert 'id="topic_tags"' in secondary_body
 
 
+def test_reading_tab_uses_loading_placeholders_and_row_hover() -> None:
+    html = frontend_source()
+    compact_html = frontend_source_compact()
+
+    assert "function renderReadingLoading()" in html
+    assert 'class="reading-loading-spinner"' in html
+    assert 'class="reading-loading-row"' in html
+    assert 'rows_loading: "正在加载阅读列表..."' in html
+    assert 'rows_loading: "Loading reading list..."' in html
+    assert '$("rows").setAttribute("aria-busy", "true");' in html
+    assert '$("rows").setAttribute("aria-busy", "false");' in html
+    assert ".reading-loading-placeholder" in compact_html
+    assert "tbody tr:not(.reading-loading-row):hover > td" in compact_html
+
+    load_start = html.index("async function loadRows()")
+    load_end = html.index("function syncReadingScopeControls()", load_start)
+    load_body = html[load_start:load_end]
+    assert load_body.index("renderReadingLoading();") < load_body.index('fetch("/api/state?"')
+    assert load_body.index("readingRowsLoading = false;") < load_body.index("applyClientFilters();")
+    assert "renderReadingError(message);" in load_body
+
+
 def test_frontend_status_and_graph_requests_include_current_paths() -> None:
     html = frontend_source()
 
