@@ -3,8 +3,46 @@ from pathlib import Path
 
 import pytest
 
-from bundle_exporter import BundleSelection, export_bundle, load_latest_decisions
+from bundle_exporter import (
+    BundleSelection,
+    build_parser,
+    export_bundle,
+    load_latest_decisions,
+    main,
+)
 from config import Settings
+
+
+def test_bundle_cli_help_explains_llm_endpoint_fallback() -> None:
+    help_text = build_parser().format_help()
+
+    assert "--llm-endpoint URL" in help_text
+    assert "Required unless LLM_ENDPOINT is set" in help_text
+
+
+def test_bundle_cli_reports_missing_required_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LLM_ENDPOINT", raising=False)
+
+    with pytest.raises(SystemExit) as raised:
+        main(
+            [
+                "--source-dir",
+                str(tmp_path / "source"),
+                "--output-root",
+                str(tmp_path / "output"),
+            ]
+        )
+
+    assert raised.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "required configuration is missing" in stderr
+    assert "pass --llm-endpoint URL or set LLM_ENDPOINT" in stderr
+    assert "ValidationError" not in stderr
 
 
 def test_export_bundle_filters_and_includes_relations(tmp_path: Path) -> None:

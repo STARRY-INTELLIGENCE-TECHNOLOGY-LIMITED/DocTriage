@@ -1757,7 +1757,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="DocTriage 0.1.0",
+        version="DocTriage 1.0.0",
     )
     parser.add_argument("--source-dir", type=Path, help="Source document directory.")
     parser.add_argument("--output-root", type=Path, help="Directory for generated state and routed copies.")

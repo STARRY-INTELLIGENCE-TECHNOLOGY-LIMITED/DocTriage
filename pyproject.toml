@@ -4,16 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "DocTriage"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local-first document triage for manual curation, connected learning, RAG, and agent workflows."
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
-    "docling>=2.18.0",
-    "httpx>=0.28.0",
-    "pydantic>=2.10.0",
-    "pydantic-settings>=2.6.0",
-    "pypdf>=4.3.0",
+    "docling==2.92.0",
+    "httpx==0.28.1",
+    "pydantic==2.13.3",
+    "pydantic-settings==2.14.0",
+    "pypdf==6.11.0",
+    "qdrant-client==1.18.0",
 ]
 
 [project.scripts]
@@ -27,7 +28,7 @@ doctriage-reading-ui = "reading_ui:main"
 doctriage-workflow = "workflow_adapter:main"
 
 [tool.setuptools]
-py-modules = ["bundle_exporter", "cleaner", "config", "embedding_store", "knowledge_graph", "main", "meta_profiler", "ollama_runtime", "rag_indexer", "ranker_engine", "reading_tracker", "reading_ui", "relationship_miner", "runtime_encoding", "workflow_adapter"]
+py-modules = ["bundle_exporter", "cleaner", "config", "embedding_store", "knowledge_graph", "main", "meta_profiler", "ollama_runtime", "rag_indexer", "rag_vector_store", "ranker_engine", "reading_tracker", "reading_ui", "relationship_miner", "runtime_encoding", "workflow_adapter"]
 packages = ["doctriage_ui", "relationship_strategies"]
 
 [tool.setuptools.package-data]

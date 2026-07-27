@@ -14,6 +14,17 @@ Your source folder stays read-only. DocTriage writes state, logs, relationship r
 
 DocTriage is built around a practical loop: run local analysis, review and mark documents in the reading console, then use relationship clusters when you need connected learning or downstream exports.
 
+## Product Highlights and Knowledge Loop
+
+DocTriage is more than a file converter. Before documents enter RAG or an agent runtime, it answers which sources deserve inclusion, why they matter, and what selection boundary was applied. Read-only source handling, explainable quality scoring, human review, relationship mining, RAG preparation, and auditable export form one local-first governance layer for private knowledge.
+
+- **Knowledge governance**: classify by content quality, document role, topic, sensitivity, and publication suitability instead of relying on folders or filenames alone.
+- **Explicit selection**: the reading console, RAG index, and Agent Bundle retain independent thresholds with visible counts and percentages.
+- **Stable downstream contract**: `doctriage_bundle.v2` carries provenance, scores, classification, summaries, relationships, and health information without exposing internal logs as an API.
+- **Private writing foundation**: separate factual sources, viewpoints, cases, and style references before sending a trusted working set into a writing workflow.
+
+For an optional end-to-end loop, connect DocTriage to [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents): DocTriage governs and packages the corpus, while AnyDocsToAgents provides hybrid retrieval, editable execution topologies, evidence-grounded chat, and article production. The integration uses a Bundle and launch URL; both projects remain independently deployable.
+
 ## Why
 
 - Triage large, messy folders without reorganizing the original files.
@@ -82,6 +93,10 @@ doctriage-reading-ui --host 127.0.0.1 --port 18765
 ```
 
 Open `http://127.0.0.1:18765/`.
+
+The console ships as package-owned static files that are loaded into memory once at
+startup, with no runtime build step. Restart the service after changing HTML, CSS,
+or JavaScript under `doctriage_ui`.
 
 ### Folder input and cross-platform paths
 
@@ -187,19 +202,35 @@ OUTPUT_ROOT/
     documents.jsonl
     chunks.jsonl
     vectors.jsonl
+    qdrant/
 ```
 
 Downstream integrations should prefer `doctriage_bundle.json` over internal JSONL logs.
+
+### Qdrant Local RAG
+
+The RAG index supports `local_jsonl` and embedded `qdrant_local` storage. With Qdrant Local selected, vectors are written to `OUTPUT_ROOT/_rag/qdrant` and similarity search runs through Qdrant; `vectors.jsonl` remains an auditable copy and fallback. This mode does not start an HTTP service.
+
+```powershell
+doctriage-rag build `
+  --output-root "D:\doctriage_run" `
+  --embedding-endpoint http://127.0.0.1:11434/api/embed `
+  --embedding-model qwen3-embedding:8b `
+  --vector-store qdrant_local `
+  --qdrant-collection doctriage_rag
+```
+
+The same option is available under **RAG Index > Vector storage**. An empty path uses the default directory above. Remote Qdrant, Chroma, and HTTP options are connectivity tests only.
 
 ## AnyDocsToAgents Handoff
 
 The browser console has an **Agent compile** tab for optional handoff to [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents). It exports `OUTPUT_ROOT/_relationships/doctriage_bundle.json` and opens AnyDocsToAgents with a URL such as:
 
 ```text
-http://127.0.0.1:18766/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json&autoplan=1#view-planner
+http://127.0.0.1:18766/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json#view-planner
 ```
 
-This is intentionally a loose bridge: DocTriage does not start, embed, or depend on AnyDocsToAgents. Both projects can still run independently.
+Before opening the handoff URL, DocTriage verifies that the configured AnyDocsToAgents service is available. If it is unavailable, the console reports the problem and opens the GitHub project page.
 
 For an existing completed run, exporting the bundle is fast and does not rerun classification:
 

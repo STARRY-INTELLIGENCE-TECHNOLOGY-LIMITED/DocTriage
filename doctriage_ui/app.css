@@ -226,6 +226,10 @@ h1 {
 }
 .shared-target-panel {
   display: grid;
+  gap: 8px;
+}
+.shared-target-row {
+  display: grid;
   grid-template-columns: minmax(320px, 1fr) minmax(96px, auto);
   gap: 8px;
   align-items: end;
@@ -234,8 +238,23 @@ h1 {
   display: none !important;
 }
 .reading-filter-panel {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.reading-filter-panel[hidden] {
+  display: none !important;
+}
+.reading-filter-panel summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.reading-filter-body {
   display: grid;
   gap: 8px;
+  padding-top: 10px;
 }
 .reading-filter-primary {
   display: grid;
@@ -941,7 +960,7 @@ td.name {
   }
 }
 @media (max-width: 1000px) {
-  .filters, .run-grid, .run-primary-grid, .run-advanced-grid, .reading-filter-primary, .reading-filter-secondary, .reading-target, .shared-target-panel, .rag-vector-toolbar, .rag-searchbar, .graph-target-row, .anydocs-target-row, .anydocs-selection-row, .rag-target-row, .rag-options-row {
+  .filters, .run-grid, .run-primary-grid, .run-advanced-grid, .reading-filter-primary, .reading-filter-secondary, .reading-target, .shared-target-row, .rag-vector-toolbar, .rag-searchbar, .graph-target-row, .anydocs-target-row, .anydocs-selection-row, .rag-target-row, .rag-options-row {
     grid-template-columns: repeat(2, minmax(120px, 1fr));
   }
   .summary-bar {
@@ -950,7 +969,7 @@ td.name {
   }
 }
 @media (max-width: 640px) {
-  .reading-filter-primary, .reading-filter-secondary, .shared-target-panel, .graph-target-row, .anydocs-target-row, .anydocs-selection-row, .rag-target-row, .rag-options-row {
+  .reading-filter-primary, .reading-filter-secondary, .shared-target-row, .graph-target-row, .anydocs-target-row, .anydocs-selection-row, .rag-target-row, .rag-options-row {
     grid-template-columns: 1fr;
   }
 }

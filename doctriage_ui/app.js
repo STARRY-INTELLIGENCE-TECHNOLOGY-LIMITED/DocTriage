@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const I18N = {
   "zh-CN": {
     app_title: "DocTriage 控制台",
-    tab_analysis: "分析执行",
+    tab_analysis: "文档分析",
     tab_reading: "阅读台",
     tab_graph: "关系图谱",
     tab_rag: "RAG 索引",
@@ -50,6 +50,7 @@ const I18N = {
     quality_category_exclusions: "类别预排除：{count}/{total} 篇（{categories}）",
     pick_folder: "选择目录",
     reading_scope: "阅读范围",
+    reading_filters: "搜索与过滤",
     scope_analysis: "分析结果",
     scope_source: "全部源文件",
     scope_source_unscored: "未分析",
@@ -97,8 +98,7 @@ const I18N = {
     generate_relationships: "生成图谱",
     graph_log: "日志",
     export_bundle: "导出 Bundle",
-    open_anydocs: "打开 AnyDocsToAgents",
-    open_anydocs_autoplan: "打开并生成 Graph",
+    export_open_anydocs: "导出并打开 AnyDocsToAgents",
     refresh_graph: "刷新图谱",
     build_rag: "构建索引",
     stop_rag: "停止索引",
@@ -111,7 +111,7 @@ const I18N = {
     analysis_advanced: "高级参数",
     rag_build_advanced: "索引参数",
     rag_advanced: "敏感词防火墙",
-    vector_store_advanced: "向量库测试",
+    vector_store_advanced: "向量存储",
     rag_redaction_enabled: "启用敏感词防火墙",
     rag_redact_drop_matched_documents: "命中后跳过文档",
     rag_redact_placeholder: "脱敏占位符",
@@ -221,10 +221,13 @@ const I18N = {
     graph_task_started: "已启动{task}",
     anydocs_export_failed: "Bundle 导出失败",
     anydocs_exported: "Bundle 已导出",
-    anydocs_open_failed: "打开 AnyDocsToAgents 失败",
-    anydocs_opened: "已打开 AnyDocsToAgents",
-    anydocs_optional: "可选联动：只传 Bundle 路径，两个项目仍可独立运行",
-    anydocs_hint: "AnyDocsToAgents 独立运行。这里仅生成 Bundle 路径并打开浏览器，不启动、不依赖、不嵌入下游服务。",
+    anydocs_open_failed: "导出或打开 AnyDocsToAgents 失败",
+    anydocs_opened: "Bundle 已导出并打开 AnyDocsToAgents",
+    anydocs_github_opened: "Bundle 已导出；未检测到服务，已打开 GitHub 项目页",
+    anydocs_github_open_failed: "Bundle 已导出；未检测到服务，请通过 GitHub 项目页获取 AnyDocsToAgents",
+    anydocs_service_unavailable: "Bundle 已导出，但未检测到 {url} 的 AnyDocsToAgents 服务。请先安装并启动；已打开 GitHub 项目页。",
+    anydocs_service_unavailable_github: "Bundle 已导出，但未检测到 {url} 的 AnyDocsToAgents 服务。请先安装并启动，可通过 GitHub 项目页获取。",
+    anydocs_optional: "联动方式：Bundle 路径",
     rag_need_output: "请先输入 RAG 索引目录",
     rag_started: "已启动 RAG 索引",
     rag_start_failed: "RAG 索引启动失败",
@@ -249,7 +252,11 @@ const I18N = {
     rag_task_running: "RAG 索引中",
     vector_store_type: "向量库类型",
     vector_store_local: "本地 JSONL",
-    vector_store_url: "向量库地址",
+    vector_store_qdrant_local: "Qdrant 本地",
+    vector_store_qdrant_remote: "Qdrant 服务（仅测试）",
+    vector_store_chroma_remote: "Chroma 服务（仅测试）",
+    vector_store_http_remote: "HTTP（仅测试）",
+    vector_store_url: "存储路径或地址",
     vector_store_collection: "集合",
     test_vector_store: "测试向量库",
     testing_vector_store: "正在测试向量库",
@@ -267,8 +274,8 @@ const I18N = {
     graph_task_running_refresh: "{task}中，请稍后刷新",
     graph_need_analysis_before_graph: "先完成一次文档分析，再生成关系图谱",
     graph_no_relationships_generate: "还没有图谱结果，可点击“生成图谱”",
-    graph_task_running_detail: "后台任务运行中，完成后这里会显示局部图和证据。",
-    graph_generate_then_detail: "生成图谱后，这里会显示局部图、证据和文档详情。",
+    graph_task_running_detail: "后台任务运行中。局部图与证据将在任务完成后显示。",
+    graph_generate_then_detail: "尚未生成关系图谱。",
     graph_phase_loading_decisions: "读取决策",
     graph_phase_records_loaded: "决策已读取",
     graph_phase_preparing_embeddings: "准备 Embedding",
@@ -338,46 +345,46 @@ const I18N = {
     dim_uniqueness: "独特",
     folder_picker_unavailable: "当前环境不支持图形目录选择，请手工输入路径",
     operation_failed: "操作失败",
-    tip_current_output_root: "阅读台、关系图谱、RAG 索引和 Agent 编译共用的已分析输出目录。切换这里不会改动分析页的源目录和输出目录。",
-    tip_bundle_min_quality: "默认为 0，即不按质量分或类别过滤；不会继承分析页或阅读台阈值。",
-    tip_upload_source: "浏览器会把选中文件上传到服务器工作区，分析任务读取服务器端副本。适合 DocTriage 运行在远程服务器时使用。",
-    tip_source_dir: "待分析的原始文档目录。程序会递归扫描其下支持的文件类型。不要把输出目录放到这个目录里面。",
-    tip_output_dir: "写入进度、日志、评分结果和可选复制结果的目录。同一输出目录会自动续跑；同一时间只允许一个分析进程写入。",
-    tip_llm_endpoint: "文档评分调用的文本模型接口。Ollama 默认是 /api/generate；如果你切换服务地址，这里要一起改。",
-    tip_model: "用于文档分类、打分和摘要理解的模型名。向量关系需要单独填写向量模型，不会自动沿用这里的模型。",
-    tip_llm_api_key: "OpenAI 或兼容云接口的 Bearer Token。本地 Ollama 可留空；不会保存到浏览器本地存储。",
-    tip_embedding_api_key: "向量接口的 Bearer Token。留空时沿用 LLM API Key；不会保存到浏览器本地存储。",
-    tip_output_language: "摘要和原因的输出语言。自动会根据文档主体语言推断；也可以强制指定一种语言。",
-    tip_concurrency: "同时向 LLM 发起的请求数。大目录和本地模型首跑建议 1；模型空闲且显存足够时再逐步上调。",
-    tip_limit: "只处理前 N 个候选文件，适合小样本验证提示词、速度和分类效果。留空表示全量。",
-    tip_max_mb: "跳过超过这个体积的候选文件，避免极大 PDF 或 Office 文档拖慢首轮筛选。",
-    tip_quality_threshold: "达到这个分数的文档会被视为高价值候选。仅评分模式下用于评分分层和后续筛选，不生成分类目录。",
-    tip_timeout_seconds: "单个 LLM 请求最长等待时间。模型较慢或文档较大时可以调高；过高会让失败请求卡更久。",
-    tip_summary: "把本地短摘要写入 decisions.jsonl，后续做关系挖掘、公开写作筛选和人工复核时更有用。会多占一点状态文件空间。",
-    tip_plan_only: "只写评分、分类、进度和决策日志，不复制源文件。适合首轮摸底、大目录试跑和不想改动文件布局的场景。",
-    tip_ocr_enabled: "启用 OCR 解析纯图片或扫描版 PDF。会明显增加处理时间；普通带文本层的 PDF 和 Office 文档通常不需要。",
-    tip_manifest_analysis: "启用目录级系列/集合分析，再进入文件级评分。适合需要识别同一目录下系列资料的场景；大目录首轮可以先不勾选。",
-    tip_mine_relationships: "在全部评分完成后，额外生成文档关系和聚类结果，输出到 _relationships/relations.jsonl 与 clusters.json。适合做去重、系列识别、主题聚类和后续 RAG 分组。",
-    tip_title_citations: "启用轻量标题/路径引用信号，不额外调用 embedding 模型。成本低，适合默认开启，帮助发现同系列、互相提及或命名相近的文档。",
-    tip_embedding_relationships: "给摘要、标题、类别等文本生成向量，用语义相似度找跨目录同主题、标题不相似但内容接近、近重复或演进关系。填写向量模型后启用；留空则只使用默认关系挖掘和标题引用。",
-    tip_rag_output_root: "指向已经跑过分析的输出目录。索引会写入该目录下的 _rag。",
-    tip_rag_embedding_model: "留空则只构建文档与切片，不生成向量；填写后会额外写入 _rag/vectors.jsonl，并可用语义检索。",
-    tip_rag_redaction_enabled: "只作用于 RAG 索引链路，不改原始分析结果。写入 _rag 和送入向量库前，会先对文本做过滤、替换或映射。",
-    tip_rag_redact_drop_matched_documents: "当文档正文命中任一敏感词或映射规则时，整篇文档不会进入 _rag/chunks.jsonl、_rag/vectors.jsonl 和后续向量库。适合高敏场景。",
-    tip_rag_redact_placeholder: "普通敏感词替换时使用的固定文本。默认是 [REDACTED]。",
-    tip_rag_redact_terms: "一行一个词，也支持英文逗号分隔。命中后替换为上方占位符。适合姓名、项目代号、客户名、账号前缀等固定词。",
-    tip_rag_redact_mappings: "一行一条，格式为 原文=>映射值。前缀 regex: 可启用正则，前缀 case: 可区分大小写，例如 regex:\\b1[3-9]\\d{9}\\b=>[PHONE]。",
-    tip_vector_store_type: "测试 RAG 产物要流转到的向量库。本地 JSONL 会只读检查当前输出目录下的 _rag；Qdrant、Chroma 和 HTTP 会检查网络连通性。",
-    tip_vector_store_url: "外部向量库服务地址，例如 Qdrant 的 http://localhost:6333 或 Chroma 的 http://localhost:8000。本地 JSONL 不需要填写。",
-    tip_vector_store_collection: "可选。填写后会进一步检查集合是否存在；留空则只检查服务是否可达。",
-    tip_rag_search_query: "优先使用向量检索；当没有向量或未填写向量模型时，会自动退回到词法匹配。",
+    tip_current_output_root: "阅读台、关系图谱、RAG 索引与 Agent 编译共用此目录；不影响分析页路径。",
+    tip_bundle_min_quality: "导出质量分不低于阈值的文档。默认值为 0；不继承其他页面的阈值。",
+    tip_upload_source: "文件上传至服务器工作区，分析任务读取服务器副本。",
+    tip_source_dir: "递归扫描此目录内受支持的文档。输出目录不得位于其中。",
+    tip_output_dir: "保存进度、日志、评分及复制结果；支持续跑，且仅允许单进程写入。",
+    tip_llm_endpoint: "文档评分使用的文本模型接口。Ollama 默认路径：/api/generate。",
+    tip_model: "文档分类、评分与摘要模型。向量关系使用单独的向量模型。",
+    tip_llm_api_key: "OpenAI 兼容接口的 Bearer Token。本地 Ollama 可留空；不写入浏览器存储。",
+    tip_embedding_api_key: "向量接口的 Bearer Token。留空时使用 LLM API Key；不写入浏览器存储。",
+    tip_output_language: "摘要与评分理由的语言。自动模式按文档正文识别。",
+    tip_concurrency: "并发模型请求数。本地模型或大批量任务建议从 1 开始。",
+    tip_limit: "仅处理前 N 个候选文件；留空为全量。",
+    tip_max_mb: "跳过大于此值的文件。",
+    tip_quality_threshold: "达到阈值的文档标记为高价值候选。仅评分模式不生成分类目录。",
+    tip_timeout_seconds: "单次模型请求的最长等待时间。",
+    tip_summary: "将短摘要写入 decisions.jsonl，供关系分析、公开写作筛选和人工复核使用。",
+    tip_plan_only: "记录评分、分类、进度与决策，不复制源文件。",
+    tip_ocr_enabled: "解析图片及扫描版 PDF；增加处理时长。",
+    tip_manifest_analysis: "文件评分前执行目录级系列与集合分析。",
+    tip_mine_relationships: "评分完成后生成关系和聚类文件：_relationships/relations.jsonl、clusters.json。",
+    tip_title_citations: "使用标题和路径提取引用关系，不调用向量模型。",
+    tip_embedding_relationships: "基于摘要、标题和分类生成向量关系。填写模型后启用；留空时使用规则与标题引用。",
+    tip_rag_output_root: "已分析的输出目录；索引写入 _rag。",
+    tip_rag_embedding_model: "留空时仅构建文档和切片；填写后生成 _rag/vectors.jsonl 并启用语义检索。",
+    tip_rag_redaction_enabled: "仅处理 RAG 索引文本，不修改分析结果。脱敏在写入 _rag 或向量库前执行。",
+    tip_rag_redact_drop_matched_documents: "正文命中敏感词或映射规则时，文档不进入切片、向量及后续向量库。",
+    tip_rag_redact_placeholder: "敏感词替换文本，默认为 [REDACTED]。",
+    tip_rag_redact_terms: "每行一个词或使用英文逗号分隔；命中内容替换为占位符。",
+    tip_rag_redact_mappings: "每行一条 原文=>映射值；regex: 启用正则，case: 区分大小写。",
+    tip_vector_store_type: "Qdrant 本地参与索引写入和检索；本地 JSONL 为默认存储；其余类型仅测试连接。",
+    tip_vector_store_url: "Qdrant 本地可留空，默认写入 _rag/qdrant；服务类型填写 URL。",
+    tip_vector_store_collection: "Qdrant 本地默认使用 doctriage_rag；服务类型填写时检查集合是否存在。",
+    tip_rag_search_query: "优先向量检索；无向量时使用词法检索。",
     ph_source_dir: "请选择源文档目录",
     ph_output_dir: "请选择输出目录",
     ph_reading_output_root: "选择或输入已分析输出目录",
     ph_graph_output_root: "选择或输入已分析输出目录",
     ph_rag_output_root: "选择或输入已分析输出目录",
-    ph_vector_store_url: "本地 JSONL 可留空",
-    ph_vector_store_collection: "可选",
+    ph_vector_store_url: "本地类型可留空",
+    ph_vector_store_collection: "doctriage_rag",
     ph_text_search: "名称/路径/备注",
     ph_graph_search: "路径/分类/标签",
     ph_limit: "空为全量",
@@ -392,7 +399,7 @@ const I18N = {
   },
   en: {
     app_title: "DocTriage Console",
-    tab_analysis: "Analysis",
+    tab_analysis: "Document Analysis",
     tab_reading: "Reading",
     tab_graph: "Graph",
     tab_rag: "RAG Index",
@@ -440,6 +447,7 @@ const I18N = {
     quality_category_exclusions: "Category pre-filter: {count}/{total} docs ({categories})",
     pick_folder: "Pick folder",
     reading_scope: "Reading scope",
+    reading_filters: "Search and filters",
     scope_analysis: "Analysis results",
     scope_source: "All source files",
     scope_source_unscored: "Unscored",
@@ -487,8 +495,7 @@ const I18N = {
     generate_relationships: "Generate graph",
     graph_log: "Log",
     export_bundle: "Export bundle",
-    open_anydocs: "Open AnyDocsToAgents",
-    open_anydocs_autoplan: "Open and generate Graph",
+    export_open_anydocs: "Export and open AnyDocsToAgents",
     refresh_graph: "Refresh graph",
     build_rag: "Build index",
     stop_rag: "Stop index",
@@ -501,7 +508,7 @@ const I18N = {
     analysis_advanced: "Advanced parameters",
     rag_build_advanced: "Index parameters",
     rag_advanced: "Sensitive firewall",
-    vector_store_advanced: "Vector-store test",
+    vector_store_advanced: "Vector storage",
     rag_redaction_enabled: "Enable sensitive firewall",
     rag_redact_drop_matched_documents: "Skip matched documents",
     rag_redact_placeholder: "Redaction placeholder",
@@ -611,10 +618,13 @@ const I18N = {
     graph_task_started: "Started {task}",
     anydocs_export_failed: "Failed to export bundle",
     anydocs_exported: "Bundle exported",
-    anydocs_open_failed: "Failed to open AnyDocsToAgents",
-    anydocs_opened: "AnyDocsToAgents opened",
-    anydocs_optional: "Optional bridge: only passes the bundle path; both projects remain standalone",
-    anydocs_hint: "AnyDocsToAgents runs independently. This page only generates a bundle path and opens the browser; it does not start, depend on, or embed the downstream service.",
+    anydocs_open_failed: "Failed to export or open AnyDocsToAgents",
+    anydocs_opened: "Bundle exported and AnyDocsToAgents opened",
+    anydocs_github_opened: "Bundle exported; service not detected, so the GitHub project page was opened",
+    anydocs_github_open_failed: "Bundle exported; service not detected, so get AnyDocsToAgents from its GitHub project page",
+    anydocs_service_unavailable: "The bundle was exported, but no AnyDocsToAgents service was detected at {url}. Install and start it first; the GitHub project page was opened.",
+    anydocs_service_unavailable_github: "The bundle was exported, but no AnyDocsToAgents service was detected at {url}. Install and start it first; the project is available on GitHub.",
+    anydocs_optional: "Integration: Bundle path",
     rag_need_output: "Enter a RAG index directory first",
     rag_started: "RAG indexing started",
     rag_start_failed: "Failed to start RAG indexing",
@@ -639,7 +649,11 @@ const I18N = {
     rag_task_running: "RAG indexing",
     vector_store_type: "Vector store",
     vector_store_local: "Local JSONL",
-    vector_store_url: "Vector store URL",
+    vector_store_qdrant_local: "Qdrant Local",
+    vector_store_qdrant_remote: "Qdrant service (test only)",
+    vector_store_chroma_remote: "Chroma service (test only)",
+    vector_store_http_remote: "HTTP (test only)",
+    vector_store_url: "Storage path or URL",
     vector_store_collection: "Collection",
     test_vector_store: "Test vector store",
     testing_vector_store: "Testing vector store",
@@ -657,8 +671,8 @@ const I18N = {
     graph_task_running_refresh: "{task} is running. Refresh later.",
     graph_need_analysis_before_graph: "Complete one document analysis before generating the graph",
     graph_no_relationships_generate: "No graph results yet. Click Generate graph.",
-    graph_task_running_detail: "The background task is running. Local graph and evidence will appear here after it finishes.",
-    graph_generate_then_detail: "After graph generation, local graph, evidence, and document details will appear here.",
+    graph_task_running_detail: "Background task running. The local graph and evidence appear after completion.",
+    graph_generate_then_detail: "No relationship graph has been generated.",
     graph_phase_loading_decisions: "Loading decisions",
     graph_phase_records_loaded: "Decisions loaded",
     graph_phase_preparing_embeddings: "Preparing embeddings",
@@ -728,46 +742,46 @@ const I18N = {
     dim_uniqueness: "Uniqueness",
     folder_picker_unavailable: "Folder picker is unavailable here; type the path manually",
     operation_failed: "Operation failed",
-    tip_current_output_root: "Shared analyzed output directory for Reading, Graph, RAG, and Agent compile. Changing it does not alter the Analysis source/output fields.",
-    tip_bundle_min_quality: "The default is 0, so neither quality score nor category filters the bundle. Analysis and Reading thresholds are not inherited.",
-    tip_upload_source: "The browser uploads selected files into a server workspace, and analysis reads the server-side copy. Use this when DocTriage runs on a remote server.",
-    tip_source_dir: "Original document directory. DocTriage recursively scans supported file types under this folder.",
-    tip_output_dir: "Directory for progress, logs, scoring results, and optional routed copies. A run can resume from the same output directory.",
-    tip_llm_endpoint: "Text model endpoint for document scoring. Ollama defaults to /api/generate.",
-    tip_model: "Model name for classification, scoring, and summaries. Vector relationships require a separate vector model and will not reuse this model automatically.",
-    tip_llm_api_key: "Bearer token for OpenAI or compatible cloud endpoints. Leave empty for local Ollama; it is not saved to browser storage.",
-    tip_embedding_api_key: "Bearer token for the embedding endpoint. Empty reuses the LLM API key; it is not saved to browser storage.",
-    tip_output_language: "Language for generated summaries and reasons. Auto infers from the document body; explicit choices force that language.",
-    tip_concurrency: "Maximum concurrent LLM requests. Start with 1 for large local runs.",
-    tip_limit: "Process only the first N candidate files. Leave empty for all files.",
-    tip_max_mb: "Skip files larger than this size to keep the first pass responsive.",
-    tip_quality_threshold: "Documents at or above this score are treated as high-value candidates. Plan-only mode uses it for scoring layers, not copied folders.",
-    tip_timeout_seconds: "Maximum wait time for one LLM request.",
-    tip_summary: "Persist short summaries to decisions.jsonl for relationship mining, public-writing review, and manual triage.",
-    tip_plan_only: "Record scoring, categories, progress, and decisions without copying source files.",
-    tip_ocr_enabled: "Enable OCR for image-only files and scanned PDFs. This can noticeably slow processing; PDFs with text layers and Office documents usually do not need it.",
-    tip_manifest_analysis: "Enable directory-level series detection before file-level scoring. Useful for related document sets; large first-pass runs can leave it off.",
-    tip_mine_relationships: "Generate document relations and clusters after scoring.",
-    tip_title_citations: "Use lightweight title/path citation signals without calling an embedding model.",
-    tip_embedding_relationships: "Generate embeddings for summaries, titles, and categories to find semantic relationships. Enter a model to enable it; leave empty to use default mining and title citations only.",
-    tip_rag_output_root: "Select an analyzed output directory. The index is written under _rag.",
-    tip_rag_embedding_model: "Leave empty to build documents and chunks only; enter a model to also write _rag/vectors.jsonl and enable semantic search.",
-    tip_rag_redaction_enabled: "Applies only to the RAG indexing path. Original analysis outputs are unchanged; text is filtered, replaced, or mapped before it is written to _rag or sent to vector storage.",
-    tip_rag_redact_drop_matched_documents: "If document text matches any sensitive term or mapping rule, the whole document is excluded from _rag/chunks.jsonl, _rag/vectors.jsonl, and later vector-store ingestion.",
-    tip_rag_redact_placeholder: "Fixed text used for plain sensitive-term replacements. Defaults to [REDACTED].",
-    tip_rag_redact_terms: "One term per line, or comma-separated. Matches are replaced by the placeholder. Use for names, project codes, customer names, and account prefixes.",
-    tip_rag_redact_mappings: "One rule per line in original=>mapped form. Prefix with regex: for regular expressions or case: for case-sensitive matching, for example regex:\\b1[3-9]\\d{9}\\b=>[PHONE].",
-    tip_vector_store_type: "Test the vector store that will receive RAG outputs. Local JSONL only reads _rag under the selected output directory; Qdrant, Chroma, and HTTP check network connectivity.",
-    tip_vector_store_url: "External vector store URL, for example Qdrant http://localhost:6333 or Chroma http://localhost:8000. Local JSONL does not need a URL.",
-    tip_vector_store_collection: "Optional. When set, the test also checks whether the collection exists; empty checks service reachability only.",
-    tip_rag_search_query: "Uses vector search first. If vectors or an embedding model are unavailable, it falls back to lexical matching.",
+    tip_current_output_root: "Shared output directory for Reading, Graph, RAG, and Agent Compilation; Analysis paths are unchanged.",
+    tip_bundle_min_quality: "Exports documents at or above this score. Default: 0. Thresholds from other pages are not inherited.",
+    tip_upload_source: "Files are uploaded to the server workspace and analyzed from the server copy.",
+    tip_source_dir: "Recursively scans supported documents in this directory. The output directory must be outside it.",
+    tip_output_dir: "Stores progress, logs, scores, and copied files; supports resume and single-process writes.",
+    tip_llm_endpoint: "Text-model endpoint for document scoring. Default Ollama path: /api/generate.",
+    tip_model: "Model for document classification, scoring, and summaries. Vector relationships use a separate model.",
+    tip_llm_api_key: "Bearer token for OpenAI-compatible endpoints. Optional for local Ollama; not stored in the browser.",
+    tip_embedding_api_key: "Bearer token for the embedding endpoint. Empty uses the LLM API key; not stored in the browser.",
+    tip_output_language: "Language for summaries and scoring reasons. Auto detects the document language.",
+    tip_concurrency: "Concurrent model requests. Start at 1 for local models or large batches.",
+    tip_limit: "Processes the first N candidate files; empty processes all files.",
+    tip_max_mb: "Skips files larger than this value.",
+    tip_quality_threshold: "Marks documents at or above the threshold as high-value candidates. Plan-only mode does not create category folders.",
+    tip_timeout_seconds: "Maximum duration of one model request.",
+    tip_summary: "Writes short summaries to decisions.jsonl for relationship analysis, publication review, and manual triage.",
+    tip_plan_only: "Records scores, categories, progress, and decisions without copying source files.",
+    tip_ocr_enabled: "Parses images and scanned PDFs; increases processing time.",
+    tip_manifest_analysis: "Runs directory-level series and collection analysis before file scoring.",
+    tip_mine_relationships: "Creates _relationships/relations.jsonl and clusters.json after scoring.",
+    tip_title_citations: "Extracts citation relationships from titles and paths without an embedding model.",
+    tip_embedding_relationships: "Builds vector relationships from summaries, titles, and categories. A model enables it; empty uses rules and title citations.",
+    tip_rag_output_root: "Analyzed output directory; the index is written to _rag.",
+    tip_rag_embedding_model: "Empty builds documents and chunks only; a model also creates _rag/vectors.jsonl and enables semantic search.",
+    tip_rag_redaction_enabled: "Processes RAG index text only. Redaction runs before writing to _rag or vector storage.",
+    tip_rag_redact_drop_matched_documents: "Documents matching a sensitive term or mapping rule are excluded from chunks, vectors, and later vector storage.",
+    tip_rag_redact_placeholder: "Replacement text for sensitive terms. Default: [REDACTED].",
+    tip_rag_redact_terms: "One term per line or comma-separated; matches are replaced by the placeholder.",
+    tip_rag_redact_mappings: "One original=>mapped rule per line; regex: enables regular expressions and case: enables case sensitivity.",
+    tip_vector_store_type: "Qdrant Local participates in index writes and search. Local JSONL is the default store; other types only test connectivity.",
+    tip_vector_store_url: "Qdrant Local defaults to _rag/qdrant when empty. Enter a URL for service types.",
+    tip_vector_store_collection: "Qdrant Local defaults to doctriage_rag. Service types check the collection when supplied.",
+    tip_rag_search_query: "Uses vector search first and lexical search when vectors are unavailable.",
     ph_source_dir: "Select source document directory",
     ph_output_dir: "Select output directory",
     ph_reading_output_root: "Select or enter an analyzed output directory",
     ph_graph_output_root: "Select or enter an analyzed output directory",
     ph_rag_output_root: "Select or enter an analyzed output directory",
-    ph_vector_store_url: "empty for local JSONL",
-    ph_vector_store_collection: "optional",
+    ph_vector_store_url: "empty for local storage",
+    ph_vector_store_collection: "doctriage_rag",
     ph_text_search: "Name/path/note",
     ph_graph_search: "Path/category/tag",
     ph_limit: "empty means all",
@@ -816,6 +830,8 @@ let anydocsBundleSourceTotal = 0;
 let anydocsBundleExcludedCategoryCount = 0;
 let anydocsBundleExcludedCategories = [];
 let anydocsQualityStatsKey = "";
+let anydocsUnavailableServiceUrl = "";
+let anydocsGithubOpened = false;
 let lastAnalysisPayload = null;
 let relationshipLaunchPending = null;
 let relationshipStopPending = null;
@@ -1597,6 +1613,8 @@ function applyI18n() {
     if (ragSearchPayload) renderRagResults(ragSearchPayload);
   }
   renderAnydocsStats();
+  renderAnydocsOpenStatus();
+  syncVectorStoreInputs();
 }
 
 function switchTab(name) {
@@ -1606,6 +1624,8 @@ function switchTab(name) {
   }
   const sharedTargetPanel = $("shared_target_panel");
   if (sharedTargetPanel) sharedTargetPanel.hidden = name === "analysis";
+  const readingFilterPanel = $("reading_filter_panel");
+  if (readingFilterPanel) readingFilterPanel.hidden = name !== "reading";
   syncGlobalOutputFrom(sharedOutputRootFromTargets());
   if (name === "analysis") loadAnalysis();
   if (name === "reading") loadReadingRowsIfReady();
@@ -2169,6 +2189,7 @@ function renderVectorStoreTestStats(payload) {
       ? (payload.collection_exists ? tr("vector_store_collection_exists") : tr("vector_store_collection_missing"))
       : "",
     payload.vector_count !== undefined ? `${tr("vector_store_vectors")} ${Number(payload.vector_count || 0)}` : "",
+    payload.vector_dimension ? `Dim ${Number(payload.vector_dimension)}` : "",
     payload.message ? String(payload.message) : ""
   ].filter(Boolean);
   $("vectorStoreTestStats").innerHTML = parts.map(x => `<span class="pill">${escapeHtml(x)}</span>`).join("");
@@ -2176,7 +2197,7 @@ function renderVectorStoreTestStats(payload) {
 
 async function testVectorStore() {
   const requestPayload = vectorStorePayload();
-  if (requestPayload.store_type === "local_jsonl" && !requestPayload.output_root) {
+  if (["local_jsonl", "qdrant_local"].includes(requestPayload.store_type) && !requestPayload.output_root) {
     return showToast(tr("rag_need_output"));
   }
   saveRagTargetState();
@@ -2256,17 +2277,9 @@ function refreshAnydocsBundlePath() {
   renderAnydocsStats();
 }
 
-function anydocsUrl(autoPlan = false) {
-  const base = ($("anydocs_url") ? $("anydocs_url").value.trim() : "") || DEFAULT_ANYDOCS_URL;
-  const url = new URL(base, window.location.href);
-  url.hash = "view-planner";
-  const bundlePath = anydocsBundlePath();
-  if (bundlePath) url.searchParams.set("doctriage_bundle_path", bundlePath);
-  if (autoPlan) url.searchParams.set("autoplan", "1");
-  return url.toString();
-}
-
 function ragPayload() {
+  const selectedVectorStore = $("rag_vector_store_type") ? $("rag_vector_store_type").value : "local_jsonl";
+  const ragVectorStore = selectedVectorStore === "qdrant_local" ? "qdrant_local" : "local_jsonl";
   return {
     ...runPayload(),
     ...ragPathPayload(),
@@ -2277,6 +2290,9 @@ function ragPayload() {
     rag_limit: $("rag_limit").value,
     rag_chunk_max_chars: $("rag_chunk_max_chars").value,
     rag_chunk_overlap_chars: $("rag_chunk_overlap_chars").value,
+    rag_vector_store_type: ragVectorStore,
+    rag_qdrant_path: ragVectorStore === "qdrant_local" && $("rag_vector_store_url") ? $("rag_vector_store_url").value.trim() : "",
+    rag_qdrant_collection: $("rag_vector_store_collection") ? $("rag_vector_store_collection").value.trim() || "doctriage_rag" : "doctriage_rag",
     rag_redaction_enabled: $("rag_redaction_enabled") ? $("rag_redaction_enabled").checked : false,
     rag_redact_drop_matched_documents: $("rag_redact_drop_matched_documents") ? $("rag_redact_drop_matched_documents").checked : false,
     rag_redact_placeholder: $("rag_redact_placeholder") ? $("rag_redact_placeholder").value.trim() : "",
@@ -2309,10 +2325,13 @@ function setSelectedValues(id, values) {
 }
 
 function vectorStorePayload() {
+  const storeType = $("rag_vector_store_type") ? $("rag_vector_store_type").value : "local_jsonl";
+  const location = $("rag_vector_store_url") ? $("rag_vector_store_url").value.trim() : "";
   return {
     ...ragPathPayload(),
-    store_type: $("rag_vector_store_type") ? $("rag_vector_store_type").value : "local_jsonl",
-    url: $("rag_vector_store_url") ? $("rag_vector_store_url").value.trim() : "",
+    store_type: storeType,
+    url: location,
+    path: storeType === "qdrant_local" ? location : "",
     collection: $("rag_vector_store_collection") ? $("rag_vector_store_collection").value.trim() : ""
   };
 }
@@ -2321,9 +2340,9 @@ function syncVectorStoreInputs() {
   const typeElement = $("rag_vector_store_type");
   const urlElement = $("rag_vector_store_url");
   const collectionElement = $("rag_vector_store_collection");
-  const isLocal = !typeElement || typeElement.value === "local_jsonl";
-  if (urlElement) urlElement.disabled = isLocal;
-  if (collectionElement) collectionElement.disabled = isLocal;
+  const isJsonl = !typeElement || typeElement.value === "local_jsonl";
+  if (urlElement) urlElement.disabled = isJsonl;
+  if (collectionElement) collectionElement.disabled = isJsonl;
 }
 
 function syncRagRedactionInputs() {
@@ -3097,7 +3116,9 @@ function renderRagResults(payload) {
   const mode = payload.mode === "vector" ? tr("rag_mode_vector") : tr("rag_mode_lexical");
   $("ragResultStats").innerHTML = [
     `<span class="pill">${escapeHtml(mode)}</span>`,
-    `<span class="pill">${tr("rag_result_count")} ${results.length}</span>`
+    `<span class="pill">${tr("rag_result_count")} ${results.length}</span>`,
+    payload.vector_store ? `<span class="pill">${escapeHtml(String(payload.vector_store))}</span>` : "",
+    ...(payload.warnings || []).map(item => `<span class="pill warning">${escapeHtml(String(item))}</span>`)
   ].join("");
   if (!results.length) {
     $("ragResults").innerHTML = `<div class="graph-empty">${escapeHtml(tr("rag_no_results"))}</div>`;
@@ -3404,28 +3425,34 @@ async function loadAnydocsQualityStats() {
   renderAnydocsQualityStats();
 }
 
-async function exportAnydocsBundle() {
-  const paths = anydocsPathPayload();
-  if (!paths.output_root) return showToast(tr("graph_need_paths"));
-  saveAnydocsTargetState();
-  const response = await fetch("/api/integrations/anydocs/export-bundle", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      ...paths,
-      bundle_min_quality: anydocsBundleMinQuality()
-    })
-  });
-  const payload = await response.json();
-  if (!response.ok) return showToast(payload.error || tr("anydocs_export_failed"));
-  if ($("anydocs_bundle_path")) $("anydocs_bundle_path").value = payload.bundle_path || anydocsBundlePath();
-  showToast(tr("anydocs_exported"));
-  renderAnydocsStats();
+function renderAnydocsOpenStatus() {
+  const panel = $("anydocs_open_status_panel");
+  const status = $("anydocs_open_status");
+  if (!panel || !status) return;
+  if (!anydocsUnavailableServiceUrl) {
+    panel.hidden = true;
+    status.textContent = "";
+    return;
+  }
+  status.textContent = trf(
+    anydocsGithubOpened
+      ? "anydocs_service_unavailable"
+      : "anydocs_service_unavailable_github",
+    {url: anydocsUnavailableServiceUrl}
+  );
+  panel.hidden = false;
 }
 
-async function openAnyDocs(autoPlan = false) {
+function clearAnydocsOpenStatus() {
+  anydocsUnavailableServiceUrl = "";
+  anydocsGithubOpened = false;
+  renderAnydocsOpenStatus();
+}
+
+async function exportAndOpenAnyDocs() {
   const paths = anydocsPathPayload();
   if (!paths.output_root) return showToast(tr("graph_need_paths"));
+  clearAnydocsOpenStatus();
   saveAnydocsTargetState();
   const response = await fetch("/api/integrations/anydocs/open", {
     method: "POST",
@@ -3433,7 +3460,6 @@ async function openAnyDocs(autoPlan = false) {
     body: JSON.stringify({
       ...paths,
       anydocs_url: $("anydocs_url").value.trim() || DEFAULT_ANYDOCS_URL,
-      auto_plan: !!autoPlan,
       export_bundle: true,
       bundle_min_quality: anydocsBundleMinQuality()
     })
@@ -3441,6 +3467,14 @@ async function openAnyDocs(autoPlan = false) {
   const payload = await response.json();
   if (!response.ok) return showToast(payload.error || tr("anydocs_open_failed"));
   if ($("anydocs_bundle_path")) $("anydocs_bundle_path").value = payload.bundle_path || anydocsBundlePath();
+  if (payload.service_available === false || payload.opened === false) {
+    anydocsUnavailableServiceUrl = String(payload.service_url || $("anydocs_url").value || DEFAULT_ANYDOCS_URL);
+    anydocsGithubOpened = payload.github_opened === true;
+    renderAnydocsOpenStatus();
+    showToast(tr(anydocsGithubOpened ? "anydocs_github_opened" : "anydocs_github_open_failed"));
+    renderAnydocsStats();
+    return;
+  }
   showToast(tr("anydocs_opened"));
   renderAnydocsStats();
 }

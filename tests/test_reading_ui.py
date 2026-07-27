@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import reading_ui
+from rag_vector_store import sync_qdrant_local_index
 from reading_tracker import ReadingPaths
 from reading_ui import (
     AppState,
@@ -649,6 +650,9 @@ def test_rag_task_command_includes_index_options(tmp_path: Path) -> None:
             "rag_limit": "20",
             "rag_chunk_max_chars": "1200",
             "rag_chunk_overlap_chars": "160",
+            "rag_vector_store_type": "qdrant_local",
+            "rag_qdrant_path": str(tmp_path / "qdrant"),
+            "rag_qdrant_collection": "docs",
         },
         paths,
     )
@@ -666,6 +670,9 @@ def test_rag_task_command_includes_index_options(tmp_path: Path) -> None:
     assert command[command.index("--chunk-max-chars") + 1] == "1200"
     assert command[command.index("--chunk-overlap-chars") + 1] == "160"
     assert "--no-embeddings" not in command
+    assert command[command.index("--vector-store") + 1] == "qdrant_local"
+    assert command[command.index("--qdrant-path") + 1] == str(tmp_path / "qdrant")
+    assert command[command.index("--qdrant-collection") + 1] == "docs"
 
     text_only = rag_task_command(
         {"llm_endpoint": "http://localhost:11434/api/generate"},
@@ -952,6 +959,37 @@ def test_vector_store_connection_checks_local_rag_jsonl(tmp_path: Path) -> None:
     assert payload["vector_count"] == 2
 
 
+def test_vector_store_connection_checks_qdrant_local_collection(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    qdrant_path = tmp_path / "qdrant"
+    source_dir.mkdir()
+    output_root.mkdir()
+    sync_qdrant_local_index(
+        qdrant_path,
+        "docs",
+        [{"chunk_id": "a", "document_id": "doc-a", "text": "alpha"}],
+        {"a": [1.0, 0.0]},
+    )
+
+    payload = reading_ui.test_vector_store_connection(
+        AppState(paths=ReadingPaths(source_dir=source_dir, output_root=output_root)),
+        {
+            "store_type": "qdrant_local",
+            "source_dir": str(source_dir),
+            "output_root": str(output_root),
+            "path": str(qdrant_path),
+            "collection": "docs",
+        },
+    )
+
+    assert payload["ok"] is True
+    assert payload["reachable"] is True
+    assert payload["collection_exists"] is True
+    assert payload["vector_count"] == 1
+    assert payload["vector_dimension"] == 2
+
+
 def test_vector_store_connection_checks_qdrant_collection(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -1059,6 +1097,18 @@ def test_frontend_assets_are_split_from_python_html() -> None:
     assert "<script>" not in reading_ui.HTML_PAGE
     assert "header {\n  padding: 16px 20px 0;" in css
     assert "function switchTab" in reading_ui.read_ui_asset_text("app.js")
+
+
+def test_frontend_assets_are_served_from_startup_cache(monkeypatch) -> None:
+    def fail_if_read_again(*args, **kwargs):
+        raise AssertionError("frontend assets must not be read again after module startup")
+
+    monkeypatch.setattr(reading_ui.resources, "files", fail_if_read_again)
+
+    assert reading_ui.read_ui_asset_text("index.html") == reading_ui.HTML_PAGE
+    assert reading_ui.HTML_PAGE_BYTES == reading_ui.UI_ASSET_BYTES["index.html"]
+    assert reading_ui.HTML_PAGE == reading_ui.UI_ASSET_TEXT["index.html"]
+    assert "function switchTab" in reading_ui.read_ui_frontend_source()
 
 
 def test_terminate_process_tree_kills_process_group_off_windows(monkeypatch) -> None:
@@ -3333,6 +3383,114 @@ def test_anydocs_bundle_quality_stats_matches_export_selection(tmp_path: Path) -
     assert stats["excluded_categories"] == []
 
 
+def test_open_anydocs_request_probes_service_before_opening(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    bundle_path = output_root / "_relationships" / "doctriage_bundle.json"
+    bundle_path.parent.mkdir(parents=True)
+    bundle_path.write_text("{}", encoding="utf-8")
+    opened_urls: list[str] = []
+    github_urls: list[str] = []
+    monkeypatch.setattr(
+        reading_ui,
+        "http_json_request",
+        lambda *args, **kwargs: {
+            "reachable": True,
+            "status_code": 200,
+            "text": "<title>AnyDocsToAgents</title>",
+        },
+    )
+    monkeypatch.setattr(reading_ui.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.setattr(
+        reading_ui.webbrowser,
+        "open_new_tab",
+        lambda url: github_urls.append(url) or True,
+    )
+
+    payload = reading_ui.open_anydocs_request(
+        AppState(paths=ReadingPaths(source_dir=source_dir, output_root=output_root)),
+        {
+            "source_dir": str(source_dir),
+            "output_root": str(output_root),
+            "anydocs_url": "http://127.0.0.1:18766/?autoplan=1",
+            "export_bundle": False,
+        },
+    )
+
+    assert payload["opened"] is True
+    assert payload["service_available"] is True
+    assert payload["exported"] is False
+    assert payload["bundle_path"] == str(bundle_path)
+    assert "autoplan" not in payload["url"]
+    assert "doctriage_bundle_path=" in payload["url"]
+    assert opened_urls == [payload["url"]]
+    assert github_urls == []
+
+
+def test_open_anydocs_request_opens_github_when_service_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    state_dir = output_root / "_state"
+    state_dir.mkdir(parents=True)
+    document = source_dir / "doc.md"
+    document.write_text("Bundle handoff fixture", encoding="utf-8")
+    (state_dir / "decisions.jsonl").write_text(
+        json.dumps(
+            {
+                "source_path": str(document),
+                "relative_path": "doc.md",
+                "status": "planned",
+                "quality": 90,
+                "category": "Research",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    opened_urls: list[str] = []
+    github_urls: list[str] = []
+    monkeypatch.setattr(
+        reading_ui,
+        "http_json_request",
+        lambda *args, **kwargs: {
+            "reachable": False,
+            "status_code": None,
+            "text": "",
+        },
+    )
+    monkeypatch.setattr(reading_ui.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.setattr(
+        reading_ui.webbrowser,
+        "open_new_tab",
+        lambda url: github_urls.append(url) or True,
+    )
+
+    payload = reading_ui.open_anydocs_request(
+        AppState(paths=ReadingPaths(source_dir=source_dir, output_root=output_root)),
+        {
+            "source_dir": str(source_dir),
+            "output_root": str(output_root),
+            "anydocs_url": "http://127.0.0.1:18766/",
+            "export_bundle": True,
+        },
+    )
+
+    assert payload["opened"] is False
+    assert payload["service_available"] is False
+    assert payload["exported"] is True
+    assert payload["github_opened"] is True
+    assert opened_urls == []
+    assert github_urls == [reading_ui.ANYDOCS_GITHUB_URL]
+    assert (output_root / "_relationships" / "doctriage_bundle.json").exists()
+
+
 def test_infer_source_dir_from_decisions_without_relative_path(tmp_path: Path) -> None:
     output_root = tmp_path / "output"
     state_dir = output_root / "_state"
@@ -3451,9 +3609,12 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     html = frontend_source()
     compact_html = frontend_source_compact()
 
+    assert 'data-i18n="tab_analysis">文档分析</button>' in html
+    assert 'tab_analysis: "Document Analysis"' in html
+    assert "分析执行" not in html
     assert "挖掘关系" in html
-    assert "输出到 _relationships/relations.jsonl 与 clusters.json" in html
-    assert "留空则只使用默认关系挖掘和标题引用" in html
+    assert "生成关系和聚类文件：_relationships/relations.jsonl、clusters.json" in html
+    assert "留空时使用规则与标题引用" in html
     assert "内容检测除了时间和大小，还计算文件内容哈希" not in html
     assert "变更检测除了时间和大小，还计算文件内容哈希" not in html
     assert 'id="run_embedding_model"' in html
@@ -3507,7 +3668,8 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert 'id="graph_exports_panel"' not in html
     assert 'id="graph_export_graph_btn"' not in html
     assert 'id="graph_export_bundle_btn"' not in html
-    assert 'id="anydocs_export_bundle_btn"' in html
+    assert 'id="anydocs_export_bundle_btn"' not in html
+    assert 'id="anydocs_export_open_btn"' in html
     assert 'id="graph_stop_relationships_btn"' not in html
     assert 'data-i18n="apply_graph_output"' not in html
     assert "应用图谱目录" not in html
@@ -3539,7 +3701,11 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert 'plan_only: "Score only, do not copy files"' in html
     assert 'ocr_enabled: "Enable OCR"' in html
     assert 'endpoint.replace(/\\/v1\\/chat\\/completions\\/?$/i, "/v1/embeddings")' in html
-    assert "不会自动沿用这里的模型" in html
+    assert "向量关系使用单独的向量模型" in html
+    assert "适合首轮" not in html
+    assert "帮助发现" not in html
+    assert "这里会显示" not in html
+    assert "不启动、不依赖、不嵌入" not in html
     assert "Embedding 关系" not in html
     assert "向量模型" in html
     assert "填写向量模型后启用" in html
@@ -3594,7 +3760,8 @@ def test_rag_tab_exposes_independent_index_controls() -> None:
     assert 'id="rag_build_advanced_panel"' in html
     assert 'class="panel-body rag-options-row"' in html
     assert 'id="rag_vector_panel"' in html
-    assert 'data-i18n="vector_store_advanced">向量库测试' in html
+    assert 'data-i18n="vector_store_advanced">向量存储' in html
+    assert '<option value="qdrant_local"' in html
     assert ".rag-target-row button { min-width: 96px; white-space: nowrap; }" in compact_html
     assert ".rag-options-row { display: grid; grid-template-columns: minmax(180px, 240px)" in compact_html
     assert "align-items: start;" in compact_html
@@ -3677,27 +3844,34 @@ def test_anydocs_bridge_ui_is_optional_and_first_class() -> None:
     assert "function renderAnydocsQualityStats()" in html
     assert '"--quality-progress", value + "%"' in compact_html
     assert "center / 100% 4px no-repeat" in compact_html
-    anydocs_export_body = compact_html.split("async function exportAnydocsBundle()", 1)[1].split(
-        "async function openAnyDocs", 1
-    )[0]
-    assert "...runPayload()" not in anydocs_export_body
     export_body = Path(reading_ui.__file__).read_text(encoding="utf-8").split(
         "def export_bundle_for_anydocs", 1
     )[1].split("def export_anydocs_bundle_request", 1)[0]
     assert 'payload.get("quality_threshold")' not in export_body
-    assert 'onclick="exportAnydocsBundle()"' in html
-    assert 'onclick="openAnyDocs(false)"' in html
-    assert 'onclick="openAnyDocs(true)"' in html
-    assert "AnyDocsToAgents 独立运行" in html
-    assert "不启动、不依赖、不嵌入下游服务" in html
+    assert 'onclick="exportAnydocsBundle()"' not in html
+    assert 'onclick="openAnyDocs()"' not in html
+    assert 'onclick="exportAndOpenAnyDocs()"' in html
+    assert 'data-i18n="export_open_anydocs">导出并打开 AnyDocsToAgents' in html
+    assert "async function exportAnydocsBundle()" not in html
+    assert "async function exportAndOpenAnyDocs()" in html
+    assert "openAnyDocs(true)" not in html
+    assert "open_anydocs_autoplan" not in html
+    assert "打开并生成 Graph" not in html
+    assert "Bundle 可导入 AnyDocsToAgents；两个项目独立运行" not in html
+    assert "不启动、不依赖、不嵌入下游服务" not in html
     assert "https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents" in html
     assert "https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage" not in html
     assert 'class="button-link github-icon-link"' in html
     assert "<svg viewBox=" in html
     assert 'for (const id of ["analysis", "reading", "graph", "rag", "agents"])' in html
     assert 'initAnydocsTargetPersistence();' in html
-    assert 'fetch("/api/integrations/anydocs/export-bundle"' in html
+    assert 'fetch("/api/integrations/anydocs/export-bundle"' not in html
     assert 'fetch("/api/integrations/anydocs/open"' in html
+    assert "export_bundle: true" in html
+    assert 'id="anydocs_open_status_panel" class="panel" hidden' in html
+    assert 'id="anydocs_open_status" class="graph-empty" role="status"' in html
+    assert "function renderAnydocsOpenStatus()" in html
+    assert "payload.service_available === false" in html
     assert 'id="toast" class="toast" role="status" aria-live="polite"' in html
     assert "top: max(16px, env(safe-area-inset-top));" in html
     assert "left: 50%;" in html
@@ -3709,9 +3883,12 @@ def test_reading_tab_uses_compact_filter_layout() -> None:
     compact_html = frontend_source_compact()
 
     assert 'class="panel shared-target-panel"' in html
+    assert 'class="shared-target-row"' in html
     assert 'data-i18n="current_output_root">当前输出目录' in html
     assert 'class="panel reading-target hidden-target-panel"' in html
-    assert 'class="panel reading-filter-panel"' in html
+    assert 'id="reading_filter_panel" class="reading-filter-panel" hidden' in html
+    assert 'data-i18n="reading_filters">搜索与过滤' in html
+    assert 'id="reading_filter_body" class="reading-filter-body"' in html
     assert 'class="reading-filter-primary"' in html
     assert 'class="reading-filter-secondary"' in html
     assert 'data-i18n="apply_reading_output"' not in html
@@ -3722,6 +3899,13 @@ def test_reading_tab_uses_compact_filter_layout() -> None:
     assert "Switching the reading directory does not affect analysis execution" not in html
     assert "class=\"panel filters reading-filters\"" not in html
     assert ".reading-filter-primary button { min-width: 96px; white-space: nowrap; }" in compact_html
+    assert 'if (readingFilterPanel) readingFilterPanel.hidden = name !== "reading";' in html
+
+    shared_panel_start = html.index('id="shared_target_panel"')
+    shared_panel_end = html.index('<section id="section-analysis"', shared_panel_start)
+    shared_panel_body = html[shared_panel_start:shared_panel_end]
+    assert 'id="global_output_root"' in shared_panel_body
+    assert 'id="reading_filter_panel"' in shared_panel_body
 
     primary_start = html.index('class="reading-filter-primary"')
     secondary_start = html.index('class="reading-filter-secondary"')
@@ -3733,7 +3917,7 @@ def test_reading_tab_uses_compact_filter_layout() -> None:
     assert 'onclick="loadRows()" data-i18n="refresh"' in primary_body
     assert 'id="reading_scope"' not in primary_body
 
-    secondary_body = html[secondary_start:html.index('<div class="summary-bar">', secondary_start)]
+    secondary_body = html[secondary_start:html.index("</details>", secondary_start)]
     assert 'id="reading_scope"' in secondary_body
     assert 'id="categories"' in secondary_body
     assert 'id="topic_tags"' in secondary_body

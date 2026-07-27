@@ -54,6 +54,7 @@ from reading_tracker import (
     parse_categories,
 )
 from ollama_runtime import models_are_same, resolve_ollama_runtime_endpoint
+from rag_vector_store import inspect_qdrant_local_index, normalize_vector_store_type
 
 
 @dataclass(slots=True)
@@ -89,6 +90,10 @@ _SOURCE_FILE_SCAN_CACHE_LOCK = threading.Lock()
 DEFAULT_LLM_ENDPOINT = "http://localhost:11434/api/generate"
 DEFAULT_EMBEDDING_ENDPOINT = "http://localhost:11434/api/embeddings"
 DEFAULT_ANYDOCS_URL = "http://127.0.0.1:18766/"
+ANYDOCS_GITHUB_URL = (
+    "https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents"
+)
+ANYDOCS_PROBE_TIMEOUT_SECONDS = 2.0
 HTTP_PROBE_TIMEOUT_SECONDS = 5.0
 HTTP_PROBE_MAX_BYTES = 1024 * 1024
 UPLOAD_WORKSPACE_ROOT = PROJECT_ROOT / ".doctriage_uploads"
@@ -109,19 +114,33 @@ UI_STATIC_ASSETS: dict[str, tuple[str, str]] = {
     "/assets/app.css": ("app.css", "text/css; charset=utf-8"),
     "/assets/app.js": ("app.js", "application/javascript; charset=utf-8"),
 }
+UI_ASSET_NAMES = (UI_INDEX_ASSET, "app.css", "app.js")
+
+
+def _load_ui_asset_bytes(asset_name: str) -> bytes:
+    return resources.files(UI_PACKAGE).joinpath(asset_name).read_bytes()
+
+
+UI_ASSET_BYTES = {
+    asset_name: _load_ui_asset_bytes(asset_name) for asset_name in UI_ASSET_NAMES
+}
+UI_ASSET_TEXT = {
+    asset_name: content.decode("utf-8")
+    for asset_name, content in UI_ASSET_BYTES.items()
+}
 
 
 def read_ui_asset_text(asset_name: str) -> str:
-    return resources.files(UI_PACKAGE).joinpath(asset_name).read_text(encoding="utf-8")
+    return UI_ASSET_TEXT[asset_name]
 
 
 HTML_PAGE = read_ui_asset_text(UI_INDEX_ASSET)
+HTML_PAGE_BYTES = UI_ASSET_BYTES[UI_INDEX_ASSET]
 
 
 def read_ui_frontend_source() -> str:
     return "\n".join(
-        read_ui_asset_text(asset_name)
-        for asset_name in (UI_INDEX_ASSET, "app.css", "app.js")
+        read_ui_asset_text(asset_name) for asset_name in UI_ASSET_NAMES
     )
 
 
@@ -1139,17 +1158,14 @@ def bundle_path_for_output(paths: ReadingPaths) -> Path:
     return relationship_dir(paths) / "doctriage_bundle.json"
 
 
-def build_anydocs_url(base_url: str, bundle_path: Path, *, auto_plan: bool) -> str:
+def build_anydocs_url(base_url: str, bundle_path: Path) -> str:
     url_text = str(base_url or DEFAULT_ANYDOCS_URL).strip() or DEFAULT_ANYDOCS_URL
     parsed = urllib.parse.urlparse(url_text)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("AnyDocsToAgents URL must be an http(s) URL.")
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
     query["doctriage_bundle_path"] = [str(bundle_path)]
-    if auto_plan:
-        query["autoplan"] = ["1"]
-    else:
-        query.pop("autoplan", None)
+    query.pop("autoplan", None)
     encoded_query = urllib.parse.urlencode(query, doseq=True)
     return urllib.parse.urlunparse(
         (
@@ -1161,6 +1177,30 @@ def build_anydocs_url(base_url: str, bundle_path: Path, *, auto_plan: bool) -> s
             "view-planner",
         )
     )
+
+
+def anydocs_probe_url(base_url: str) -> str:
+    """Return the configured AnyDocsToAgents page without launch parameters."""
+    parsed = urllib.parse.urlparse(str(base_url or DEFAULT_ANYDOCS_URL).strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("AnyDocsToAgents URL must be an http(s) URL.")
+    return urllib.parse.urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path or "/", parsed.params, "", "")
+    )
+
+
+def anydocs_service_available(base_url: str) -> bool:
+    """Confirm that the configured endpoint serves the AnyDocsToAgents UI."""
+    probe = http_json_request(
+        anydocs_probe_url(base_url),
+        timeout_seconds=ANYDOCS_PROBE_TIMEOUT_SECONDS,
+    )
+    status_code = probe.get("status_code")
+    if not probe.get("reachable") or status_code is None:
+        return False
+    if not 200 <= int(status_code) < 400:
+        return False
+    return "anydocstoagents" in str(probe.get("text") or "").lower()
 
 
 def export_bundle_for_anydocs(paths: ReadingPaths, payload: dict[str, Any]) -> Path:
@@ -1229,18 +1269,36 @@ def anydocs_bundle_quality_stats(
 def open_anydocs_request(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
     paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
     bundle_path = bundle_path_for_output(paths)
-    if bool(payload.get("export_bundle")) or not bundle_path.exists():
+    exported = False
+    if bool(payload.get("export_bundle")):
         bundle_path = export_bundle_for_anydocs(paths, payload)
-    url = build_anydocs_url(
-        str(payload.get("anydocs_url") or DEFAULT_ANYDOCS_URL),
-        bundle_path,
-        auto_plan=bool(payload.get("auto_plan")),
-    )
+        exported = True
+    base_url = str(payload.get("anydocs_url") or DEFAULT_ANYDOCS_URL)
+    url = build_anydocs_url(base_url, bundle_path)
+    if not anydocs_service_available(base_url):
+        github_opened = bool(webbrowser.open_new_tab(ANYDOCS_GITHUB_URL))
+        return {
+            "opened": False,
+            "service_available": False,
+            "service_url": anydocs_probe_url(base_url),
+            "github_opened": github_opened,
+            "github_url": ANYDOCS_GITHUB_URL,
+            "url": url,
+            "bundle_path": str(bundle_path),
+            "exported": exported,
+        }
+    if not bundle_path.exists():
+        bundle_path = export_bundle_for_anydocs(paths, payload)
+        exported = True
+    url = build_anydocs_url(base_url, bundle_path)
     webbrowser.open(url)
     return {
         "opened": True,
+        "service_available": True,
+        "service_url": anydocs_probe_url(base_url),
         "url": url,
         "bundle_path": str(bundle_path),
+        "exported": exported,
     }
 
 
@@ -1635,6 +1693,32 @@ def test_local_vector_store(paths: ReadingPaths) -> dict[str, Any]:
     }
 
 
+def test_qdrant_local_vector_store(
+    paths: ReadingPaths, path_value: str = "", collection: str = ""
+) -> dict[str, Any]:
+    qdrant_path = (
+        Path(path_value).expanduser().resolve()
+        if str(path_value or "").strip()
+        else rag_dir(paths) / "qdrant"
+    )
+    try:
+        return inspect_qdrant_local_index(
+            qdrant_path,
+            collection or "doctriage_rag",
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "reachable": False,
+            "store_type": "qdrant_local",
+            "path": str(qdrant_path),
+            "collection": collection or "doctriage_rag",
+            "collection_checked": True,
+            "collection_exists": None,
+            "message": f"Qdrant Local check failed: {exc}",
+        }
+
+
 def test_qdrant_vector_store(url: str, collection: str) -> dict[str, Any]:
     collections_url = joined_url(url, "collections")
     probe = http_json_request(collections_url)
@@ -1784,6 +1868,17 @@ def test_vector_store_connection(
     if store_type == "local_jsonl":
         paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
         return test_local_vector_store(paths)
+    if store_type in {"qdrant_local", "local_qdrant", "qdrant-local"}:
+        paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
+        return test_qdrant_local_vector_store(
+            paths,
+            str(payload.get("path") or payload.get("qdrant_path") or ""),
+            str(
+                payload.get("collection")
+                or payload.get("qdrant_collection")
+                or "doctriage_rag"
+            ).strip(),
+        )
 
     url = str(payload.get("url") or payload.get("vector_store_url") or "").strip()
     collection = str(
@@ -2126,6 +2221,20 @@ def rag_task_command(payload: dict[str, Any], paths: ReadingPaths) -> list[str]:
     if embedding_model:
         command.extend(["--embedding-model", embedding_model])
 
+    vector_store = normalize_vector_store_type(
+        str(payload.get("rag_vector_store_type") or "local_jsonl")
+    )
+    command.extend(["--vector-store", vector_store])
+    if vector_store == "qdrant_local":
+        qdrant_path = str(payload.get("rag_qdrant_path") or "").strip()
+        if qdrant_path:
+            command.extend(["--qdrant-path", qdrant_path])
+        qdrant_collection = str(
+            payload.get("rag_qdrant_collection") or "doctriage_rag"
+        ).strip()
+        if qdrant_collection:
+            command.extend(["--qdrant-collection", qdrant_collection])
+
     option_map = {
         "rag_min_quality": "--min-quality",
         "rag_limit": "--limit",
@@ -2171,6 +2280,14 @@ def rag_redaction_env(payload: dict[str, Any]) -> dict[str, str]:
 
 def start_rag_task(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
     paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
+    vector_store = normalize_vector_store_type(
+        str(payload.get("rag_vector_store_type") or "local_jsonl")
+    )
+    embedding_model = str(payload.get("embedding_model") or "").strip()
+    if vector_store == "qdrant_local" and not embedding_model:
+        raise ValueError(
+            "Qdrant Local requires an embedding model before indexing can start."
+        )
 
     with app_state.lock:
         analysis_task = analysis_task_for_paths(app_state, paths)
@@ -2271,6 +2388,17 @@ def search_rag_request(app_state: AppState, payload: dict[str, Any]) -> dict[str
         EMBEDDING_MODEL=str(payload.get("embedding_model") or "").strip() or None,
         EMBEDDING_API_KEY=str(payload.get("embedding_api_key") or "").strip() or None,
         RAG_MAX_SEARCH_RESULTS=coerce_int_value(payload.get("top_k"), 10),
+        RAG_VECTOR_STORE_TYPE=normalize_vector_store_type(
+            str(payload.get("rag_vector_store_type") or "local_jsonl")
+        ),
+        RAG_QDRANT_PATH=(
+            Path(str(payload.get("rag_qdrant_path")).strip()).expanduser().resolve()
+            if str(payload.get("rag_qdrant_path") or "").strip()
+            else None
+        ),
+        RAG_QDRANT_COLLECTION=str(
+            payload.get("rag_qdrant_collection") or "doctriage_rag"
+        ).strip(),
     )
     return search_rag_index(
         settings,
@@ -4606,7 +4734,7 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         query = self.parse_query(parsed.query)
         if parsed.path == "/":
-            self.send_html(HTML_PAGE)
+            self.send_html(HTML_PAGE_BYTES)
             return
         if parsed.path in UI_STATIC_ASSETS:
             self.send_ui_asset(parsed.path)
@@ -4816,8 +4944,8 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
             upload_id = remainder
         return validate_upload_id(upload_id)
 
-    def send_html(self, html: str) -> None:
-        encoded = html.encode("utf-8")
+    def send_html(self, html: str | bytes) -> None:
+        encoded = html if isinstance(html, bytes) else html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -4827,7 +4955,7 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
 
     def send_ui_asset(self, request_path: str) -> None:
         asset_name, content_type = UI_STATIC_ASSETS[request_path]
-        encoded = read_ui_asset_text(asset_name).encode("utf-8")
+        encoded = UI_ASSET_BYTES[asset_name]
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")

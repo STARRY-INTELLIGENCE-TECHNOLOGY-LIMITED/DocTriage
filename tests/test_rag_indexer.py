@@ -15,6 +15,11 @@ from rag_indexer import (
     redaction_policy_from_sources,
     search_rag_index,
 )
+from rag_vector_store import (
+    inspect_qdrant_local_index,
+    search_qdrant_local_index,
+    sync_qdrant_local_index,
+)
 
 
 def write_decision(output_root: Path, payload: dict) -> None:
@@ -285,6 +290,130 @@ def test_rag_search_falls_back_to_lexical_index(tmp_path: Path) -> None:
     assert payload["mode"] == "lexical"
     assert payload["results"][0]["relative_path"] == "retrieval.md"
     assert "chunk overlap" in payload["results"][0]["excerpt"].lower()
+
+
+def test_qdrant_local_sync_search_and_stale_point_cleanup(tmp_path: Path) -> None:
+    qdrant_path = tmp_path / "qdrant"
+    chunks = [
+        {
+            "chunk_id": "alpha",
+            "document_id": "doc-alpha",
+            "relative_path": "alpha.md",
+            "text": "alpha evidence",
+            "chunk_index": 0,
+        },
+        {
+            "chunk_id": "beta",
+            "document_id": "doc-beta",
+            "relative_path": "beta.md",
+            "text": "beta evidence",
+            "chunk_index": 0,
+        },
+    ]
+
+    first = sync_qdrant_local_index(
+        qdrant_path,
+        "rag_test",
+        chunks,
+        {"alpha": [1.0, 0.0], "beta": [0.0, 1.0]},
+    )
+    search = search_qdrant_local_index(
+        qdrant_path,
+        "rag_test",
+        [1.0, 0.0],
+        limit=2,
+    )
+
+    assert first["vector_count"] == 2
+    assert first["vector_dimension"] == 2
+    assert next(iter(search["scores"])) == "alpha"
+
+    second = sync_qdrant_local_index(
+        qdrant_path,
+        "rag_test",
+        chunks[1:],
+        {"beta": [0.0, 1.0]},
+    )
+    inspected = inspect_qdrant_local_index(qdrant_path, "rag_test")
+
+    assert second["vector_count"] == 1
+    assert inspected["collection_exists"] is True
+    assert inspected["vector_count"] == 1
+
+
+def test_rag_build_and_search_use_qdrant_local_with_jsonl_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    document = source_dir / "office.md"
+    document.write_text(
+        "Office succession depends on durable trust and documented delivery.",
+        encoding="utf-8",
+    )
+    write_decision(
+        output_root,
+        {
+            "source_path": str(document),
+            "relative_path": "office.md",
+            "status": "planned",
+            "quality": 96,
+            "category": "Business",
+        },
+    )
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        SOURCE_DIR=source_dir,
+        OUTPUT_ROOT=output_root,
+        EMBEDDING_MODEL="fake-embed",
+        EMBEDDING_ENDPOINT="http://localhost:11434/api/embeddings",
+        RAG_VECTOR_STORE_TYPE="qdrant_local",
+        RAG_QDRANT_COLLECTION="rag_e2e",
+    )
+
+    class FakeEmbeddingClient:
+        endpoint = "http://localhost:11434/api/embeddings"
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return None
+
+        def embed(self, text: str):
+            return [1.0, 0.0] if "office" in text.lower() else [0.0, 1.0]
+
+    monkeypatch.setattr(rag_indexer, "OllamaEmbeddingClient", FakeEmbeddingClient)
+    monkeypatch.setattr(
+        rag_indexer,
+        "prepare_embedding_model_for_rag_index",
+        lambda settings: None,
+    )
+
+    status = build_rag_index(settings, embeddings_enabled=True)
+    result = search_rag_index(settings, "office trust", top_k=3)
+
+    assert status["manifest"]["vector_store"]["store_type"] == "qdrant_local"
+    assert status["manifest"]["vector_store"]["vector_count"] == 1
+    assert result["mode"] == "vector"
+    assert result["vector_store"] == "qdrant_local"
+    assert result["results"][0]["relative_path"] == "office.md"
+
+    monkeypatch.setattr(
+        rag_indexer,
+        "search_qdrant_local_index",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("locked")),
+    )
+    fallback = search_rag_index(settings, "office trust", top_k=3)
+
+    assert fallback["mode"] == "vector"
+    assert fallback["vector_store"] == "local_jsonl"
+    assert fallback["results"][0]["relative_path"] == "office.md"
+    assert "Qdrant Local search failed" in fallback["warnings"][0]
 
 
 def test_build_rag_index_applies_redaction_to_chunks_and_manifest(tmp_path: Path) -> None:

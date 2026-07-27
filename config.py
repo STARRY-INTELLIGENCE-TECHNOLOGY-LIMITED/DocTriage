@@ -126,6 +126,9 @@ class Settings(BaseSettings):
     RAG_MIN_QUALITY: int = Field(default=75, ge=0, le=100)
     RAG_MAX_DOCUMENTS: int | None = Field(default=None, ge=1)
     RAG_MAX_SEARCH_RESULTS: int = Field(default=10, ge=1, le=100)
+    RAG_VECTOR_STORE_TYPE: str = Field(default="local_jsonl")
+    RAG_QDRANT_PATH: Path | None = Field(default=None)
+    RAG_QDRANT_COLLECTION: str = Field(default="doctriage_rag", min_length=1)
 
     CATEGORY_MAP: dict[str, str] = Field(
         default_factory=lambda: DEFAULT_CATEGORY_MAP.copy()
@@ -255,6 +258,13 @@ class Settings(BaseSettings):
     @property
     def rag_progress_path(self) -> Path:
         return self.rag_dir / "progress.json"
+
+    @property
+    def rag_qdrant_path(self) -> Path:
+        configured = self.RAG_QDRANT_PATH
+        if configured is None:
+            return self.rag_dir / "qdrant"
+        return configured.expanduser().resolve()
 
 
 @lru_cache(maxsize=1)

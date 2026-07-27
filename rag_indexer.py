@@ -25,6 +25,11 @@ from ollama_runtime import (
     release_ollama_model_for_settings,
 )
 from relationship_miner import OllamaEmbeddingClient
+from rag_vector_store import (
+    normalize_vector_store_type,
+    search_qdrant_local_index,
+    sync_qdrant_local_index,
+)
 from runtime_encoding import configure_utf8_runtime
 
 RAG_PROGRESS_VERSION = "doctriage_rag_progress.v1"
@@ -98,6 +103,14 @@ def build_rag_index(
     )
     if use_embeddings and not str(current_settings.EMBEDDING_MODEL or "").strip():
         raise ValueError("EMBEDDING_MODEL must be configured when RAG embeddings are enabled.")
+    vector_store_type = normalize_vector_store_type(
+        current_settings.RAG_VECTOR_STORE_TYPE
+    )
+    if vector_store_type == "qdrant_local" and not use_embeddings:
+        raise ValueError(
+            "Qdrant Local requires an embedding model. Configure EMBEDDING_MODEL "
+            "or select local_jsonl."
+        )
 
     decisions_path = current_settings.state_dir / "decisions.jsonl"
     current_settings.rag_dir.mkdir(parents=True, exist_ok=True)
@@ -191,6 +204,18 @@ def build_rag_index(
                 if chunk_id in current_chunk_ids
             }
 
+        vector_store_status: dict[str, Any] = {
+            "store_type": "local_jsonl",
+            "vector_count": len(current_vectors),
+        }
+        if vector_store_type == "qdrant_local":
+            vector_store_status = sync_qdrant_local_index(
+                current_settings.rag_qdrant_path,
+                current_settings.RAG_QDRANT_COLLECTION,
+                chunks,
+                current_vectors,
+            )
+
         manifest = build_manifest(
             current_settings,
             current_selection,
@@ -199,6 +224,7 @@ def build_rag_index(
             failures=failures,
             embeddings_enabled=use_embeddings,
             vector_count=len(current_vectors),
+            vector_store_status=vector_store_status,
             redaction_policy=redaction_policy or RagRedactionPolicy(),
         )
         write_json_atomic(current_settings.rag_manifest_path, manifest)
@@ -602,37 +628,77 @@ def search_rag_index(
     embedding_model = str(
         current_settings.EMBEDDING_MODEL or manifest.get("embedding_model") or ""
     ).strip()
-    vectors = load_rag_vectors(
-        current_settings.rag_vectors_path,
-        embedding_model=embedding_model or None,
+    vector_store_type = normalize_vector_store_type(
+        current_settings.RAG_VECTOR_STORE_TYPE
     )
-    current_vectors = {
-        str(chunk["chunk_id"]): vectors[str(chunk["chunk_id"])]
-        for chunk in chunks
-        if str(chunk.get("chunk_id") or "") in vectors
-    }
+    current_vectors: dict[str, list[float]] = {}
+    vector_scores: dict[str, float] = {}
+    vector_count = 0
+    actual_vector_store = vector_store_type
+    warnings: list[str] = []
     query_vector: list[float] | None = None
     used_vector_search = False
-    if not lexical_only and current_vectors and embedding_model:
+
+    if not lexical_only and embedding_model:
         search_settings = (
             current_settings
             if embedding_model == str(current_settings.EMBEDDING_MODEL or "").strip()
             else current_settings.model_copy(update={"EMBEDDING_MODEL": embedding_model})
         )
-        with OllamaEmbeddingClient(search_settings) as client:
-            query_vector = client.embed(normalized_query)
-            used_vector_search = True
+        if vector_store_type == "qdrant_local":
+            try:
+                with OllamaEmbeddingClient(search_settings) as client:
+                    query_vector = client.embed(normalized_query)
+                qdrant_result = search_qdrant_local_index(
+                    current_settings.rag_qdrant_path,
+                    current_settings.RAG_QDRANT_COLLECTION,
+                    query_vector,
+                    limit=max(50, (top_k or current_settings.RAG_MAX_SEARCH_RESULTS) * 8),
+                )
+                vector_scores = dict(qdrant_result.get("scores") or {})
+                vector_count = coerce_int(qdrant_result.get("vector_count"), 0)
+                used_vector_search = bool(vector_scores)
+            except Exception as exc:
+                warnings.append(
+                    f"Qdrant Local search failed; used JSONL fallback: {exc}"
+                )
+                actual_vector_store = "local_jsonl"
+
+        if vector_store_type == "local_jsonl" or actual_vector_store == "local_jsonl":
+            vectors = load_rag_vectors(
+                current_settings.rag_vectors_path,
+                embedding_model=embedding_model or None,
+            )
+            current_vectors = {
+                str(chunk["chunk_id"]): vectors[str(chunk["chunk_id"])]
+                for chunk in chunks
+                if str(chunk.get("chunk_id") or "") in vectors
+            }
+            vector_count = len(current_vectors)
+            if current_vectors:
+                if query_vector is None:
+                    with OllamaEmbeddingClient(search_settings) as client:
+                        query_vector = client.embed(normalized_query)
+                vector_scores = {
+                    chunk_id: cosine_similarity(query_vector, vector)
+                    for chunk_id, vector in current_vectors.items()
+                }
+                used_vector_search = True
 
     results: list[dict[str, Any]] = []
     for chunk in chunks:
         chunk_id = str(chunk.get("chunk_id") or "")
         lexical_score = score_lexical_match(normalized_query, chunk)
         vector_score = 0.0
-        if query_vector is not None and chunk_id in current_vectors:
-            vector_score = cosine_similarity(query_vector, current_vectors[chunk_id])
+        if used_vector_search and chunk_id in vector_scores:
+            vector_score = vector_scores[chunk_id]
         if lexical_score <= 0 and vector_score <= 0:
             continue
-        combined = vector_score * 0.8 + lexical_score * 0.2 if query_vector is not None else lexical_score
+        combined = (
+            vector_score * 0.8 + lexical_score * 0.2
+            if used_vector_search
+            else lexical_score
+        )
         results.append(
             {
                 "chunk_id": chunk_id,
@@ -662,8 +728,10 @@ def search_rag_index(
     return {
         "query": normalized_query,
         "mode": "vector" if used_vector_search else "lexical",
+        "vector_store": actual_vector_store,
         "total_chunks": len(chunks),
-        "vector_count": len(current_vectors),
+        "vector_count": vector_count,
+        "warnings": warnings,
         "results": results[:resolved_top_k],
     }
 
@@ -677,6 +745,7 @@ def build_manifest(
     failures: list[dict[str, Any]],
     embeddings_enabled: bool,
     vector_count: int,
+    vector_store_status: dict[str, Any] | None = None,
     redaction_policy: RagRedactionPolicy | None = None,
 ) -> dict[str, Any]:
     active_policy = redaction_policy or RagRedactionPolicy()
@@ -692,6 +761,8 @@ def build_manifest(
         "failed_documents": len(failures),
         "embeddings_enabled": embeddings_enabled,
         "embedding_model": str(settings.EMBEDDING_MODEL or ""),
+        "vector_store": vector_store_status
+        or {"store_type": "local_jsonl", "vector_count": vector_count},
         "chunk_max_chars": settings.RAG_CHUNK_MAX_CHARS,
         "chunk_overlap_chars": settings.RAG_CHUNK_OVERLAP_CHARS,
         "selection": {
@@ -1234,6 +1305,9 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         "rag_min_quality": "RAG_MIN_QUALITY",
         "rag_max_documents": "RAG_MAX_DOCUMENTS",
         "top_k": "RAG_MAX_SEARCH_RESULTS",
+        "vector_store": "RAG_VECTOR_STORE_TYPE",
+        "qdrant_path": "RAG_QDRANT_PATH",
+        "qdrant_collection": "RAG_QDRANT_COLLECTION",
     }
     for argument_name, setting_name in optional_map.items():
         value = getattr(args, argument_name, None)
@@ -1294,6 +1368,13 @@ def build_parser() -> argparse.ArgumentParser:
 def add_common_path_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source-dir", type=Path)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--vector-store",
+        choices=("local_jsonl", "qdrant_local"),
+        default="local_jsonl",
+    )
+    parser.add_argument("--qdrant-path", type=Path)
+    parser.add_argument("--qdrant-collection", default="doctriage_rag")
 
 
 def main(argv: list[str] | None = None) -> None:

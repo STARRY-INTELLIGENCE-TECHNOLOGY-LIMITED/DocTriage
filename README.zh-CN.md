@@ -14,6 +14,17 @@ DocTriage 会扫描源目录、提取正文、调用本地 LLM 给每个文档�
 
 DocTriage 围绕一个实用闭环设计：先进行本地分析，再在阅读台复核和标记文档，最后在需要关联学习或下游导出时生成关系簇。
 
+## 产品亮点与知识闭环
+
+DocTriage 的核心价值不是简单转换文件，而是在 RAG 或 Agent 入库前回答“哪些资料值得进入知识库、为什么值得、边界是什么”。它把来源只读、质量分级、人工复核、关系挖掘、RAG 索引和可审计导出放在同一条本地优先链路中，适合作为个人或团队私域知识的上游治理层。
+
+- **知识资产治理**：用正文质量、文档类型、主题、敏感性和可公开性代替仅按目录或文件名入库。
+- **可解释筛选**：阅读台、RAG 与 Agent Bundle 各自保留显式阈值；筛选数量和占比可见，不会隐式互相污染。
+- **稳定下游契约**：`doctriage_bundle.v2` 携带来源路径、质量分、分类、摘要、关系和健康状态，下游不需要耦合内部日志。
+- **私域写作基础**：先在 DocTriage 中区分事实资料、观点资料、案例和风格样本，再把可信工作集交给下游生成论点、提纲和文章。
+
+推荐与 [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents) 组成可选闭环：DocTriage 负责“治理与入库”，AnyDocsToAgents 负责“混合检索、执行拓扑、证据问答与文章输出”。两者通过 Bundle 和启动 URL 联动，仍可独立部署和使用。
+
 ## 为什么使用
 
 - 不改动原始目录，也能对大型混乱文件夹做首轮摸底。
@@ -82,6 +93,9 @@ doctriage-reading-ui --host 127.0.0.1 --port 18765
 ```
 
 打开 `http://127.0.0.1:18765/`。
+
+控制台前端以包内静态文件发布，服务启动时一次性载入内存，不执行运行时构建。
+修改 `doctriage_ui` 中的 HTML、CSS 或 JavaScript 后，重启服务即可生效。
 
 ### 文件夹输入与跨平台路径
 
@@ -187,19 +201,35 @@ OUTPUT_ROOT/
     documents.jsonl
     chunks.jsonl
     vectors.jsonl
+    qdrant/
 ```
 
 下游集成应优先读取 `doctriage_bundle.json`，不要直接依赖内部 JSONL 日志。
+
+### Qdrant 本地 RAG
+
+RAG 索引支持 `local_jsonl` 和嵌入式 `qdrant_local`。选择 Qdrant 本地后，向量会实际写入 `OUTPUT_ROOT/_rag/qdrant` 并由 Qdrant 执行相似度检索；`vectors.jsonl` 仍作为可审计副本和故障回退。该模式不启动 HTTP 服务。
+
+```powershell
+doctriage-rag build `
+  --output-root "D:\doctriage_run" `
+  --embedding-endpoint http://127.0.0.1:11434/api/embed `
+  --embedding-model qwen3-embedding:8b `
+  --vector-store qdrant_local `
+  --qdrant-collection doctriage_rag
+```
+
+也可以在控制台的 **RAG 索引 > 向量存储** 中选择 **Qdrant 本地**。存储路径留空时使用上述默认目录；远程 Qdrant、Chroma 和 HTTP 选项仅用于连接测试。
 
 ## 交给 AnyDocsToAgents
 
 浏览器控制台提供 **Agent 编译** 页，可选对接 [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents)。它会导出 `OUTPUT_ROOT/_relationships/doctriage_bundle.json`，并用类似下面的 URL 打开 AnyDocsToAgents：
 
 ```text
-http://127.0.0.1:18766/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json&autoplan=1#view-planner
+http://127.0.0.1:18766/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json#view-planner
 ```
 
-这是松耦合桥接：DocTriage 不启动、不嵌入、不依赖 AnyDocsToAgents。两个项目仍可独立运行。
+DocTriage 会在打开联动地址前检查 AnyDocsToAgents 服务。未检测到服务时，控制台会显示提示并打开 GitHub 项目页。
 
 对于已经完成的长耗时分析，只需导出 bundle，不会重新执行分类：
 

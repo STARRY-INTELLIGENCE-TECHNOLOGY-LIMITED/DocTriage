@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -515,9 +517,24 @@ def build_parser() -> argparse.ArgumentParser:
         prog="doctriage-bundle",
         description="Export selected DocTriage decisions as a low-coupling bundle for downstream tools.",
     )
-    parser.add_argument("--source-dir", type=Path)
-    parser.add_argument("--output-root", type=Path)
-    parser.add_argument("--llm-endpoint")
+    parser.add_argument(
+        "--source-dir",
+        type=Path,
+        help="Source document directory. Required unless SOURCE_DIR is set in the environment or .env.",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        help="Output directory. Required unless OUTPUT_ROOT is set in the environment or .env.",
+    )
+    parser.add_argument(
+        "--llm-endpoint",
+        metavar="URL",
+        help=(
+            "LLM endpoint. Required unless LLM_ENDPOINT is set in the environment or .env; "
+            "for example http://localhost:11434/api/generate."
+        ),
+    )
     parser.add_argument("--llm-model")
     parser.add_argument("--title", default="DocTriage Bundle")
     parser.add_argument("--output", type=Path)
@@ -575,9 +592,40 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
     return get_settings()
 
 
+def format_settings_error(error: ValidationError) -> str:
+    missing_fields = {
+        str(item["loc"][0])
+        for item in error.errors(include_url=False)
+        if item.get("type") == "missing" and item.get("loc")
+    }
+    field_hints = {
+        "LLM_ENDPOINT": "pass --llm-endpoint URL or set LLM_ENDPOINT",
+        "SOURCE_DIR": "pass --source-dir PATH or set SOURCE_DIR",
+        "OUTPUT_ROOT": "pass --output-root PATH or set OUTPUT_ROOT",
+    }
+    missing_hints = [
+        field_hints[field_name]
+        for field_name in ("LLM_ENDPOINT", "SOURCE_DIR", "OUTPUT_ROOT")
+        if field_name in missing_fields
+    ]
+    if missing_hints:
+        return (
+            "required configuration is missing: "
+            + "; ".join(missing_hints)
+            + " in the environment or .env."
+        )
+
+    details = "; ".join(
+        f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
+        for item in error.errors(include_url=False)
+    )
+    return f"invalid configuration: {details}"
+
+
 def main(argv: list[str] | None = None) -> None:
     configure_utf8_runtime()
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     selection = BundleSelection(
         min_quality=args.min_quality,
         categories=parse_categories(args.categories),
@@ -589,8 +637,12 @@ def main(argv: list[str] | None = None) -> None:
         exclude_categories=parse_categories(args.exclude_categories),
         allow_partial=args.allow_partial,
     )
+    try:
+        settings = build_settings_from_args(args)
+    except ValidationError as error:
+        parser.error(format_settings_error(error))
     output_path = export_bundle(
-        build_settings_from_args(args),
+        settings,
         title=args.title,
         output_path=args.output,
         selection=selection,

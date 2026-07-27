@@ -1,0 +1,163 @@
+{
+  "schema_version": "doctriage_bundle.v2",
+  "title": "DocTriage Bundle v2 Contract",
+  "generated_at": "2026-01-01T00:00:00+00:00",
+  "source": {
+    "source_dir": "contract/source",
+    "output_root": "contract/output",
+    "decisions_path": "contract/output/_state/decisions.jsonl",
+    "relations_path": "contract/output/_relationships/relations.jsonl"
+  },
+  "selection_policy": {
+    "min_quality": 0,
+    "categories": [],
+    "max_sensitivity_risk": null,
+    "min_public_writing_suitability": null,
+    "limit": null,
+    "prefer_target_path": false,
+    "include_summaries": true,
+    "exclude_categories": [],
+    "allow_partial": false
+  },
+  "pipeline_status": {
+    "analysis": "unknown",
+    "relations": "not_run",
+    "rag": "not_run"
+  },
+  "is_partial": false,
+  "warnings": [],
+  "advisories": [
+    "RAG index is not available."
+  ],
+  "artifacts": {
+    "decisions": {
+      "path": "contract/output/_state/decisions.jsonl",
+      "exists": true,
+      "size_bytes": 0
+    },
+    "relations": {
+      "path": "contract/output/_relationships/relations.jsonl",
+      "exists": true,
+      "size_bytes": 0
+    },
+    "clusters": {
+      "path": "contract/output/_relationships/clusters.json",
+      "exists": false,
+      "size_bytes": 0
+    },
+    "knowledge_graph": {
+      "path": "contract/output/_relationships/knowledge_graph.json",
+      "exists": false,
+      "size_bytes": 0
+    },
+    "rag_manifest": {
+      "path": "contract/output/_rag/manifest.json",
+      "exists": false,
+      "size_bytes": 0
+    }
+  },
+  "statistics": {
+    "document_count": 2,
+    "relation_count": 1,
+    "category_counts": {
+      "Thinking": 2
+    },
+    "document_kind_counts": {
+      "Article": 2
+    }
+  },
+  "documents": [
+    {
+      "id": "doc-675150328906",
+      "title": "组织协作方法",
+      "paths": {
+        "source": "contract/source/office/组织协作方法.md",
+        "target": "contract/output/HQ/Thinking/组织协作方法.md",
+        "preferred": "contract/source/office/组织协作方法.md",
+        "relative": "office/组织协作方法.md"
+      },
+      "classification": {
+        "category": "Thinking",
+        "document_kind": "Article",
+        "topic_tags": [
+          "组织协作",
+          "沟通"
+        ],
+        "status": "planned",
+        "media_type": "text/markdown"
+      },
+      "scores": {
+        "quality": 96,
+        "knowledge_density": 88,
+        "implementation_specificity": 72,
+        "logical_structure": 91,
+        "evidence_richness": 75,
+        "actionability": 86,
+        "strategic_value": 84,
+        "freshness": 70,
+        "uniqueness": 74,
+        "sensitivity_risk": 10,
+        "public_writing_suitability": 90
+      },
+      "text": {
+        "summary": "介绍跨团队协作、职责边界和沟通机制。",
+        "reason": "适合作为组织协作的一般方法资料。"
+      }
+    },
+    {
+      "id": "doc-2e3a398b0469",
+      "title": "怎么成为嫡系",
+      "paths": {
+        "source": "contract/source/office/怎么成为嫡系.pdf",
+        "target": "contract/output/HQ/Thinking/怎么成为嫡系.pdf",
+        "preferred": "contract/source/office/怎么成为嫡系.pdf",
+        "relative": "office/怎么成为嫡系.pdf"
+      },
+      "classification": {
+        "category": "Thinking",
+        "document_kind": "Article",
+        "topic_tags": [
+          "办公室政治",
+          "组织关系"
+        ],
+        "status": "planned",
+        "media_type": "application/pdf"
+      },
+      "scores": {
+        "quality": 72,
+        "knowledge_density": 82,
+        "implementation_specificity": 68,
+        "logical_structure": 79,
+        "evidence_richness": 64,
+        "actionability": 81,
+        "strategic_value": 78,
+        "freshness": 66,
+        "uniqueness": 83,
+        "sensitivity_risk": 35,
+        "public_writing_suitability": 55
+      },
+      "text": {
+        "summary": "讨论办公室政治中的信任建立、关键任务交付、边界意识与长期合作。",
+        "reason": "标题和内容直接覆盖如何成为核心协作成员的问题。"
+      }
+    }
+  ],
+  "relations": [
+    {
+      "left_document_id": "doc-675150328906",
+      "right_document_id": "doc-2e3a398b0469",
+      "score": 0.77,
+      "signals": [
+        "topic_tags",
+        "citation"
+      ],
+      "evidence": {
+        "filename_similarity": 0.12,
+        "time_proximity": 0.2,
+        "path_proximity": 1.0,
+        "embedding_similarity": 0.71,
+        "citation_count": 1
+      }
+    }
+  ]
+}
