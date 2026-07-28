@@ -117,7 +117,7 @@ class MetadataProfiler:
     def _pdf_metadata_enabled(self) -> bool:
         if self.settings is None:
             return True
-        return self.settings.PDF_METADSample_ENABLED
+        return self.settings.PDF_METADATA_ENABLED
 
     @staticmethod
     def _to_iso(timestamp: float) -> str:

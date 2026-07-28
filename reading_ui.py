@@ -14,10 +14,10 @@ import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
-import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import ip_address
 from importlib import resources
 from pathlib import Path
 from typing import Any, Callable
@@ -1176,7 +1176,7 @@ def bundle_path_for_output(paths: ReadingPaths) -> Path:
     return relationship_dir(paths) / "doctriage_bundle.json"
 
 
-def build_anydocs_url(base_url: str, bundle_path: Path) -> str:
+def build_anydocs_url(base_url: str, bundle_path: str | Path) -> str:
     url_text = str(base_url or DEFAULT_ANYDOCS_URL).strip() or DEFAULT_ANYDOCS_URL
     parsed = urllib.parse.urlparse(url_text)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -1197,6 +1197,38 @@ def build_anydocs_url(base_url: str, bundle_path: Path) -> str:
     )
 
 
+def browser_accessible_anydocs_url(base_url: str, browser_host: str = "") -> str:
+    """Replace a server-side loopback host with the DocTriage browser host."""
+    url_text = str(base_url or DEFAULT_ANYDOCS_URL).strip() or DEFAULT_ANYDOCS_URL
+    parsed = urllib.parse.urlparse(url_text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("AnyDocsToAgents URL must be an http(s) URL.")
+    if not is_loopback_hostname(parsed.hostname or ""):
+        return urllib.parse.urlunparse(parsed)
+
+    browser_hostname = urllib.parse.urlsplit(
+        f"//{str(browser_host or '').strip()}"
+    ).hostname
+    if not browser_hostname or browser_hostname in {"0.0.0.0", "::"}:
+        return urllib.parse.urlunparse(parsed)
+
+    formatted_host = (
+        f"[{browser_hostname}]" if ":" in browser_hostname else browser_hostname
+    )
+    netloc = f"{formatted_host}:{parsed.port}" if parsed.port else formatted_host
+    return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+
+
+def is_loopback_hostname(hostname: str) -> bool:
+    normalized = str(hostname or "").strip().strip("[]").lower()
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+    try:
+        return ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
 def anydocs_probe_url(base_url: str) -> str:
     """Return the configured AnyDocsToAgents page without launch parameters."""
     parsed = urllib.parse.urlparse(str(base_url or DEFAULT_ANYDOCS_URL).strip())
@@ -1204,6 +1236,20 @@ def anydocs_probe_url(base_url: str) -> str:
         raise ValueError("AnyDocsToAgents URL must be an http(s) URL.")
     return urllib.parse.urlunparse(
         (parsed.scheme, parsed.netloc, parsed.path or "/", parsed.params, "", "")
+    )
+
+
+def anydocs_bundle_import_url(base_url: str) -> str:
+    parsed = urllib.parse.urlparse(anydocs_probe_url(base_url))
+    return urllib.parse.urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            "/api/v1/knowledge/doctriage-bundles",
+            "",
+            "",
+            "",
+        )
     )
 
 
@@ -1219,6 +1265,42 @@ def anydocs_service_available(base_url: str) -> bool:
     if not 200 <= int(status_code) < 400:
         return False
     return "anydocstoagents" in str(probe.get("text") or "").lower()
+
+
+def upload_bundle_to_anydocs(base_url: str, bundle_path: Path) -> str:
+    try:
+        with bundle_path.open("rb") as bundle_handle:
+            request = urllib.request.Request(
+                anydocs_bundle_import_url(base_url),
+                data=bundle_handle,
+                headers={
+                    "Content-Type": "application/vnd.doctriage.bundle+json",
+                    "Content-Length": str(bundle_path.stat().st_size),
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(request) as response:
+                raw = response.read(HTTP_PROBE_MAX_BYTES)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read(HTTP_PROBE_MAX_BYTES)
+        detail = raw.decode("utf-8", errors="ignore").strip()
+        try:
+            parsed_detail = json.loads(detail)
+            detail = str(parsed_detail.get("detail") or detail)
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        raise RuntimeError(f"AnyDocsToAgents rejected the bundle: {detail or exc}") from exc
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        raise RuntimeError(f"Failed to upload bundle to AnyDocsToAgents: {exc}") from exc
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("AnyDocsToAgents returned an invalid bundle import response.") from exc
+    managed_path = str(payload.get("bundle_path") or "").strip()
+    if not managed_path:
+        raise RuntimeError("AnyDocsToAgents did not return a managed bundle path.")
+    return managed_path
 
 
 def export_bundle_for_anydocs(paths: ReadingPaths, payload: dict[str, Any]) -> Path:
@@ -1284,7 +1366,12 @@ def anydocs_bundle_quality_stats(
     }
 
 
-def open_anydocs_request(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
+def open_anydocs_request(
+    app_state: AppState,
+    payload: dict[str, Any],
+    *,
+    browser_host: str = "",
+) -> dict[str, Any]:
     paths = reading_paths_from_payload(app_state, payload) or require_paths(app_state)
     bundle_path = bundle_path_for_output(paths)
     exported = False
@@ -1292,30 +1379,28 @@ def open_anydocs_request(app_state: AppState, payload: dict[str, Any]) -> dict[s
         bundle_path = export_bundle_for_anydocs(paths, payload)
         exported = True
     base_url = str(payload.get("anydocs_url") or DEFAULT_ANYDOCS_URL)
-    url = build_anydocs_url(base_url, bundle_path)
     if not anydocs_service_available(base_url):
-        github_opened = bool(webbrowser.open_new_tab(ANYDOCS_GITHUB_URL))
         return {
-            "opened": False,
+            "ready_to_open": False,
             "service_available": False,
             "service_url": anydocs_probe_url(base_url),
-            "github_opened": github_opened,
             "github_url": ANYDOCS_GITHUB_URL,
-            "url": url,
             "bundle_path": str(bundle_path),
             "exported": exported,
         }
     if not bundle_path.exists():
         bundle_path = export_bundle_for_anydocs(paths, payload)
         exported = True
-    url = build_anydocs_url(base_url, bundle_path)
-    webbrowser.open(url)
+    managed_bundle_path = upload_bundle_to_anydocs(base_url, bundle_path)
+    launch_base_url = browser_accessible_anydocs_url(base_url, browser_host)
+    url = build_anydocs_url(launch_base_url, managed_bundle_path)
     return {
-        "opened": True,
+        "ready_to_open": True,
         "service_available": True,
         "service_url": anydocs_probe_url(base_url),
         "url": url,
         "bundle_path": str(bundle_path),
+        "managed_bundle_path": str(managed_bundle_path),
         "exported": exported,
     }
 
@@ -2530,8 +2615,8 @@ def environment_capabilities() -> dict[str, Any]:
         "open_file": can_open_file(),
         "reveal_file": can_reveal_file(),
         "headless_hint": (
-            "Folder picker and system default file opening may be unavailable on headless servers. "
-            "Manual path input and analysis execution still work."
+            "This server has no desktop environment. Enter a file or directory path "
+            "that is accessible from the DocTriage server; analysis execution still works."
             if is_probably_headless()
             else ""
         ),
@@ -2540,10 +2625,67 @@ def environment_capabilities() -> dict[str, Any]:
 
 def is_probably_headless() -> bool:
     if os.name == "nt":
-        return False
+        return not windows_desktop_available()
     if sys.platform == "darwin":
-        return False
+        return not macos_desktop_available()
     return not bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+
+def windows_desktop_available() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class UserObjectFlags(ctypes.Structure):
+            _fields_ = [
+                ("fInherit", wintypes.BOOL),
+                ("fReserved", wintypes.BOOL),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        flags = UserObjectFlags()
+        needed = wintypes.DWORD()
+        user32 = ctypes.windll.user32
+        user32.GetProcessWindowStation.restype = wintypes.HANDLE
+        user32.GetUserObjectInformationW.argtypes = [
+            wintypes.HANDLE,
+            wintypes.INT,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        user32.GetUserObjectInformationW.restype = wintypes.BOOL
+        window_station = user32.GetProcessWindowStation()
+        if not window_station:
+            return False
+        succeeded = user32.GetUserObjectInformationW(
+            window_station,
+            1,
+            ctypes.byref(flags),
+            ctypes.sizeof(flags),
+            ctypes.byref(needed),
+        )
+        return bool(succeeded and flags.dwFlags & 0x0001)
+    except (AttributeError, OSError):
+        return False
+
+
+def macos_desktop_available() -> bool:
+    if sys.platform != "darwin":
+        return False
+    try:
+        completed = subprocess.run(
+            ["/bin/launchctl", "print", f"gui/{os.getuid()}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=2,
+        )
+    except (AttributeError, OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
 
 
 def can_use_folder_picker() -> bool:
@@ -2570,16 +2712,18 @@ def tkinter_folder_picker_available() -> bool:
 
 
 def can_open_file() -> bool:
+    if is_probably_headless():
+        return False
     if os.name == "nt":
         return True
     if sys.platform == "darwin":
         return macos_open_command_available()
-    if is_probably_headless():
-        return False
     return linux_open_command_available()
 
 
 def can_reveal_file() -> bool:
+    if is_probably_headless():
+        return False
     if os.name == "nt":
         return True
     if sys.platform == "darwin":
@@ -4922,7 +5066,13 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
             )
             return
         if self.path == "/api/integrations/anydocs/open":
-            self.send_json(lambda: open_anydocs_request(self.state, self.read_json()))
+            self.send_json(
+                lambda: open_anydocs_request(
+                    self.state,
+                    self.read_json(),
+                    browser_host=self.headers.get("Host", ""),
+                )
+            )
             return
         if self.path == "/api/integrations/anydocs/export-bundle":
             self.send_json(
@@ -5062,6 +5212,8 @@ def serve(paths: ReadingPaths | None, host: str, port: int, *, open_browser: boo
     url = f"http://{host}:{server.server_port}/"
     print(f"DocTriage Console: {url}")
     if open_browser:
+        import webbrowser
+
         webbrowser.open(url)
     try:
         server.serve_forever()

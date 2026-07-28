@@ -1,87 +1,87 @@
 # DocTriage
 
-Local-first document triage for manual curation, connected learning, RAG, and agent workflows.
+面向大型本地文档库的本地优先筛选、阅读和关系挖掘工具，适合传统文档筛选、关联学习、RAG 和 Agent 工作流。
 
-[Chinese README](README.zh-CN.md)
+[English README](README.en.md)
 
-DocTriage scans a source folder, extracts text, asks a local LLM to score and explain each document, and gives you a browser console for review, reading status, failure handling, relationship mining, and export. It serves both modern AI pipelines and traditional document selection, sequential reading, and associative learning.
+DocTriage 会扫描源目录、提取正文、调用本地 LLM 给每个文档评分并解释原因，然后提供浏览器控制台完成阅读复核、状态标记、失败处理、关系挖掘和导出。它既能服务现代 AI 管线，也能服务传统的文档筛选、按目录连续阅读和关联学习。
 
-Your source folder stays read-only. DocTriage writes state, logs, relationship results, and optional routed copies under `OUTPUT_ROOT`.
+源目录只读。所有状态、日志、关系结果以及可选的复制产物都会写入 `OUTPUT_ROOT`。
 
 <p align="center">
-  <img src="https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/triage.jpg" alt="DocTriage overview" width="900">
+  <img src="https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/triage.jpg" alt="DocTriage 总览" width="900">
 </p>
 
-DocTriage follows a simple loop: run local analysis, review and mark documents in the reading console, then use relationship clusters when connected learning or downstream export is needed.
+DocTriage 围绕一个清晰的闭环设计：先本地分析，再在阅读台复核和标记文档，最后在需要关联学习或下游导出时生成关系簇。
 
-## Product Highlights and Knowledge Loop
+## 产品亮点与知识闭环
 
-DocTriage is more than a file converter. Before documents enter RAG or an agent runtime, it answers which sources deserve inclusion, why they matter, and what selection boundary was applied. Read-only source handling, explainable quality scoring, human review, relationship mining, RAG preparation, and auditable export form one local-first governance layer for private knowledge.
+DocTriage 的核心价值不是简单转换文件，而是在 RAG 或 Agent 入库前回答“哪些资料值得进入知识库、为什么值得、边界是什么”。它把来源只读、质量分级、人工复核、关系挖掘、RAG 索引和可审计导出放在同一条本地优先链路中，适合作为个人或团队私域知识的上游治理层。
 
-- **Knowledge governance**: classify by content quality, document role, topic, sensitivity, and publication suitability instead of relying on folders or filenames alone.
-- **Explicit selection**: the reading console, RAG index, and Agent Bundle retain independent thresholds with visible counts and percentages.
-- **Stable downstream contract**: `doctriage_bundle.v2` carries provenance, scores, classification, summaries, relationships, and health information without exposing internal logs as an API.
-- **Private writing foundation**: separate factual sources, viewpoints, cases, and style references before sending a trusted working set into a writing workflow.
+- **知识资产治理**：用正文质量、文档类型、主题、敏感性和可公开性代替仅按目录或文件名入库。
+- **可解释筛选**：阅读台、RAG 与 Agent Bundle 各自保留显式阈值；筛选数量和占比可见，不会隐式互相干扰。
+- **稳定下游契约**：`doctriage_bundle.v2` 携带来源路径、质量分、分类、摘要、关系和健康状态，下游不需要耦合内部日志。
+- **私域写作基础**：先在 DocTriage 中区分事实资料、观点资料、案例和风格样本，再把可信工作集交给下游生成论点、提纲和文章。
 
-An optional end-to-end loop connects DocTriage to [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents): DocTriage governs and packages the corpus, while AnyDocsToAgents provides hybrid retrieval, editable execution topologies, evidence-grounded chat, and article writing. The integration uses a Bundle and launch URL; both projects remain independently deployable.
+可与 [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents) 组成可选闭环：DocTriage 负责“治理与入库”，AnyDocsToAgents 负责“混合检索、执行拓扑、证据问答与文章写作”。两者通过 Bundle 和启动 URL 联动，仍可独立部署和使用。
 
-## Why
+## 为什么使用
 
-- Triage large, messy folders without reorganizing the original files.
-- Curate documents manually by quality, path order, modification time, and reading status.
-- Score documents with explainable signals, not just filenames.
-- Review files in a reading console with open, reveal, read, defer, and skip actions.
-- Keep failed files visible until they are fixed, skipped, or accepted as failures.
-- Learn across related documents through duplicates, series, same-topic clusters, and source-folder context.
-- Export stable bundles for downstream RAG or agent tools when needed.
+- 不改动原始目录，也能对大型混乱文件夹做首轮摸底。
+- 按质量、路径顺序、修改时间和阅读状态进行人工文档择优。
+- 不只依赖文件名，而是基于正文给出分数、摘要、理由和维度分。
+- 在阅读台中直接打开、定位、标记已读、稍后、跳过。
+- 失败文件不会沉到日志里，而是作为可操作的行继续展示。
+- 通过近重复、系列文章、同主题聚类和源目录上下文进行关联学习。
+- 需要接入 RAG 或 Agent 时，下游工具可以读取稳定 bundle。
 
-## Features
+## 核心能力
 
-- Resume-safe analysis with a per-output lock.
-- `--plan-only` mode for scoring without copying files into routed folders.
-- Reading console with analysis-result and all-source-file views.
-- Explainable rows: summary, scoring reason, and dimension scores.
-- Failed-file rows with stage, reason, attempts, and direct open/reveal actions.
-- Filtered CSV/JSONL export from the current reading view.
-- Output language selection for generated summaries and reasons.
-- Separate UI language switch in the top-right corner.
-- Relationship graph for connected learning, deduplication, and downstream bundle export.
+- 基于输出目录锁的可续跑分析。
+- `--plan-only` 只评分不复制，不生成误导性的 `HQ`、`LQ` 实体目录。
+- 阅读台支持“分析结果”和“全部源文件”两种范围。
+- 文档行可解释：摘要、评分理由、多个维度分。
+- 失败文件展示阶段、原因、尝试次数，并支持直接打开和定位。
+- 当前筛选结果可导出 CSV/JSONL。
+- 可配置摘要和理由的输出语言。
+- 右上角有独立界面语言切换，不影响 LLM 输出语言。
+- 关系图谱可服务关联学习、去重和下游 bundle 导出。
 
-## Screenshots
+## 界面预览
 
-**Document Analysis**
+**文档分析**
 
-![Document analysis](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/analysis_eng.png)
+![文档分析](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/analysis_chi.png)
 
-Configure source/output folders, local model settings, plan-only runs, resume behavior, progress, logs, and failure status from one place.
+在同一界面配置源目录、输出目录、本地模型、plan-only、续跑策略、进度、日志和失败状态。
 
-**Reading Console**
+**阅读台**
 
-![Reading console](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/reading_eng.png)
+![阅读台](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/reading_chi.png)
 
-Review scored documents or browse all source files in folder order, then open, reveal, mark, filter, and export the current working set.
+既可以复核已评分文档，也可以按源目录顺序浏览全部文件，并直接打开、定位、标记、筛选和导出当前工作集。
 
-**Relationship Graph**
+**关系图谱**
 
-![Relationship graph](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/graph_eng.png)
+![关系图谱](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/graph_chi.png)
 
-Mine relationship clusters for duplicate detection, series discovery, connected learning, knowledge graph export, and bundle generation.
+关系簇用于近重复识别、系列发现、关联学习、知识图谱导出和 bundle 生成。
 
-**RAG Index and Retrieval**
+**RAG 索引与检索**
 
-![RAG index and retrieval](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/rag_eng.png)
+![RAG 索引与检索](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/rag_chi.png)
 
-**Agent Bundle Handoff**
+**Agent Bundle 交接**
 
-![Agent Bundle handoff](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/agents_eng.png)
+![Agent Bundle 交接](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/agents_eng.png)
 
-## Requirements
+## 环境要求
 
 - Python `>=3.11,<3.15`
-- An LLM endpoint: Ollama locally, or an OpenAI-compatible REST endpoint
-- Optional: LibreOffice for legacy `.ppt` ingestion
+- LLM 接口：本地 Ollama，或 OpenAI-compatible REST 接口
+- 可选：LibreOffice，用于旧 `.ppt` 文件解析
 
-## Install
+## 安装
 
 ```powershell
 python -m venv .venv
@@ -90,32 +90,41 @@ pip install -e .
 Copy-Item .env.example .env
 ```
 
-Linux and macOS use the same flow with `source .venv/bin/activate` and `cp .env.example .env`.
+Linux 和 macOS 使用同样流程，将激活命令换成 `source .venv/bin/activate`，复制环境文件用 `cp .env.example .env`。
 
-## Quick Start
+## 快速开始
 
-Start the browser console:
+启动浏览器控制台：
 
 ```powershell
 doctriage-reading-ui --host 127.0.0.1 --port 18765
 ```
 
-Open `http://127.0.0.1:18765/`.
+打开 `http://127.0.0.1:18765/`。
 
-The console ships as package-owned static files that are loaded into memory once at
-startup, with no runtime build step. Restart the service after changing HTML, CSS,
-or JavaScript under `doctriage_ui`.
+控制台前端以包内静态文件发布，服务启动时一次性载入内存，不执行运行时构建。
+修改 `doctriage_ui` 中的 HTML、CSS 或 JavaScript 后，重启服务即可生效。
 
-### Folder input and cross-platform paths
+### 可信局域网部署
 
-- **Select source directory** reads a directory on the machine running DocTriage and recursively scans all subdirectories.
-- **Upload documents** opens a managed workspace for files or folders from the operator's computer. Select several folders at once when supported, or add them repeatedly; duplicate root names become `Folder (2)` instead of overwriting existing files.
-- A completed upload and a selected source directory are processed as one union in the same run. Generated state and optional routed copies always use the output directory entered in the analysis form; uploaded paths use the `_uploads/` namespace to avoid collisions.
-- The CLI also accepts repeated `--source-dir` options. The first directory is the primary root and later directories are additional roots; resolved files are deduplicated and unchanged files remain resumable.
-- Browser upload sends file contents from the operator's computer. A selected source directory must already be accessible to the server, so choose the input method according to where the files are stored.
-- Example paths are `D:\documents` on Windows, `/home/name/documents` on Linux, and `/Users/name/Documents` on macOS. Headless Linux accepts manual paths; macOS prefers the system picker, while Linux prefers Zenity/KDialog and falls back to Tk when available.
+```powershell
+doctriage-reading-ui --host 0.0.0.0 --port 18765 --no-open-browser
+```
 
-Recommended first pass for a large folder:
+局域网客户端访问 `http://<服务器 IP>:18765/`。服务没有内置身份验证，只应绑定到
+可信本机或可信局域网；如需提供给不受信任用户或更大网络，应在前置代理中增加身份验证、
+TLS 和访问控制。
+
+### 文件夹输入与跨平台路径
+
+- “选择源目录”读取 DocTriage 服务所在机器的目录，并递归扫描所有子目录。
+- “上传文档”通过受管工作区接收操作者电脑中的文件或文件夹。浏览器支持时可一次多选，也可以重复添加；同名根目录自动改为 `目录 (2)`，不会覆盖已有内容。
+- 已完成的上传内容和已选择的源目录会在同一次任务中取并集。状态、日志和可选复制产物始终写入分析表单指定的输出目录；上传内容使用 `_uploads/` 相对路径命名空间避免冲突。
+- CLI 支持重复传入 `--source-dir`。第一个目录作为主根目录，后续目录作为附加根目录；扫描会按真实路径去重，未变化文件仍可续跑。
+- 浏览器上传会发送操作者电脑中的文件内容；选择的源目录必须能被服务器访问，应根据文件实际所在位置选择输入方式。
+- Windows 路径示例为 `D:\资料`，Linux 为 `/home/name/documents`，macOS 为 `/Users/name/Documents`。Linux 无图形桌面时可直接填写路径；macOS 优先使用系统目录对话框，Linux 优先使用 Zenity/KDialog，并在不可用时回退 Tk。
+
+大型目录建议首轮使用 plan-only：
 
 ```powershell
 doctriage `
@@ -131,65 +140,65 @@ doctriage `
   --timeout-seconds 240
 ```
 
-If console scripts are not on `PATH`, run the modules from the checkout:
+如果命令行入口没有进入 `PATH`，可以直接从仓库运行：
 
 ```powershell
 .\.venv\Scripts\python.exe reading_ui.py --host 127.0.0.1 --port 18765
 .\.venv\Scripts\python.exe main.py --help
 ```
 
-## Model Endpoints
+## 模型接口
 
-DocTriage can run without Ollama if your provider exposes OpenAI-compatible REST APIs:
+DocTriage 可以不依赖 Ollama，只要云厂商提供 OpenAI-compatible REST 协议：
 
-- scoring/classification: set `LLM_ENDPOINT` to `/v1/chat/completions`, set `LLM_MODEL`, and provide `LLM_API_KEY`;
-- relationship/RAG embeddings: set `EMBEDDING_ENDPOINT` to `/v1/embeddings`, set `EMBEDDING_MODEL`, and optionally provide `EMBEDDING_API_KEY`;
-- if `EMBEDDING_API_KEY` is empty, embedding requests reuse `LLM_API_KEY`.
+- 评分/分类：将 `LLM_ENDPOINT` 设为 `/v1/chat/completions`，填写 `LLM_MODEL` 和 `LLM_API_KEY`；
+- 关系/RAG 向量：将 `EMBEDDING_ENDPOINT` 设为 `/v1/embeddings`，填写 `EMBEDDING_MODEL`，必要时填写 `EMBEDDING_API_KEY`；
+- `EMBEDDING_API_KEY` 为空时，向量请求会复用 `LLM_API_KEY`。
 
-The browser console has API key fields for ad hoc runs. It passes keys to worker processes through environment variables and does not save them in browser storage.
+浏览器控制台也提供 API Key 输入框，用于临时运行。密钥只通过环境变量传给后台任务，不会保存到浏览器本地存储。
 
-## Core Workflow
+## 推荐流程
 
-1. **Run a plan-only pass**
+1. **先跑 plan-only**
 
-   Get scores, categories, summaries, and reasons without creating copied `HQ` or `LQ` folders.
+   只得到评分、分类、摘要和理由，不复制源文件，也不会生成实体 `HQ` 或 `LQ` 目录。
 
-2. **Review in the reading console**
+2. **在阅读台复核**
 
-   Use the analysis view for scored documents and the source view for folder-ordered browsing across every current source file.
+   用“分析结果”查看已评分文档，用“全部源文件”按源目录完整路径和修改时间进行传统文件夹式翻阅。
 
-3. **Close the loop on failures**
+3. **闭环处理失败文件**
 
-   Failed files appear as rows with stage, reason, attempts, size, and direct open/reveal actions.
+   失败文件会作为 `failed` 行展示，包含阶段、原因、尝试次数、大小和打开/定位按钮。
 
-4. **Follow relationships and folder context**
+4. **沿着关系和目录上下文阅读**
 
-   Use source-folder ordering for sequential reading, then use relationship clusters to jump across related documents.
+   先按源目录顺序连续阅读，再用关系簇跳转到相关文档。
 
-5. **Export filtered decisions**
+5. **导出当前筛选**
 
-   Filter the reading table, then export CSV or JSONL for audit, writing, RAG planning, or external review.
+   在阅读台完成筛选后导出 CSV 或 JSONL，用于审计、写作、RAG 规划或外部复核。
 
-6. **Mine relationships when scores are stable**
+6. **评分稳定后挖掘关系**
 
-   Generate clusters and graph exports after the first-pass decisions are good enough.
+   再生成关系簇、知识图谱和 bundle，避免早期低质量评分污染关系结果。
 
-## CLI
+## 命令行
 
-| Command | Purpose |
+| 命令 | 用途 |
 | --- | --- |
-| `doctriage` | Run document analysis |
-| `doctriage-reading-ui` | Start the browser console |
-| `doctriage-reading` | Read or update reading status from CLI |
-| `doctriage-relationships` | Mine document relationships |
-| `doctriage-graph` | Export a knowledge graph |
-| `doctriage-bundle` | Export a stable downstream bundle |
-| `doctriage-rag` | Build or search the resumable RAG chunk index |
-| `doctriage-workflow` | Workflow adapter entrypoint |
+| `doctriage` | 执行文档分析 |
+| `doctriage-reading-ui` | 启动浏览器控制台 |
+| `doctriage-reading` | 通过 CLI 读取或更新阅读状态 |
+| `doctriage-relationships` | 挖掘文档关系 |
+| `doctriage-graph` | 导出知识图谱 |
+| `doctriage-bundle` | 导出稳定下游 bundle |
+| `doctriage-rag` | 构建或检索可续跑的 RAG 切片索引 |
+| `doctriage-workflow` | 工作流适配入口 |
 
-Each command supports `--help`.
+每个命令都支持 `--help`。
 
-## Output Layout
+## 输出结构
 
 ```text
 OUTPUT_ROOT/
@@ -216,11 +225,11 @@ OUTPUT_ROOT/
     qdrant/
 ```
 
-Downstream integrations should prefer `doctriage_bundle.json` over internal JSONL logs.
+下游集成应优先读取 `doctriage_bundle.json`，不要直接依赖内部 JSONL 日志。
 
-### Qdrant Local RAG
+### Qdrant 本地 RAG
 
-The RAG index supports `local_jsonl` and embedded `qdrant_local` storage. With Qdrant Local selected, vectors are written to `OUTPUT_ROOT/_rag/qdrant` and similarity search runs through Qdrant; `vectors.jsonl` remains an auditable copy and fallback. This mode does not start an HTTP service.
+RAG 索引支持 `local_jsonl` 和嵌入式 `qdrant_local`。选择 Qdrant 本地后，向量会实际写入 `OUTPUT_ROOT/_rag/qdrant` 并由 Qdrant 执行相似度检索；`vectors.jsonl` 仍作为可审计副本和故障回退。该模式不启动 HTTP 服务。
 
 ```powershell
 doctriage-rag build `
@@ -231,19 +240,19 @@ doctriage-rag build `
   --qdrant-collection doctriage_rag
 ```
 
-The same option is available under **RAG Index > Vector storage**. An empty path uses the default directory above. Remote Qdrant, Chroma, and HTTP options are connectivity tests only.
+也可以在控制台的 **RAG 索引 > 向量存储** 中选择 **Qdrant 本地**。存储路径留空时使用上述默认目录；远程 Qdrant、Chroma 和 HTTP 选项仅用于连接测试。
 
-## AnyDocsToAgents Handoff
+## 交给 AnyDocsToAgents
 
-The browser console has an **Agent compile** tab for optional handoff to [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents). It exports `OUTPUT_ROOT/_relationships/doctriage_bundle.json` and opens AnyDocsToAgents with a URL such as:
+浏览器控制台提供 **Agent 编译** 页，可选对接 [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents)。它会导出 `OUTPUT_ROOT/_relationships/doctriage_bundle.json`，把通过校验的副本上传到所配置的 AnyDocsToAgents 服务，再由操作者当前浏览器打开下游页面。启动 URL 使用下游服务器上的托管路径，例如：
 
 ```text
-http://127.0.0.1:18766/?doctriage_bundle_path=D:\doctriage_run\_relationships\doctriage_bundle.json#view-planner
+http://192.168.1.20:18766/?doctriage_bundle_path=D:\anydocs_data\uploads\doctriage_bundles\...json#view-planner
 ```
 
-Before opening the handoff URL, DocTriage verifies that the configured AnyDocsToAgents service is available. If it is unavailable, the console reports the problem and opens the GitHub project page.
+DocTriage 会在打开联动地址前检查 AnyDocsToAgents 服务。未检测到服务时，控制台会显示提示，并在操作者当前浏览器打开 GitHub 项目页。DocTriage 与 AnyDocsToAgents 可以部署在不同局域网主机上，Bundle 本身不再要求共享盘符；Bundle 中的原文路径仍指向 DocTriage 主机，跨主机部署若未共享原文，下游会使用导出的摘要并标记原文不可读。
 
-For an existing completed run, exporting the bundle is fast and does not rerun classification:
+对于已经完成的长耗时分析，只需导出 bundle，不会重新执行分类：
 
 ```powershell
 doctriage-bundle `
@@ -254,24 +263,28 @@ doctriage-bundle `
   --min-quality 75
 ```
 
-Bundles do not exclude any category by default, so `--min-quality 0` includes `LowQuality` documents as well. Use `--exclude-categories LowQuality` only when a downstream workflow explicitly needs that policy. `is_partial` and `warnings` describe required document-data incompleteness; missing or failed optional relation, RAG, and summary capabilities are listed under `advisories` and do not block export. Downstream consumers should surface both levels without treating optional capabilities as a failed bundle.
+bundle 默认不排除任何类别，因此 `--min-quality 0` 也会包含 `LowQuality` 文档。只有下游明确需要时才使用 `--exclude-categories LowQuality`。`is_partial` 与 `warnings` 只表示必需文档数据不完整；关系、RAG 或摘要等可选能力缺失或失败会写入 `advisories`，不会阻止导出。下游应同时展示两种信息，但不应把可选能力缺失误判为 bundle 失败。
 
-## Language
+## 语言
 
-DocTriage has two separate language controls:
+DocTriage 有两个独立语言控制：
 
-- Output language controls generated summaries and scoring reasons. `Auto` infers the document language.
-- UI language changes console labels only. It does not affect LLM output.
+- 输出语言控制摘要和评分理由。`Auto` 会根据文档主体语言推断。
+- 界面语言只改变控制台标签，不影响 LLM 输出。
 
-## More Documentation
+## 更多文档
 
 - [Bundle schema](docs/bundle_schema.md)
 - [Knowledge graph abstraction](docs/knowledge_graph.md)
 - [Recipes](recipes/README.md)
-- [Chinese README](README.zh-CN.md)
+- [English README](README.en.md)
 
-## Notes
+## 注意事项
 
-- Do not place `OUTPUT_ROOT` inside `SOURCE_DIR`.
-- Desktop open/reveal actions depend on the local environment.
-- Headless servers can run analysis and the web UI, but folder picker and open/reveal actions may be unavailable.
+- 不要把 `OUTPUT_ROOT` 放在 `SOURCE_DIR` 内部。
+- 打开和定位文件依赖本机桌面环境。
+- 无桌面服务器仍可运行分析和 Web UI，但目录选择器、打开和定位动作可能不可用。
+
+## 许可证
+
+本项目采用 [Apache License 2.0](LICENSE) 许可证。

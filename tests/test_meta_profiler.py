@@ -32,7 +32,7 @@ def test_pdf_metadata_extraction_can_be_disabled(tmp_path: Path, monkeypatch) ->
         LLM_MODEL="gemma4:e4b",
         SOURCE_DIR=tmp_path,
         OUTPUT_ROOT=tmp_path / "output",
-        PDF_METADSample_ENABLED=False,
+        PDF_METADATA_ENABLED=False,
     )
 
     profile = MetadataProfiler(settings=settings).profile_document(
@@ -43,3 +43,15 @@ def test_pdf_metadata_extraction_can_be_disabled(tmp_path: Path, monkeypatch) ->
     assert profile.pdf_author is None
     assert profile.pdf_producer is None
     assert profile.extraction_notes == []
+
+
+def test_legacy_pdf_metadata_setting_name_remains_supported(tmp_path: Path) -> None:
+    settings = Settings(
+        LLM_ENDPOINT="http://localhost:11434/api/generate",
+        SOURCE_DIR=tmp_path,
+        OUTPUT_ROOT=tmp_path / "output",
+        PDF_METADSample_ENABLED=True,
+    )
+
+    assert settings.PDF_METADATA_ENABLED is True
+    assert settings.PDF_METADSample_ENABLED is True

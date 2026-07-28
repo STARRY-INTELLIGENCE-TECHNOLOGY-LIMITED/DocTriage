@@ -231,7 +231,7 @@ const I18N = {
     anydocs_exported: "Bundle 已导出",
     anydocs_open_failed: "导出或打开 AnyDocsToAgents 失败",
     anydocs_opened: "Bundle 已导出并打开 AnyDocsToAgents",
-    anydocs_github_opened: "Bundle 已导出；未检测到服务，已打开 GitHub 项目页",
+    anydocs_github_opened: "Bundle 已导出；未检测到服务，已在当前浏览器打开 GitHub 项目页",
     anydocs_github_open_failed: "Bundle 已导出；未检测到服务，请通过 GitHub 项目页获取 AnyDocsToAgents",
     anydocs_service_unavailable: "Bundle 已导出，但未检测到 {url} 的 AnyDocsToAgents 服务。请先安装并启动；已打开 GitHub 项目页。",
     anydocs_service_unavailable_github: "Bundle 已导出，但未检测到 {url} 的 AnyDocsToAgents 服务。请先安装并启动，可通过 GitHub 项目页获取。",
@@ -351,7 +351,7 @@ const I18N = {
     dim_strategic_value: "战略",
     dim_freshness: "新鲜",
     dim_uniqueness: "独特",
-    folder_picker_unavailable: "当前环境不支持图形目录选择，请手工输入路径",
+    folder_picker_unavailable: "服务器没有可用桌面环境，请填写服务器可访问的文件或目录地址",
     operation_failed: "操作失败",
     tip_current_output_root: "阅读台、关系图谱、RAG 索引与 Agent 编译共用此目录；不影响分析页路径。",
     tip_bundle_min_quality: "导出质量分不低于阈值的文档。默认值为 0；不继承其他页面的阈值。",
@@ -756,7 +756,7 @@ const I18N = {
     dim_strategic_value: "Strategic",
     dim_freshness: "Freshness",
     dim_uniqueness: "Uniqueness",
-    folder_picker_unavailable: "Folder picker is unavailable here; type the path manually",
+    folder_picker_unavailable: "This server has no desktop environment; enter a file or directory path accessible to the server",
     operation_failed: "Operation failed",
     tip_current_output_root: "Shared output directory for Reading, Graph, RAG, and Agent Compilation; Analysis paths are unchanged.",
     tip_bundle_min_quality: "Exports documents at or above this score. Default: 0. Thresholds from other pages are not inherited.",
@@ -852,6 +852,7 @@ let anydocsBundleExcludedCategories = [];
 let anydocsQualityStatsKey = "";
 let anydocsUnavailableServiceUrl = "";
 let anydocsGithubOpened = false;
+let anydocsOpenBusy = false;
 let lastAnalysisPayload = null;
 let relationshipLaunchPending = null;
 let relationshipStopPending = null;
@@ -3519,34 +3520,66 @@ function clearAnydocsOpenStatus() {
   renderAnydocsOpenStatus();
 }
 
+function setAnydocsOpenBusy(busy) {
+  anydocsOpenBusy = Boolean(busy);
+  const button = $("anydocs_export_open_btn");
+  if (button) button.disabled = anydocsOpenBusy;
+}
+
+function openExternalUrl(url) {
+  const targetUrl = String(url || "").trim();
+  if (!targetUrl) return false;
+  const openedWindow = window.open(targetUrl, "_blank");
+  if (openedWindow) {
+    try {
+      openedWindow.opener = null;
+    } catch {}
+    return true;
+  }
+  window.location.assign(targetUrl);
+  return true;
+}
+
 async function exportAndOpenAnyDocs() {
+  if (anydocsOpenBusy) return;
   const paths = anydocsPathPayload();
   if (!paths.output_root) return showToast(tr("graph_need_paths"));
   clearAnydocsOpenStatus();
   saveAnydocsTargetState();
-  const response = await fetch("/api/integrations/anydocs/open", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({
-      ...paths,
-      anydocs_url: $("anydocs_url").value.trim() || DEFAULT_ANYDOCS_URL,
-      export_bundle: true,
-      bundle_min_quality: anydocsBundleMinQuality()
-    })
-  });
-  const payload = await response.json();
-  if (!response.ok) return showToast(payload.error || tr("anydocs_open_failed"));
-  if ($("anydocs_bundle_path")) $("anydocs_bundle_path").value = payload.bundle_path || anydocsBundlePath();
-  if (payload.service_available === false || payload.opened === false) {
-    anydocsUnavailableServiceUrl = String(payload.service_url || $("anydocs_url").value || DEFAULT_ANYDOCS_URL);
-    anydocsGithubOpened = payload.github_opened === true;
-    renderAnydocsOpenStatus();
-    showToast(tr(anydocsGithubOpened ? "anydocs_github_opened" : "anydocs_github_open_failed"));
+  setAnydocsOpenBusy(true);
+  try {
+    const response = await fetch("/api/integrations/anydocs/open", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        ...paths,
+        anydocs_url: $("anydocs_url").value.trim() || DEFAULT_ANYDOCS_URL,
+        export_bundle: true,
+        bundle_min_quality: anydocsBundleMinQuality()
+      })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      showToast(payload.error || tr("anydocs_open_failed"));
+      return;
+    }
+    if ($("anydocs_bundle_path")) $("anydocs_bundle_path").value = payload.bundle_path || anydocsBundlePath();
+    if (payload.service_available === false || payload.ready_to_open === false) {
+      anydocsUnavailableServiceUrl = String(payload.service_url || $("anydocs_url").value || DEFAULT_ANYDOCS_URL);
+      anydocsGithubOpened = openExternalUrl(payload.github_url);
+      renderAnydocsOpenStatus();
+      showToast(tr(anydocsGithubOpened ? "anydocs_github_opened" : "anydocs_github_open_failed"));
+      renderAnydocsStats();
+      return;
+    }
+    openExternalUrl(payload.url);
+    showToast(tr("anydocs_opened"));
     renderAnydocsStats();
-    return;
+  } catch (error) {
+    showToast(tr("anydocs_open_failed"));
+  } finally {
+    setAnydocsOpenBusy(false);
   }
-  showToast(tr("anydocs_opened"));
-  renderAnydocsStats();
 }
 
 function renderGraphEmptyState() {

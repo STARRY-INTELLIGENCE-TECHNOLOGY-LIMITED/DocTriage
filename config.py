@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_CATEGORY_MAP = {
@@ -88,7 +88,13 @@ class Settings(BaseSettings):
     MAX_FILES: int | None = Field(default=None, ge=1)
     MAX_FILE_SIZE_MB: float | None = Field(default=None, gt=0)
     OCR_ENABLED: bool = Field(default=False)
-    PDF_METADSample_ENABLED: bool = Field(default=False)
+    PDF_METADATA_ENABLED: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "PDF_METADATA_ENABLED",
+            "PDF_METADSample_ENABLED",
+        ),
+    )
     PDF_TEXT_FALLBACK_ENABLED: bool = Field(default=True)
     PDF_TEXT_FALLBACK_MAX_PAGES: int | None = Field(default=300, ge=1)
     COPY_FILES: bool = Field(default=True)
@@ -130,6 +136,11 @@ class Settings(BaseSettings):
     RAG_VECTOR_STORE_TYPE: str = Field(default="local_jsonl")
     RAG_QDRANT_PATH: Path | None = Field(default=None)
     RAG_QDRANT_COLLECTION: str = Field(default="doctriage_rag", min_length=1)
+
+    @property
+    def PDF_METADSample_ENABLED(self) -> bool:
+        """Retain compatibility with the pre-1.0 misspelled attribute."""
+        return self.PDF_METADATA_ENABLED
 
     CATEGORY_MAP: dict[str, str] = Field(
         default_factory=lambda: DEFAULT_CATEGORY_MAP.copy()

@@ -3449,8 +3449,6 @@ def test_open_anydocs_request_probes_service_before_opening(
     bundle_path = output_root / "_relationships" / "doctriage_bundle.json"
     bundle_path.parent.mkdir(parents=True)
     bundle_path.write_text("{}", encoding="utf-8")
-    opened_urls: list[str] = []
-    github_urls: list[str] = []
     monkeypatch.setattr(
         reading_ui,
         "http_json_request",
@@ -3460,11 +3458,10 @@ def test_open_anydocs_request_probes_service_before_opening(
             "text": "<title>AnyDocsToAgents</title>",
         },
     )
-    monkeypatch.setattr(reading_ui.webbrowser, "open", lambda url: opened_urls.append(url) or True)
     monkeypatch.setattr(
-        reading_ui.webbrowser,
-        "open_new_tab",
-        lambda url: github_urls.append(url) or True,
+        reading_ui,
+        "upload_bundle_to_anydocs",
+        lambda base_url, path: "/srv/anydocs/uploads/managed.json",
     )
 
     payload = reading_ui.open_anydocs_request(
@@ -3472,19 +3469,60 @@ def test_open_anydocs_request_probes_service_before_opening(
         {
             "source_dir": str(source_dir),
             "output_root": str(output_root),
-            "anydocs_url": "http://127.0.0.1:18766/?autoplan=1",
+            "anydocs_url": "http://127.0.0.1:18766/?autoplan=1&workspace=lan",
             "export_bundle": False,
         },
+        browser_host="192.168.1.20:18765",
     )
 
-    assert payload["opened"] is True
+    assert payload["ready_to_open"] is True
     assert payload["service_available"] is True
     assert payload["exported"] is False
     assert payload["bundle_path"] == str(bundle_path)
+    assert payload["managed_bundle_path"] == "/srv/anydocs/uploads/managed.json"
+    parsed_url = reading_ui.urllib.parse.urlparse(payload["url"])
+    assert parsed_url.hostname == "192.168.1.20"
+    assert parsed_url.port == 18766
     assert "autoplan" not in payload["url"]
-    assert "doctriage_bundle_path=" in payload["url"]
-    assert opened_urls == [payload["url"]]
-    assert github_urls == []
+    parsed_query = reading_ui.urllib.parse.parse_qs(parsed_url.query)
+    assert parsed_query["workspace"] == ["lan"]
+    assert parsed_query["doctriage_bundle_path"] == [
+        "/srv/anydocs/uploads/managed.json"
+    ]
+
+
+def test_upload_bundle_to_anydocs_has_no_transfer_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle_path = tmp_path / "doctriage_bundle.json"
+    bundle_path.write_text("{}", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self, limit: int) -> bytes:
+            return b'{"bundle_path":"/srv/anydocs/uploads/managed.json"}'
+
+    def fake_urlopen(request, *args, **kwargs):
+        captured["request"] = request
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return Response()
+
+    monkeypatch.setattr(reading_ui.urllib.request, "urlopen", fake_urlopen)
+
+    managed_path = reading_ui.upload_bundle_to_anydocs(
+        "http://127.0.0.1:18766/", bundle_path
+    )
+
+    assert managed_path == "/srv/anydocs/uploads/managed.json"
+    assert captured["args"] == ()
+    assert captured["kwargs"] == {}
 
 
 def test_open_anydocs_request_opens_github_when_service_is_unavailable(
@@ -3511,8 +3549,6 @@ def test_open_anydocs_request_opens_github_when_service_is_unavailable(
         + "\n",
         encoding="utf-8",
     )
-    opened_urls: list[str] = []
-    github_urls: list[str] = []
     monkeypatch.setattr(
         reading_ui,
         "http_json_request",
@@ -3522,13 +3558,6 @@ def test_open_anydocs_request_opens_github_when_service_is_unavailable(
             "text": "",
         },
     )
-    monkeypatch.setattr(reading_ui.webbrowser, "open", lambda url: opened_urls.append(url) or True)
-    monkeypatch.setattr(
-        reading_ui.webbrowser,
-        "open_new_tab",
-        lambda url: github_urls.append(url) or True,
-    )
-
     payload = reading_ui.open_anydocs_request(
         AppState(paths=ReadingPaths(source_dir=source_dir, output_root=output_root)),
         {
@@ -3539,12 +3568,10 @@ def test_open_anydocs_request_opens_github_when_service_is_unavailable(
         },
     )
 
-    assert payload["opened"] is False
+    assert payload["ready_to_open"] is False
     assert payload["service_available"] is False
     assert payload["exported"] is True
-    assert payload["github_opened"] is True
-    assert opened_urls == []
-    assert github_urls == [reading_ui.ANYDOCS_GITHUB_URL]
+    assert payload["github_url"] == reading_ui.ANYDOCS_GITHUB_URL
     assert (output_root / "_relationships" / "doctriage_bundle.json").exists()
 
 
@@ -3920,6 +3947,16 @@ def test_anydocs_bridge_ui_is_optional_and_first_class() -> None:
     assert 'data-i18n="export_open_anydocs">导出并打开 AnyDocsToAgents' in html
     assert "async function exportAnydocsBundle()" not in html
     assert "async function exportAndOpenAnyDocs()" in html
+    assert "if (anydocsOpenBusy) return;" in html
+    assert "setAnydocsOpenBusy(true);" in html
+    assert "setAnydocsOpenBusy(false);" in html
+    assert 'button.disabled = anydocsOpenBusy;' in html
+    assert "about:blank" not in html
+    assert "function openExternalUrl(url)" in html
+    assert 'window.open(targetUrl, "_blank")' in html
+    assert "window.location.assign(targetUrl);" in html
+    assert "anydocsGithubOpened = openExternalUrl(payload.github_url);" in html
+    assert "openExternalUrl(payload.url);" in html
     assert "openAnyDocs(true)" not in html
     assert "open_anydocs_autoplan" not in html
     assert "打开并生成 Graph" not in html
@@ -4642,7 +4679,32 @@ def test_headless_linux_disables_desktop_integrations(monkeypatch) -> None:
     assert capabilities["folder_picker"] is False
     assert capabilities["open_file"] is False
     assert capabilities["reveal_file"] is False
-    assert "Manual path input" in capabilities["headless_hint"]
+    assert "accessible from the DocTriage server" in capabilities["headless_hint"]
+
+
+def test_headless_windows_disables_desktop_integrations(monkeypatch) -> None:
+    monkeypatch.setattr(reading_ui.os, "name", "nt", raising=False)
+    monkeypatch.setattr(reading_ui, "windows_desktop_available", lambda: False)
+
+    capabilities = reading_ui.environment_capabilities()
+
+    assert capabilities["folder_picker"] is False
+    assert capabilities["open_file"] is False
+    assert capabilities["reveal_file"] is False
+    assert "accessible from the DocTriage server" in capabilities["headless_hint"]
+
+
+def test_headless_macos_disables_desktop_integrations(monkeypatch) -> None:
+    monkeypatch.setattr(reading_ui.os, "name", "posix", raising=False)
+    monkeypatch.setattr(reading_ui.sys, "platform", "darwin")
+    monkeypatch.setattr(reading_ui, "macos_desktop_available", lambda: False)
+
+    capabilities = reading_ui.environment_capabilities()
+
+    assert capabilities["folder_picker"] is False
+    assert capabilities["open_file"] is False
+    assert capabilities["reveal_file"] is False
+    assert "accessible from the DocTriage server" in capabilities["headless_hint"]
 
 
 def test_macos_open_and_reveal_use_finder_open(monkeypatch, tmp_path: Path) -> None:
@@ -4742,6 +4804,7 @@ def test_macos_folder_picker_uses_osascript(monkeypatch) -> None:
     commands = []
     monkeypatch.setattr(reading_ui.os, "name", "posix", raising=False)
     monkeypatch.setattr(reading_ui.sys, "platform", "darwin")
+    monkeypatch.setattr(reading_ui, "macos_desktop_available", lambda: True)
     monkeypatch.setattr(
         reading_ui.shutil,
         "which",

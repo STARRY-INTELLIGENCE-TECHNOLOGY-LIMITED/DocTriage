@@ -7,13 +7,14 @@ name = "DocTriage"
 version = "1.0.0"
 description = "Local-first document triage for manual curation, connected learning, RAG, and agent workflows."
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11,<3.15"
 dependencies = [
-    "docling==2.92.0",
+    "docling==2.94.0",
     "httpx==0.28.1",
     "pydantic==2.13.3",
-    "pydantic-settings==2.14.0",
-    "pypdf==6.11.0",
+    "pydantic-settings==2.14.2",
+    "pypdf==6.14.2",
     "qdrant-client==1.18.0",
 ]
 

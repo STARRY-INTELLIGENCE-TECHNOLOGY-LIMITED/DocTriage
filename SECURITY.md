@@ -16,4 +16,7 @@ DocTriage is designed for local private document processing.
 
 ## Reporting
 
-For public use, open an issue with a minimal reproduction. Do not include private document content or private paths.
+Do not open a public issue for a suspected vulnerability. Use
+[GitHub private vulnerability reporting](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/security/advisories/new)
+and include only the minimum reproduction required. Do not include private document
+content, credentials, or private paths.
