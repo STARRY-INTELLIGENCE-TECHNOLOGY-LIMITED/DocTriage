@@ -75,11 +75,10 @@
     </div>
     <section id="section-analysis" class="active">
       <div class="panel">
-        <div class="run-grid run-primary-grid">
+        <div class="run-grid run-source-grid">
           <label><span class="label-row"><span data-i18n="source_dir">源目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_source_dir" data-tip="递归扫描此目录内受支持的文档。输出目录不得位于其中。">?</span></span><input id="run_source_dir" placeholder="请选择源文档目录" data-i18n-placeholder="ph_source_dir" /></label>
           <button id="pick_source_btn" onclick="pickFolder('run_source_dir')" data-i18n="pick_source_dir">选择源目录</button>
-          <label><span class="label-row"><span data-i18n="output_dir">输出目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_dir" data-tip="保存进度、日志、评分及复制结果；支持续跑，且仅允许单进程写入。">?</span></span><input id="run_output_root" placeholder="请选择输出目录" data-i18n-placeholder="ph_output_dir" /></label>
-          <button id="pick_output_btn" onclick="pickFolder('run_output_root')" data-i18n="pick_output_dir">选择输出目录</button>
+          <button id="open_upload_dialog_btn" type="button" onclick="openUploadDialog()" data-i18n="source_mode_upload">上传文档</button>
           <label><span class="label-row">LLM Endpoint <span class="help" tabindex="0" data-i18n-tip="tip_llm_endpoint" data-tip="文档评分使用的文本模型接口。Ollama 默认路径：/api/generate。">?</span></span><input id="run_llm_endpoint" value="http://localhost:11434/api/generate" /></label>
           <label><span class="label-row"><span data-i18n="model">模型</span> <span class="help" tabindex="0" data-i18n-tip="tip_model" data-tip="文档分类、评分与摘要模型。向量关系使用单独的向量模型。">?</span></span><input id="run_llm_model" value="gemma4:e4b" /></label>
           <label><span class="label-row"><span data-i18n="output_language">输出语言</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_language" data-tip="摘要与评分理由的语言。自动模式按文档正文识别。">?</span></span>
@@ -95,12 +94,16 @@
             </select>
           </label>
         </div>
-        <div class="source-mode-panel">
-          <div class="segmented-control" role="group" aria-label="Source mode">
-            <button id="source_mode_path_btn" class="active" onclick="setSourceMode('path')" data-i18n="source_mode_path">服务器路径</button>
-            <button id="source_mode_upload_btn" onclick="setSourceMode('upload')" data-i18n="source_mode_upload">上传文档</button>
+        <div class="run-grid run-output-grid">
+          <label><span class="label-row"><span data-i18n="output_dir">输出目录</span> <span class="help" tabindex="0" data-i18n-tip="tip_output_dir" data-tip="保存进度、日志、评分及复制结果；支持续跑，且仅允许单进程写入。">?</span></span><input id="run_output_root" placeholder="请选择输出目录" data-i18n-placeholder="ph_output_dir" /></label>
+          <button id="pick_output_btn" onclick="pickFolder('run_output_root')" data-i18n="pick_output_dir">选择输出目录</button>
+        </div>
+        <dialog id="upload_dialog" class="upload-dialog" aria-labelledby="upload_dialog_title">
+          <div class="dialog-header">
+            <h2 id="upload_dialog_title" data-i18n="upload_dialog_title">上传文档</h2>
+            <button class="dialog-close" type="button" onclick="closeUploadDialog()" data-i18n-title="close" data-i18n-aria-label="close" title="关闭" aria-label="关闭"><span aria-hidden="true">×</span></button>
           </div>
-          <div id="upload_panel" class="upload-panel" hidden>
+          <div id="upload_panel" class="upload-panel">
             <input id="upload_files_input" class="hidden-sync-input" type="file" multiple />
             <input id="upload_folder_input" class="hidden-sync-input" type="file" multiple webkitdirectory directory />
             <div class="upload-actions">
@@ -116,7 +119,7 @@
             <div id="uploadStats" class="stats"></div>
             <div class="progress upload-progress"><div id="uploadBar"></div></div>
           </div>
-        </div>
+        </dialog>
         <details id="analysis_advanced_panel" class="collapsible-panel analysis-advanced-panel">
           <summary><span data-i18n="analysis_advanced">高级参数</span></summary>
           <div class="panel-body">
@@ -172,13 +175,18 @@
               <th data-i18n="table_select">选择</th>
               <th><button class="th-sort" onclick="setSort('status')"><span data-i18n="status">状态</span> <span class="sort-mark" data-sort-mark="status"></span></button></th>
               <th><button class="th-sort" onclick="setSort('quality')"><span data-i18n="table_quality">质量</span> <span class="sort-mark" data-sort-mark="quality"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('category')"><span data-i18n="category">分类</span> <span class="sort-mark" data-sort-mark="category"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('document_kind')"><span data-i18n="table_type">类型</span> <span class="sort-mark" data-sort-mark="document_kind"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('sensitivity')"><span data-i18n="table_sensitivity_public">敏感/公开</span> <span class="sort-mark" data-sort-mark="sensitivity"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('path')"><span data-i18n="table_name">名称</span> <span class="sort-mark" data-sort-mark="path"></span></button></th>
-              <th><button class="th-sort" onclick="setSort('source_mtime')"><span data-i18n="table_modified">修改时间</span> <span class="sort-mark" data-sort-mark="source_mtime"></span></button></th>
-              <th data-i18n="table_tags">标签</th>
-              <th data-i18n="table_actions">操作</th>
+              <th class="document-profile-column">
+                <span class="profile-column-title" data-i18n="table_profile">属性</span>
+                <span class="profile-sort-actions">
+                  <button class="th-sort" onclick="setSort('category')"><span data-i18n="category">分类</span><span class="sort-mark" data-sort-mark="category"></span></button>
+                  <button class="th-sort" onclick="setSort('document_kind')"><span data-i18n="table_type">类型</span><span class="sort-mark" data-sort-mark="document_kind"></span></button>
+                  <button class="th-sort" onclick="setSort('sensitivity')"><span data-i18n="table_sensitivity_compact">敏/公</span><span class="sort-mark" data-sort-mark="sensitivity"></span></button>
+                </span>
+              </th>
+              <th class="name-column"><button class="th-sort" onclick="setSort('path')"><span data-i18n="table_name">名称</span> <span class="sort-mark" data-sort-mark="path"></span></button></th>
+              <th class="modified-column"><button class="th-sort" onclick="setSort('source_mtime')"><span data-i18n="table_modified">修改时间</span> <span class="sort-mark" data-sort-mark="source_mtime"></span></button></th>
+              <th class="tags-column" data-i18n="table_tags">标签</th>
+              <th class="actions-column" data-i18n="table_actions">操作</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>

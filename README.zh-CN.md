@@ -1,29 +1,29 @@
 # DocTriage
 
-面向大型本地文档库的本地优先筛选、阅读和关系挖掘工具，适合古法文档择优、关联学习、RAG 和 Agent 工作流。
+面向大型本地文档库的本地优先筛选、阅读和关系挖掘工具，适合传统文档筛选、关联学习、RAG 和 Agent 工作流。
 
 [English README](README.md)
 
-DocTriage 会扫描源目录、提取正文、调用本地 LLM 给每个文档评分并解释原因，然后提供浏览器控制台完成阅读复核、状态标记、失败处理、关系挖掘和导出。它既能服务现代 AI 管线，也能服务传统的文档择优、按目录连续阅读和关联式学习。
+DocTriage 会扫描源目录、提取正文、调用本地 LLM 给每个文档评分并解释原因，然后提供浏览器控制台完成阅读复核、状态标记、失败处理、关系挖掘和导出。它既能服务现代 AI 管线，也能服务传统的文档筛选、按目录连续阅读和关联学习。
 
 源目录只读。所有状态、日志、关系结果以及可选的复制产物都会写入 `OUTPUT_ROOT`。
 
 <p align="center">
-  <img src="https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/triage.jpg?raw=true" alt="DocTriage 总览" width="900">
+  <img src="https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/triage.jpg" alt="DocTriage 总览" width="900">
 </p>
 
-DocTriage 围绕一个实用闭环设计：先进行本地分析，再在阅读台复核和标记文档，最后在需要关联学习或下游导出时生成关系簇。
+DocTriage 围绕一个清晰的闭环设计：先本地分析，再在阅读台复核和标记文档，最后在需要关联学习或下游导出时生成关系簇。
 
 ## 产品亮点与知识闭环
 
 DocTriage 的核心价值不是简单转换文件，而是在 RAG 或 Agent 入库前回答“哪些资料值得进入知识库、为什么值得、边界是什么”。它把来源只读、质量分级、人工复核、关系挖掘、RAG 索引和可审计导出放在同一条本地优先链路中，适合作为个人或团队私域知识的上游治理层。
 
 - **知识资产治理**：用正文质量、文档类型、主题、敏感性和可公开性代替仅按目录或文件名入库。
-- **可解释筛选**：阅读台、RAG 与 Agent Bundle 各自保留显式阈值；筛选数量和占比可见，不会隐式互相污染。
+- **可解释筛选**：阅读台、RAG 与 Agent Bundle 各自保留显式阈值；筛选数量和占比可见，不会隐式互相干扰。
 - **稳定下游契约**：`doctriage_bundle.v2` 携带来源路径、质量分、分类、摘要、关系和健康状态，下游不需要耦合内部日志。
 - **私域写作基础**：先在 DocTriage 中区分事实资料、观点资料、案例和风格样本，再把可信工作集交给下游生成论点、提纲和文章。
 
-推荐与 [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents) 组成可选闭环：DocTriage 负责“治理与入库”，AnyDocsToAgents 负责“混合检索、执行拓扑、证据问答与文章输出”。两者通过 Bundle 和启动 URL 联动，仍可独立部署和使用。
+可与 [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents) 组成可选闭环：DocTriage 负责“治理与入库”，AnyDocsToAgents 负责“混合检索、执行拓扑、证据问答与文章写作”。两者通过 Bundle 和启动 URL 联动，仍可独立部署和使用。
 
 ## 为什么使用
 
@@ -49,23 +49,31 @@ DocTriage 的核心价值不是简单转换文件，而是在 RAG 或 Agent 入�
 
 ## 界面预览
 
-**分析执行**
+**文档分析**
 
-![分析执行](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/analysis_chi.png?raw=true)
+![文档分析](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/analysis_chi.png)
 
 在同一界面配置源目录、输出目录、本地模型、plan-only、续跑策略、进度、日志和失败状态。
 
 **阅读台**
 
-![阅读台](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/reading_chi.png?raw=true)
+![阅读台](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/reading_chi.png)
 
 既可以复核已评分文档，也可以按源目录顺序浏览全部文件，并直接打开、定位、标记、筛选和导出当前工作集。
 
 **关系图谱**
 
-![关系图谱](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/graph_chi.png?raw=true)
+![关系图谱](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/graph_chi.png)
 
 关系簇用于近重复识别、系列发现、关联学习、知识图谱导出和 bundle 生成。
+
+**RAG 索引与检索**
+
+![RAG 索引与检索](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/rag_chi.png)
+
+**Agent Bundle 交接**
+
+![Agent Bundle 交接](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/agents_eng.png)
 
 ## 环境要求
 
@@ -99,9 +107,11 @@ doctriage-reading-ui --host 127.0.0.1 --port 18765
 
 ### 文件夹输入与跨平台路径
 
-- “服务器路径”读取 DocTriage 服务所在机器的目录，并递归扫描所有子目录。核心任务使用一个源根目录，以保持相对路径、续跑状态和关系结果稳定。
-- 需要同时处理多个根目录时，切换到“上传文档”，从“添加文档”菜单选择文件夹。浏览器支持时可一次多选，也可以重复添加；它们会合并到一个受管上传工作区，同名根目录自动改为 `目录 (2)`，不会覆盖已有内容。
-- 浏览器上传的是当前电脑中的文件内容；“服务器路径”则必须是服务器可访问的路径。远程部署时，两者不要混用。
+- “选择源目录”读取 DocTriage 服务所在机器的目录，并递归扫描所有子目录。
+- “上传文档”通过受管工作区接收操作者电脑中的文件或文件夹。浏览器支持时可一次多选，也可以重复添加；同名根目录自动改为 `目录 (2)`，不会覆盖已有内容。
+- 已完成的上传内容和已选择的源目录会在同一次任务中取并集。状态、日志和可选复制产物始终写入分析表单指定的输出目录；上传内容使用 `_uploads/` 相对路径命名空间避免冲突。
+- CLI 支持重复传入 `--source-dir`。第一个目录作为主根目录，后续目录作为附加根目录；扫描会按真实路径去重，未变化文件仍可续跑。
+- 浏览器上传会发送操作者电脑中的文件内容；选择的源目录必须能被服务器访问，应根据文件实际所在位置选择输入方式。
 - Windows 路径示例为 `D:\资料`，Linux 为 `/home/name/documents`，macOS 为 `/Users/name/Documents`。Linux 无图形桌面时可直接填写路径；macOS 优先使用系统目录对话框，Linux 优先使用 Zenity/KDialog，并在不可用时回退 Tk。
 
 大型目录建议首轮使用 plan-only：
@@ -109,6 +119,7 @@ doctriage-reading-ui --host 127.0.0.1 --port 18765
 ```powershell
 doctriage `
   --source-dir "D:\example_docs" `
+  --source-dir "D:\additional_docs" `
   --output-root "D:\doctriage_run" `
   --llm-endpoint http://localhost:11434/api/generate `
   --llm-model gemma4:e4b `

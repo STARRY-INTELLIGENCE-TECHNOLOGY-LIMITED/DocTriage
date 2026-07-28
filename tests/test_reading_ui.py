@@ -532,6 +532,7 @@ def test_reading_ui_source_path_sort_prefers_full_source_path() -> None:
 
 
 def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
+    additional_source = tmp_path / "uploaded"
     command = build_analysis_command(
         {
             "llm_endpoint": "http://localhost:11434/api/generate",
@@ -551,9 +552,13 @@ def test_build_analysis_command_includes_selected_flags(tmp_path: Path) -> None:
         },
         tmp_path / "source",
         tmp_path / "output",
+        additional_source_dirs=(additional_source,),
     )
 
-    assert "--source-dir" in command
+    source_indexes = [index for index, value in enumerate(command) if value == "--source-dir"]
+    assert len(source_indexes) == 2
+    assert command[source_indexes[0] + 1] == str(tmp_path / "source")
+    assert command[source_indexes[1] + 1] == str(additional_source)
     assert "--output-root" in command
     assert "--llm-model" in command
     assert "local-model" in command
@@ -1077,6 +1082,49 @@ def test_start_analysis_redirects_child_output_to_application_log(
     assert not (output_root / "_state" / "ui_runs.jsonl").exists()
 
 
+def test_start_analysis_unions_source_directory_and_completed_upload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = tmp_path / "source"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    monkeypatch.setattr(reading_ui, "UPLOAD_WORKSPACE_ROOT", tmp_path / "uploads")
+    app_state = AppState()
+    workspace = create_upload_workspace(app_state)
+    save_upload_file(app_state, workspace["upload_id"], "folder/uploaded.md", b"uploaded")
+    completed = complete_upload_workspace(app_state, workspace["upload_id"])
+    popen_call: dict[str, object] = {}
+
+    class FakeProcess:
+        pid = 12346
+
+        def poll(self):
+            return None
+
+    def fake_popen(command, **kwargs):
+        popen_call["command"] = command
+        return FakeProcess()
+
+    monkeypatch.setattr(reading_ui.subprocess, "Popen", fake_popen)
+
+    result = start_analysis(
+        app_state,
+        {
+            "source_dir": str(source_dir),
+            "upload_id": workspace["upload_id"],
+            "output_root": str(output_root),
+            "llm_endpoint": "http://localhost:11434/api/generate",
+        },
+    )
+
+    command = popen_call["command"]
+    assert isinstance(command, list)
+    source_values = [command[index + 1] for index, value in enumerate(command) if value == "--source-dir"]
+    assert source_values == [str(source_dir.resolve()), completed["source_dir"]]
+    assert command[command.index("--output-root") + 1] == str(output_root.resolve())
+    assert result["source_dirs"] == source_values
+
+
 def test_managed_process_options_create_process_group_off_windows(monkeypatch) -> None:
     monkeypatch.setattr(reading_ui.os, "name", "posix")
 
@@ -1091,12 +1139,13 @@ def test_http_server_uses_daemon_request_threads() -> None:
 def test_frontend_assets_are_split_from_python_html() -> None:
     css = reading_ui.read_ui_asset_text("app.css")
 
-    assert '<link rel="stylesheet" href="/assets/app.css" />' in reading_ui.HTML_PAGE
-    assert '<script src="/assets/app.js"></script>' in reading_ui.HTML_PAGE
+    assert f'<link rel="stylesheet" href="/assets/app.css?v={reading_ui.UI_ASSET_VERSION}" />' in reading_ui.HTML_PAGE
+    assert f'<script src="/assets/app.js?v={reading_ui.UI_ASSET_VERSION}"></script>' in reading_ui.HTML_PAGE
     assert "<style>" not in reading_ui.HTML_PAGE
     assert "<script>" not in reading_ui.HTML_PAGE
     assert "header {\n  padding: 16px 20px 0;" in css
     assert "function switchTab" in reading_ui.read_ui_asset_text("app.js")
+    assert len(reading_ui.UI_ASSET_VERSION) == 12
 
 
 def test_frontend_assets_are_served_from_startup_cache(monkeypatch) -> None:
@@ -1109,6 +1158,14 @@ def test_frontend_assets_are_served_from_startup_cache(monkeypatch) -> None:
     assert reading_ui.HTML_PAGE_BYTES == reading_ui.UI_ASSET_BYTES["index.html"]
     assert reading_ui.HTML_PAGE == reading_ui.UI_ASSET_TEXT["index.html"]
     assert "function switchTab" in reading_ui.read_ui_frontend_source()
+
+
+def test_frontend_assets_send_no_cache_headers() -> None:
+    source = Path(reading_ui.__file__).read_text(encoding="utf-8")
+
+    assert 'self.send_header("Cache-Control", "no-store")' in source
+    assert 'self.send_header("Pragma", "no-cache")' in source
+    assert 'self.send_header("Expires", "0")' in source
 
 
 def test_terminate_process_tree_kills_process_group_off_windows(monkeypatch) -> None:
@@ -3522,14 +3579,17 @@ def test_upload_workspace_lifecycle_uses_server_managed_paths(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(reading_ui, "UPLOAD_WORKSPACE_ROOT", tmp_path / "uploads")
-    app_state = AppState()
+    active_paths = ReadingPaths(
+        source_dir=tmp_path / "existing-source",
+        output_root=tmp_path / "existing-output",
+    )
+    app_state = AppState(paths=active_paths)
 
     created = create_upload_workspace(app_state)
     upload_id = created["upload_id"]
     assert Path(created["source_dir"]).is_dir()
     assert Path(created["output_root"]).is_dir()
-    assert app_state.paths is not None
-    assert app_state.paths.source_dir == Path(created["source_dir"])
+    assert app_state.paths == active_paths
 
     uploaded = save_upload_file(
         app_state,
@@ -3559,7 +3619,7 @@ def test_upload_workspace_lifecycle_uses_server_managed_paths(
     deleted = delete_upload_workspace(app_state, upload_id)
     assert deleted["deleted"] is True
     assert not Path(created["source_dir"]).exists()
-    assert app_state.paths is None
+    assert app_state.paths == active_paths
 
 
 def test_upload_relative_paths_reject_traversal() -> None:
@@ -3620,8 +3680,12 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert 'id="run_embedding_model"' in html
     assert 'id="analysis_advanced_panel"' in html
     assert 'data-i18n="analysis_advanced">高级参数' in html
-    assert 'id="source_mode_path_btn"' in html
-    assert 'id="source_mode_upload_btn"' in html
+    assert 'id="source_mode_path_btn"' not in html
+    assert 'id="source_mode_upload_btn"' not in html
+    assert 'id="open_upload_dialog_btn"' in html
+    assert 'id="upload_dialog" class="upload-dialog"' in html
+    assert 'onclick="openUploadDialog()"' in html
+    assert 'onclick="closeUploadDialog()"' in html
     assert 'id="source_mode_files_btn"' not in html
     assert 'id="source_mode_folder_btn"' not in html
     assert 'id="upload_files_input" class="hidden-sync-input" type="file" multiple' in html
@@ -3635,17 +3699,19 @@ def test_analysis_form_exposes_help_tooltips_for_run_options() -> None:
     assert 'data-i18n="upload_folder_hint"' not in html
     assert 'id="uploadStats"' in html
     assert 'id="uploadBar"' in html
-    assert "function setSourceMode(mode)" in html
+    assert "function openUploadDialog()" in html
+    assert "function closeUploadDialog()" in html
     assert "async function uploadSelectedFiles" in html
     assert 'fetch("/api/uploads", {method: "POST"})' in html
     assert 'fetch(`/api/uploads/${workspace.upload_id}/files?relative_path=${encodeURIComponent(relativePath)}`' in html
     assert 'fetch(`/api/uploads/${workspace.upload_id}/complete`, {method: "POST"})' in html
     assert 'fetch(`/api/uploads/${uploadId}`, {method: "DELETE"})' in html
-    assert "applyUploadWorkspacePaths(payload);" in html
-    assert 'if (sourceMode === "upload" && (!currentUploadWorkspace || !currentUploadWorkspace.complete))' in html
-    assert 'if (id === "run_source_dir" || id === "run_output_root") syncSourceModeFromRunPaths();' in html
-    assert 'function runPathsMatchUploadWorkspace()' in html
-    assert 'setSourceMode(runPathsMatchUploadWorkspace() ? "upload" : "path");' in html
+    assert "applyUploadWorkspacePaths" not in html
+    assert "sourceMode" not in html
+    assert 'upload_id: uploadId,' in html
+    assert 'id="run_source_dir"' in html
+    assert 'id="run_output_root"' in html
+    assert "服务器路径" not in html
     assert 'id="shared_target_panel"' in html
     assert 'id="global_output_root"' in html
     assert 'id="pick_global_output_btn" onclick="pickFolder(\'global_output_root\')"' in html
@@ -3936,6 +4002,23 @@ def test_reading_tab_uses_loading_placeholders_and_row_hover() -> None:
     assert '$("rows").setAttribute("aria-busy", "false");' in html
     assert ".reading-loading-placeholder" in compact_html
     assert "tbody tr:not(.reading-loading-row):hover > td" in compact_html
+    assert 'class="document-profile-column"' in html
+    assert 'data-i18n="table_profile">属性</span>' in html
+    assert 'data-i18n="table_sensitivity_compact">敏/公</span>' in html
+    assert html.count('class="document-profile">${formatDocumentProfile(row)}</td>') == 1
+    assert "function formatDocumentProfile(row)" in html
+    assert 'colspan="8"' in html
+    assert 'class="sensitivity-public-column"' not in html
+    assert "td.name { max-width: 420px;" not in compact_html
+    assert "td.name { width: 42vw; min-width: 360px;" in compact_html
+    assert "td.actions-cell { width: 380px; min-width: 380px; max-width: 380px; white-space: nowrap;" in compact_html
+    assert ".actions { display: flex; gap: 4px; flex-wrap: nowrap; width: 100%; white-space: nowrap;" in compact_html
+    assert ".actions-column { width: 380px; min-width: 380px; max-width: 380px;" in compact_html
+    assert "table { width: 100%; border-collapse: collapse; min-width: 1280px;" in compact_html
+    assert '<td><span class="reading-loading-placeholder long"></span></td>' in html
+    loading_body = html[html.index("function renderReadingLoading()"):html.index("function hasGraphPayload()", html.index("function renderReadingLoading()"))]
+    assert 'class="actions"' not in loading_body
+    assert '<td class="actions-cell"><div class="actions">${renderRowActions(row)}</div></td>' in html
 
     load_start = html.index("async function loadRows()")
     load_end = html.index("function syncReadingScopeControls()", load_start)
@@ -3943,6 +4026,13 @@ def test_reading_tab_uses_loading_placeholders_and_row_hover() -> None:
     assert load_body.index("renderReadingLoading();") < load_body.index('fetch("/api/state?"')
     assert load_body.index("readingRowsLoading = false;") < load_body.index("applyClientFilters();")
     assert "renderReadingError(message);" in load_body
+
+
+def test_frontend_keeps_desktop_layout_at_1280_width() -> None:
+    compact_html = frontend_source_compact()
+
+    assert "@media (max-width: 1200px) { .graph-layout { grid-template-columns: 1fr; } }" not in compact_html
+    assert "@media (max-width: 760px) { .graph-layout { grid-template-columns: 1fr; } }" in compact_html
 
 
 def test_frontend_status_and_graph_requests_include_current_paths() -> None:
@@ -4003,6 +4093,14 @@ def test_reading_output_does_not_backfill_analysis_paths() -> None:
 def test_reading_tab_loads_rows_after_config_backfills_existing_output() -> None:
     html = frontend_source()
 
+    assert "async function bootstrap()" in html
+    assert "loadConfig();\nswitchTab" not in html
+    bootstrap_start = html.index("async function bootstrap()")
+    bootstrap_end = html.index("setInterval", bootstrap_start)
+    bootstrap_body = html[bootstrap_start:bootstrap_end]
+    assert "await loadConfig();" in bootstrap_body
+    assert 'switchTab(localStorage.getItem("doctriage_tab") || "analysis");' in bootstrap_body
+
     switch_start = html.index("function switchTab(name)")
     switch_end = html.index("async function loadConfig()", switch_start)
     switch_body = html[switch_start:switch_end]
@@ -4016,7 +4114,9 @@ def test_reading_tab_loads_rows_after_config_backfills_existing_output() -> None
     assert 'if (name === "reading") loadReadingRowsIfReady();' in switch_body
     assert "loadReadingRowsIfReady();" in config_body
     assert 'if (!$("section-reading").classList.contains("active")) return;' in helper_body
-    assert "if (readingPathPayload().output_root) loadRows();" in helper_body
+    assert 'if (!readingPathPayload().output_root) return;' in helper_body
+    assert 'if (key === readingRowsLoadedKey || key === readingRowsLoadingKey) return;' in helper_body
+    assert 'return [readingScope, paths.source_dir || "", paths.output_root || ""].join("\\u0000");' in helper_body
 
 
 def test_shared_output_directory_drives_secondary_tabs_without_analysis_backfill() -> None:
@@ -4136,9 +4236,10 @@ def test_analysis_run_form_persists_previous_values() -> None:
     analysis_end = html.index("function shouldPreemptRelationshipsForAnalysis", analysis_start)
     analysis_body = html[analysis_start:analysis_end]
     assert "saveRunFormState();" in analysis_body
-    assert 'if (sourceMode === "upload" && (!currentUploadWorkspace || !currentUploadWorkspace.complete))' in analysis_body
+    assert 'if (currentUploadWorkspace?.upload_id && !currentUploadWorkspace.complete)' in analysis_body
+    assert 'if (!requestPayload.source_dir && !requestPayload.upload_id)' in analysis_body
+    assert 'if (!requestPayload.output_root)' in analysis_body
     assert "const requestPayload = runPayload();" in analysis_body
-    assert analysis_body.index("currentUploadWorkspace") < analysis_body.index("const requestPayload = runPayload();")
     assert 'if (!validateEmbeddingModelSelection(requestPayload)) return;' in html
     assert 'const response = await fetch("/api/analysis/start"' in html
     assert "function applyTemplate()" not in html
@@ -4230,6 +4331,7 @@ def test_embedding_model_validation_before_embedding_requests() -> None:
 
 def test_reading_table_uses_name_column_with_summary_tooltip() -> None:
     html = frontend_source()
+    compact_html = frontend_source_compact()
 
     assert 'setSort(\'path\')"><span data-i18n="table_name">名称' in html
     assert "doc-name" in html
@@ -4241,6 +4343,10 @@ def test_reading_table_uses_name_column_with_summary_tooltip() -> None:
     assert 'tr("explain_reason")' in html
     assert "EXPLANATION_DIMENSIONS" in html
     assert "bindSummaryTooltips();" in html
+    assert ".floating-tip { position: fixed; left: 0; top: 0; display: none; pointer-events: none;" in compact_html
+    assert "const spaceAbove = targetRect.top - margin;" in html
+    assert "const spaceBelow = window.innerHeight - targetRect.bottom - margin;" in html
+    assert "targetRect.bottom + gap" in html
     assert "path: sortKey === \"source_path_asc\" || sortKey === \"path_asc\" ? \"source_path_desc\" : \"source_path_asc\"" in html
 
 

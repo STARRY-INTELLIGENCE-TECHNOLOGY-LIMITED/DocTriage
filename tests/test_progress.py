@@ -152,6 +152,32 @@ def test_scan_candidate_files_counts_oversized_once(tmp_path: Path) -> None:
     ]
 
 
+def test_scan_candidate_files_unions_source_directories_without_duplicates(
+    tmp_path: Path,
+) -> None:
+    source_dir = tmp_path / "source"
+    additional_dir = tmp_path / "uploaded"
+    output_root = tmp_path / "output"
+    source_dir.mkdir()
+    additional_dir.mkdir()
+    primary_file = source_dir / "primary.md"
+    uploaded_file = additional_dir / "uploaded.md"
+    primary_file.write_text("primary", encoding="utf-8")
+    uploaded_file.write_text("uploaded", encoding="utf-8")
+    settings = make_settings(source_dir, output_root).model_copy(
+        update={"ADDITIONAL_SOURCE_DIRS": (additional_dir, additional_dir)}
+    )
+
+    directory_map, skipped_too_large, stat_failures = scan_candidate_files(settings)
+    candidates = [path.resolve() for paths in directory_map.values() for path in paths]
+
+    assert candidates == [primary_file.resolve(), uploaded_file.resolve()]
+    assert skipped_too_large == 0
+    assert stat_failures == 0
+    assert main.source_relative_path(settings, primary_file) == Path("primary.md")
+    assert main.source_relative_path(settings, uploaded_file) == Path("_uploads/uploaded.md")
+
+
 def test_pipeline_writes_summary_when_all_files_are_oversized(tmp_path: Path) -> None:
     source_dir = tmp_path / "source"
     output_root = tmp_path / "output"

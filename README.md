@@ -4,15 +4,15 @@ Local-first document triage for manual curation, connected learning, RAG, and ag
 
 [Chinese README](README.zh-CN.md)
 
-DocTriage scans a source folder, extracts text, asks a local LLM to score and explain each document, and gives you a browser console for review, reading status, failure handling, relationship mining, and export. It is useful both for modern AI pipelines and for old-school document selection, sequential reading, and learning by association.
+DocTriage scans a source folder, extracts text, asks a local LLM to score and explain each document, and gives you a browser console for review, reading status, failure handling, relationship mining, and export. It serves both modern AI pipelines and traditional document selection, sequential reading, and associative learning.
 
 Your source folder stays read-only. DocTriage writes state, logs, relationship results, and optional routed copies under `OUTPUT_ROOT`.
 
 <p align="center">
-  <img src="https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/triage.jpg?raw=true" alt="DocTriage overview" width="900">
+  <img src="https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/triage.jpg" alt="DocTriage overview" width="900">
 </p>
 
-DocTriage is built around a practical loop: run local analysis, review and mark documents in the reading console, then use relationship clusters when you need connected learning or downstream exports.
+DocTriage follows a simple loop: run local analysis, review and mark documents in the reading console, then use relationship clusters when connected learning or downstream export is needed.
 
 ## Product Highlights and Knowledge Loop
 
@@ -23,7 +23,7 @@ DocTriage is more than a file converter. Before documents enter RAG or an agent 
 - **Stable downstream contract**: `doctriage_bundle.v2` carries provenance, scores, classification, summaries, relationships, and health information without exposing internal logs as an API.
 - **Private writing foundation**: separate factual sources, viewpoints, cases, and style references before sending a trusted working set into a writing workflow.
 
-For an optional end-to-end loop, connect DocTriage to [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents): DocTriage governs and packages the corpus, while AnyDocsToAgents provides hybrid retrieval, editable execution topologies, evidence-grounded chat, and article production. The integration uses a Bundle and launch URL; both projects remain independently deployable.
+An optional end-to-end loop connects DocTriage to [AnyDocsToAgents](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/AnyDocsToAgents): DocTriage governs and packages the corpus, while AnyDocsToAgents provides hybrid retrieval, editable execution topologies, evidence-grounded chat, and article writing. The integration uses a Bundle and launch URL; both projects remain independently deployable.
 
 ## Why
 
@@ -49,23 +49,31 @@ For an optional end-to-end loop, connect DocTriage to [AnyDocsToAgents](https://
 
 ## Screenshots
 
-**Analysis Execution**
+**Document Analysis**
 
-![Analysis execution](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/analysis_eng.png?raw=true)
+![Document analysis](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/analysis_eng.png)
 
 Configure source/output folders, local model settings, plan-only runs, resume behavior, progress, logs, and failure status from one place.
 
 **Reading Console**
 
-![Reading console](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/reading_eng.png?raw=true)
+![Reading console](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/reading_eng.png)
 
 Review scored documents or browse all source files in folder order, then open, reveal, mark, filter, and export the current working set.
 
 **Relationship Graph**
 
-![Relationship graph](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/blob/main/sample_pictures/graph_eng.png?raw=true)
+![Relationship graph](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/graph_eng.png)
 
 Mine relationship clusters for duplicate detection, series discovery, connected learning, knowledge graph export, and bundle generation.
+
+**RAG Index and Retrieval**
+
+![RAG index and retrieval](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/rag_eng.png)
+
+**Agent Bundle Handoff**
+
+![Agent Bundle handoff](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/agents_eng.png)
 
 ## Requirements
 
@@ -100,9 +108,11 @@ or JavaScript under `doctriage_ui`.
 
 ### Folder input and cross-platform paths
 
-- **Server path** reads a directory on the machine running DocTriage and recursively scans all subdirectories. A run keeps one source root so relative paths, resume state, and relationship artifacts remain stable.
-- To process multiple roots together, switch to **Upload documents** and choose folders from the **Add documents** menu. Select several folders at once when supported, or add them repeatedly. They are merged into one managed upload workspace; duplicate root names become `Folder (2)` instead of overwriting existing files.
-- Browser upload sends file contents from the operator's computer. A server path must already be accessible to the server, so these inputs are not interchangeable in a remote deployment.
+- **Select source directory** reads a directory on the machine running DocTriage and recursively scans all subdirectories.
+- **Upload documents** opens a managed workspace for files or folders from the operator's computer. Select several folders at once when supported, or add them repeatedly; duplicate root names become `Folder (2)` instead of overwriting existing files.
+- A completed upload and a selected source directory are processed as one union in the same run. Generated state and optional routed copies always use the output directory entered in the analysis form; uploaded paths use the `_uploads/` namespace to avoid collisions.
+- The CLI also accepts repeated `--source-dir` options. The first directory is the primary root and later directories are additional roots; resolved files are deduplicated and unchanged files remain resumable.
+- Browser upload sends file contents from the operator's computer. A selected source directory must already be accessible to the server, so choose the input method according to where the files are stored.
 - Example paths are `D:\documents` on Windows, `/home/name/documents` on Linux, and `/Users/name/Documents` on macOS. Headless Linux accepts manual paths; macOS prefers the system picker, while Linux prefers Zenity/KDialog and falls back to Tk when available.
 
 Recommended first pass for a large folder:
@@ -110,6 +120,7 @@ Recommended first pass for a large folder:
 ```powershell
 doctriage `
   --source-dir "D:\example_docs" `
+  --source-dir "D:\additional_docs" `
   --output-root "D:\doctriage_run" `
   --llm-endpoint http://localhost:11434/api/generate `
   --llm-model gemma4:e4b `

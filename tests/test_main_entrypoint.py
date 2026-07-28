@@ -21,6 +21,31 @@ def test_main_without_args_prints_help_and_launches_ui(monkeypatch, capsys) -> N
     assert launched["value"] is True
 
 
+def test_repeated_source_dir_arguments_build_multi_source_settings(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    output = tmp_path / "output"
+    args = main.build_parser().parse_args(
+        [
+            "--source-dir",
+            str(first),
+            "--source-dir",
+            str(second),
+            "--output-root",
+            str(output),
+            "--llm-endpoint",
+            "http://localhost:11434/api/generate",
+        ]
+    )
+
+    settings = main.build_settings_from_args(args)
+
+    assert settings.SOURCE_DIR == first.resolve()
+    assert settings.ADDITIONAL_SOURCE_DIRS == (second.resolve(),)
+
+
 def test_is_doctriage_ui_running_detects_config_endpoint(monkeypatch) -> None:
     class FakeResponse:
         def __enter__(self):

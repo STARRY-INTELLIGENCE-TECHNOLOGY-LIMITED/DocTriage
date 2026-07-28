@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     LLM_ENDPOINT: str = Field(..., min_length=1)
     CONCURRENCY_LIMIT: int = Field(default=5, ge=1, le=64)
     SOURCE_DIR: Path = Field(...)
+    ADDITIONAL_SOURCE_DIRS: tuple[Path, ...] = Field(default=())
     OUTPUT_ROOT: Path = Field(...)
 
     LLM_MODEL: str | None = Field(default=None)
@@ -144,6 +145,16 @@ class Settings(BaseSettings):
     @classmethod
     def _normalize_paths(cls, value: str | Path) -> Path:
         return Path(value).expanduser().resolve()
+
+    @field_validator("ADDITIONAL_SOURCE_DIRS", mode="before")
+    @classmethod
+    def _normalize_additional_source_dirs(
+        cls, value: tuple[str | Path, ...] | list[str | Path] | str | Path | None
+    ) -> tuple[Path, ...]:
+        if value is None or value == "":
+            return ()
+        values = value if isinstance(value, (tuple, list)) else (value,)
+        return tuple(Path(item).expanduser().resolve() for item in values)
 
     @field_validator("OUTPUT_LANGUAGE", mode="before")
     @classmethod

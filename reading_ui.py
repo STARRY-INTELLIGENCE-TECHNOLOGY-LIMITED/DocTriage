@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import signal
@@ -121,9 +122,26 @@ def _load_ui_asset_bytes(asset_name: str) -> bytes:
     return resources.files(UI_PACKAGE).joinpath(asset_name).read_bytes()
 
 
-UI_ASSET_BYTES = {
+_RAW_UI_ASSET_BYTES = {
     asset_name: _load_ui_asset_bytes(asset_name) for asset_name in UI_ASSET_NAMES
 }
+UI_ASSET_VERSION = hashlib.sha256(
+    b"".join(_RAW_UI_ASSET_BYTES[asset_name] for asset_name in UI_ASSET_NAMES)
+).hexdigest()[:12]
+
+
+def _version_index_asset(content: bytes) -> bytes:
+    version = f"?v={UI_ASSET_VERSION}".encode("ascii")
+    return (
+        content.replace(b'/assets/app.css"', b"/assets/app.css" + version + b'"')
+        .replace(b'/assets/app.js"', b"/assets/app.js" + version + b'"')
+    )
+
+
+UI_ASSET_BYTES = dict(_RAW_UI_ASSET_BYTES)
+UI_ASSET_BYTES[UI_INDEX_ASSET] = _version_index_asset(
+    _RAW_UI_ASSET_BYTES[UI_INDEX_ASSET]
+)
 UI_ASSET_TEXT = {
     asset_name: content.decode("utf-8")
     for asset_name, content in UI_ASSET_BYTES.items()
@@ -2571,7 +2589,7 @@ def can_reveal_file() -> bool:
 
 def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, Any]:
     payload = dict(payload)
-    source_dir, output_root = resolve_payload_paths(payload)
+    source_dir, output_root, additional_source_dirs = resolve_analysis_paths(payload)
     paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
     preempt_relationships = bool(payload.get("preempt_relationships"))
     relationship_stop_result: dict[str, Any] | None = None
@@ -2662,7 +2680,12 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
         active_pid = find_active_run_pid(app_state.paths)
         if active_pid is not None:
             raise RuntimeError(f"Analysis is already running with PID {active_pid}")
-        command = build_analysis_command(payload, source_dir, output_root)
+        command = build_analysis_command(
+            payload,
+            source_dir,
+            output_root,
+            additional_source_dirs=additional_source_dirs,
+        )
         process_env = subprocess_env_for_payload(payload)
         output_root.mkdir(parents=True, exist_ok=True)
         (output_root / "_state").mkdir(parents=True, exist_ok=True)
@@ -2686,6 +2709,9 @@ def start_analysis(app_state: AppState, payload: dict[str, Any]) -> dict[str, An
             "command": command,
             "plan_only": is_plan_only_command(command),
             "source_dir": str(source_dir),
+            "source_dirs": [
+                str(path) for path in (source_dir, *additional_source_dirs)
+            ],
             "output_root": str(output_root),
             "relationship_stop": relationship_stop_result,
         }
@@ -2730,8 +2756,6 @@ def create_upload_workspace(app_state: AppState) -> dict[str, Any]:
         "complete": False,
     }
     write_upload_manifest(upload_id, manifest)
-    with app_state.lock:
-        app_state.paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
     return upload_workspace_payload(upload_id, manifest)
 
 
@@ -2865,11 +2889,6 @@ def save_upload_file(
     manifest["total_bytes"] = max(0, int(manifest.get("total_bytes") or 0) - previous_size + size)
     manifest["complete"] = False
     write_upload_manifest(upload_id, manifest)
-    with app_state.lock:
-        app_state.paths = ReadingPaths(
-            source_dir=upload_source_dir(upload_id),
-            output_root=upload_output_root(upload_id),
-        )
     payload = upload_workspace_payload(upload_id, manifest)
     payload.update({"relative_path": normalized_relative, "size": size})
     return payload
@@ -2885,8 +2904,6 @@ def complete_upload_workspace(app_state: AppState, upload_id: str) -> dict[str, 
     manifest["completed_epoch"] = time.time()
     write_upload_manifest(upload_id, manifest)
     clear_source_file_scan_cache(source_dir)
-    with app_state.lock:
-        app_state.paths = ReadingPaths(source_dir=source_dir, output_root=output_root)
     return upload_workspace_payload(upload_id, manifest)
 
 
@@ -2894,13 +2911,6 @@ def delete_upload_workspace(app_state: AppState, upload_id: str) -> dict[str, An
     workspace = upload_workspace_path(upload_id)
     source_dir = upload_source_dir(upload_id)
     output_root = upload_output_root(upload_id)
-    with app_state.lock:
-        active_paths = app_state.paths
-        if (
-            active_paths is not None
-            and active_paths.output_root.resolve() == output_root.resolve()
-        ):
-            app_state.paths = None
     clear_source_file_scan_cache(source_dir)
     if workspace.exists():
         shutil.rmtree(workspace)
@@ -2994,6 +3004,44 @@ def resolve_payload_paths(payload: dict[str, Any]) -> tuple[Path, Path]:
     if not source_dir.exists():
         raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
     return source_dir, output_root
+
+
+def resolve_analysis_paths(
+    payload: dict[str, Any],
+) -> tuple[Path, Path, tuple[Path, ...]]:
+    source_text = str(payload.get("source_dir") or "").strip()
+    output_text = str(payload.get("output_root") or "").strip()
+    upload_id = str(payload.get("upload_id") or "").strip()
+    if not output_text:
+        raise ValueError("Output directory is required.")
+
+    source_dir: Path | None = None
+    if source_text:
+        source_dir = Path(source_text).expanduser().resolve()
+        if not source_dir.exists():
+            raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
+        if not source_dir.is_dir():
+            raise NotADirectoryError(f"Source path is not a directory: {source_dir}")
+
+    upload_source: Path | None = None
+    if upload_id:
+        manifest = read_upload_manifest(upload_id)
+        if not bool(manifest.get("complete")):
+            raise ValueError("Upload workspace is not complete.")
+        if int(manifest.get("file_count") or 0) <= 0:
+            raise ValueError("Upload workspace has no files.")
+        upload_source = upload_source_dir(upload_id).resolve()
+        if not upload_source.is_dir():
+            raise FileNotFoundError(f"Upload source directory does not exist: {upload_source}")
+
+    if source_dir is None and upload_source is None:
+        raise ValueError("A source directory or completed upload is required.")
+
+    output_root = Path(output_text).expanduser().resolve()
+    if source_dir is None:
+        return upload_source, output_root, ()
+    additional = (upload_source,) if upload_source is not None else ()
+    return source_dir, output_root, additional
 
 
 def paths_from_payload(payload: dict[str, Any]) -> ReadingPaths | None:
@@ -3363,18 +3411,28 @@ def command_option_value(command: list[str], option: str) -> str | None:
 
 
 def build_analysis_command(
-    payload: dict[str, Any], source_dir: Path, output_root: Path
+    payload: dict[str, Any],
+    source_dir: Path,
+    output_root: Path,
+    *,
+    additional_source_dirs: tuple[Path, ...] = (),
 ) -> list[str]:
     command = [
         sys.executable,
         str(PROJECT_ROOT / "main.py"),
         "--source-dir",
         str(source_dir),
-        "--output-root",
-        str(output_root),
-        "--llm-endpoint",
-        str(payload.get("llm_endpoint") or "http://localhost:11434/api/generate"),
     ]
+    for additional_source_dir in additional_source_dirs:
+        command.extend(["--source-dir", str(additional_source_dir)])
+    command.extend(
+        [
+            "--output-root",
+            str(output_root),
+            "--llm-endpoint",
+            str(payload.get("llm_endpoint") or "http://localhost:11434/api/generate"),
+        ]
+    )
     llm_model = str(payload.get("llm_model") or "").strip()
     if llm_model:
         command.extend(["--llm-model", llm_model])
@@ -4949,6 +5007,8 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
@@ -4959,6 +5019,8 @@ class ReadingRequestHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)

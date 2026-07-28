@@ -595,35 +595,85 @@ def scan_candidate_files(settings: Settings) -> tuple[dict[Path, list[Path]], in
         else None
     )
 
-    for root, _, file_names in os.walk(settings.SOURCE_DIR):
-        root_path = Path(root)
-        candidates: list[Path] = []
-        modified_times: dict[Path, float] = {}
-        for file_name in file_names:
-            path = root_path / file_name
-            if path.suffix.lower() not in extension_set:
+    seen_paths: set[Path] = set()
+    for source_root in analysis_source_roots(settings):
+        for root, _, file_names in os.walk(source_root):
+            root_path = Path(root)
+            candidates = directories.setdefault(root_path, [])
+            modified_times: dict[Path, float] = {}
+            for existing in candidates:
+                try:
+                    modified_times[existing] = existing.stat().st_mtime
+                except OSError:
+                    modified_times[existing] = 0.0
+            for file_name in file_names:
+                path = root_path / file_name
+                if path.suffix.lower() not in extension_set:
+                    continue
+                try:
+                    resolved_path = path.resolve()
+                except OSError:
+                    resolved_path = path.absolute()
+                if resolved_path in seen_paths:
+                    continue
+                seen_paths.add(resolved_path)
+
+                try:
+                    stat = path.stat()
+                except OSError as exc:
+                    LOGGER.warning("Skipping unreadable candidate during scan: %s: %s", path, exc)
+                    stat_failures += 1
+                    continue
+
+                if max_file_size_bytes is not None and stat.st_size > max_file_size_bytes:
+                    LOGGER.info("Skipping over-size file: %s", path)
+                    skipped_too_large += 1
+                    continue
+                modified_times[path] = stat.st_mtime
+                candidates.append(path)
+            if not candidates:
+                directories.pop(root_path, None)
                 continue
 
-            try:
-                stat = path.stat()
-            except OSError as exc:
-                LOGGER.warning("Skipping unreadable candidate during scan: %s: %s", path, exc)
-                stat_failures += 1
-                continue
-
-            if max_file_size_bytes is not None and stat.st_size > max_file_size_bytes:
-                LOGGER.info("Skipping over-size file: %s", path)
-                skipped_too_large += 1
-                continue
-            modified_times[path] = stat.st_mtime
-            candidates.append(path)
-        if not candidates:
-            continue
-
-        candidates.sort(key=lambda path: (modified_times[path], path.name.lower()))
-        directories[root_path] = candidates
+            candidates.sort(key=lambda path: (modified_times[path], path.name.lower()))
 
     return directories, skipped_too_large, stat_failures
+
+
+def analysis_source_roots(settings: Settings) -> tuple[Path, ...]:
+    roots: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in (settings.SOURCE_DIR, *settings.ADDITIONAL_SOURCE_DIRS):
+        resolved = candidate.expanduser().resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        roots.append(resolved)
+    return tuple(roots)
+
+
+def source_root_for_path(settings: Settings, source_path: Path) -> tuple[Path, int]:
+    resolved_path = source_path.expanduser().resolve()
+    matches: list[tuple[int, Path, int]] = []
+    for index, root in enumerate(analysis_source_roots(settings)):
+        if _is_relative_to(resolved_path, root):
+            matches.append((len(root.parts), root, index))
+    if not matches:
+        raise ValueError(f"Source path is outside configured source directories: {source_path}")
+    _, root, index = max(matches, key=lambda item: (item[0], -item[2]))
+    return root, index
+
+
+def source_relative_path(settings: Settings, source_path: Path) -> Path:
+    root, index = source_root_for_path(settings, source_path)
+    relative = source_path.expanduser().resolve().relative_to(root)
+    if index == 0:
+        return relative
+    additional_count = len(analysis_source_roots(settings)) - 1
+    prefix = Path("_uploads")
+    if additional_count > 1:
+        prefix /= f"source_{index}"
+    return prefix / relative
 
 
 def apply_file_limit(
@@ -897,16 +947,14 @@ def settings_signature_from_payload(payload: dict[str, Any]) -> str:
 
 
 def validate_safe_paths(settings: Settings) -> None:
-    source_dir = settings.SOURCE_DIR.resolve()
     output_root = settings.OUTPUT_ROOT.resolve()
-
-    if source_dir == output_root:
-        raise ValueError("OUTPUT_ROOT must be different from SOURCE_DIR")
-
-    if _is_relative_to(output_root, source_dir):
-        raise ValueError(
-            "OUTPUT_ROOT must not be inside SOURCE_DIR; this would mix generated files into the source scan."
-        )
+    for source_dir in analysis_source_roots(settings):
+        if source_dir == output_root:
+            raise ValueError("OUTPUT_ROOT must be different from every SOURCE_DIR")
+        if _is_relative_to(output_root, source_dir):
+            raise ValueError(
+                "OUTPUT_ROOT must not be inside a SOURCE_DIR; this would mix generated files into the source scan."
+            )
 
 def _is_relative_to(path: Path, parent: Path) -> bool:
     try:
@@ -959,6 +1007,9 @@ class OutputRunLock:
                         "pid": os.getpid(),
                         "token": self.token,
                         "source_dir": str(self.settings.SOURCE_DIR),
+                        "source_dirs": [
+                            str(path) for path in analysis_source_roots(self.settings)
+                        ],
                         "output_root": str(self.settings.OUTPUT_ROOT),
                         "created_epoch": time.time(),
                     },
@@ -1031,10 +1082,11 @@ def run_pipeline(settings: Settings | None = None) -> None:
     current_settings = settings or get_settings()
     validate_safe_paths(current_settings)
 
-    if not current_settings.SOURCE_DIR.exists():
-        raise FileNotFoundError(
-            f"Source directory does not exist: {current_settings.SOURCE_DIR}"
-        )
+    for source_dir in analysis_source_roots(current_settings):
+        if not source_dir.exists():
+            raise FileNotFoundError(f"Source directory does not exist: {source_dir}")
+        if not source_dir.is_dir():
+            raise NotADirectoryError(f"Source path is not a directory: {source_dir}")
 
     current_settings.OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     current_settings.state_dir.mkdir(parents=True, exist_ok=True)
@@ -1089,7 +1141,10 @@ def _run_pipeline_with_llm(
     stats.failed = scan_stat_failures
     stats.failed_attempts = scan_stat_failures
     if not full_directory_map:
-        LOGGER.info("No candidate documents found in %s", current_settings.SOURCE_DIR)
+        LOGGER.info(
+            "No candidate documents found in %s",
+            ", ".join(str(path) for path in analysis_source_roots(current_settings)),
+        )
         journal.record_run_summary(stats, current_settings)
         ProgressReporter(current_settings, stats).report(force=True)
         return
@@ -1128,7 +1183,7 @@ def _run_pipeline_with_llm(
                     manifest_analysis.analyze_directory,
                     directory,
                     files,
-                    current_settings.SOURCE_DIR,
+                    source_root_for_path(current_settings, directory)[0],
                 ): directory
                 for directory, files in directory_map.items()
             }
@@ -1211,7 +1266,7 @@ def _run_pipeline_with_llm(
             manifest = manifests.get(directory, ManifestResult())
 
             for source_path in files:
-                relative_path = source_path.relative_to(current_settings.SOURCE_DIR)
+                relative_path = source_relative_path(current_settings, source_path)
                 resolved_source_path = source_path.resolve()
                 retrying_prior_failure = (
                     current_settings.RETRY_FAILED
@@ -1402,7 +1457,7 @@ def _retry_failed_documents_once(
 
     for source_path in unique_paths:
         try:
-            relative_path = source_path.relative_to(settings.SOURCE_DIR)
+            relative_path = source_relative_path(settings, source_path)
             fingerprint = build_file_fingerprint(source_path, settings)
         except OSError as exc:
             LOGGER.warning("Retry stat failed for %s: %s", source_path, exc)
@@ -1417,7 +1472,7 @@ def _retry_failed_documents_once(
             progress.report()
             continue
         except ValueError:
-            LOGGER.warning("Retry path is outside SOURCE_DIR: %s", source_path)
+            LOGGER.warning("Retry path is outside configured source directories: %s", source_path)
             stats.record_retry_skipped()
             continue
 
@@ -1759,7 +1814,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version="DocTriage 1.0.0",
     )
-    parser.add_argument("--source-dir", type=Path, help="Source document directory.")
+    parser.add_argument(
+        "--source-dir",
+        type=Path,
+        action="append",
+        help="Source document directory. Repeat to analyze the union of multiple directories.",
+    )
     parser.add_argument("--output-root", type=Path, help="Directory for generated state and routed copies.")
     parser.add_argument("--llm-endpoint", help="LLM endpoint, for example http://localhost:11434/api/generate.")
     parser.add_argument("--llm-model", help="LLM model name, for example gemma4:e4b.")
@@ -1881,8 +1941,9 @@ def build_settings_from_args(args: argparse.Namespace) -> Settings:
         raise ValueError("--ocr and --no-ocr cannot be used together.")
 
     overrides: dict[str, Any] = {}
-    if args.source_dir is not None:
-        overrides["SOURCE_DIR"] = args.source_dir
+    if args.source_dir:
+        overrides["SOURCE_DIR"] = args.source_dir[0]
+        overrides["ADDITIONAL_SOURCE_DIRS"] = tuple(args.source_dir[1:])
     if args.output_root is not None:
         overrides["OUTPUT_ROOT"] = args.output_root
     if args.llm_endpoint is not None:

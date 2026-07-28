@@ -10,8 +10,9 @@ const I18N = {
     source_dir: "源目录",
     output_dir: "输出目录",
     current_output_root: "当前输出目录",
-    source_mode_path: "服务器路径",
     source_mode_upload: "上传文档",
+    upload_dialog_title: "上传文档",
+    close: "关闭",
     add_upload_documents: "添加文档",
     pick_upload_files: "选择文件",
     pick_upload_folder: "选择文件夹",
@@ -86,8 +87,11 @@ const I18N = {
     missing_source_title: "源文件不存在，无法打开或定位",
     table_select: "选择",
     table_quality: "质量",
+    table_profile: "属性",
     table_type: "类型",
-    table_sensitivity_public: "敏感/公开",
+    table_sensitivity_compact: "敏感/公开",
+    sensitivity_compact: "敏",
+    public_compact: "公",
     table_name: "名称",
     table_modified: "修改时间",
     table_tags: "标签",
@@ -178,6 +182,9 @@ const I18N = {
     upload_failed: "上传失败",
     upload_cleared: "上传工作区已清理",
     upload_no_files: "请先选择文件",
+    upload_incomplete: "上传尚未完成，请完成上传或清理上传工作区",
+    source_or_upload_required: "请选择源目录或上传文档",
+    output_required: "请选择输出目录",
     need_reading_output: "请先输入阅读目标输出目录",
     need_graph_output: "请先输入图谱分析目录",
     reading_output_apply_failed: "阅读目录应用失败",
@@ -408,8 +415,9 @@ const I18N = {
     source_dir: "Source directory",
     output_dir: "Output directory",
     current_output_root: "Current output directory",
-    source_mode_path: "Server path",
     source_mode_upload: "Upload documents",
+    upload_dialog_title: "Upload documents",
+    close: "Close",
     add_upload_documents: "Add documents",
     pick_upload_files: "Choose files",
     pick_upload_folder: "Choose folder",
@@ -484,8 +492,11 @@ const I18N = {
     missing_source_title: "Source file does not exist",
     table_select: "Select",
     table_quality: "Quality",
+    table_profile: "Profile",
     table_type: "Type",
-    table_sensitivity_public: "Sensitivity/public",
+    table_sensitivity_compact: "Risk/Public",
+    sensitivity_compact: "Risk",
+    public_compact: "Public",
     table_name: "Name",
     table_modified: "Modified",
     table_tags: "Tags",
@@ -576,6 +587,9 @@ const I18N = {
     upload_failed: "Upload failed",
     upload_cleared: "Upload workspace cleared",
     upload_no_files: "Choose files first",
+    upload_incomplete: "Upload is incomplete. Finish it or clear the upload workspace",
+    source_or_upload_required: "Choose a source directory or upload documents",
+    output_required: "Choose an output directory",
     need_reading_output: "Enter a reading output directory first",
     need_graph_output: "Enter a graph analysis directory first",
     reading_output_apply_failed: "Failed to apply reading directory",
@@ -802,6 +816,9 @@ let allRows = [];
 let filteredRows = [];
 let currentRows = [];
 let readingRowsLoading = false;
+let readingRowsLoadedKey = "";
+let readingRowsLoadingKey = "";
+let readingRowsLoadToken = 0;
 let capabilities = {};
 let currentPage = 1;
 let pageSize = Number(localStorage.getItem("doctriage_page_size") || 100);
@@ -846,7 +863,6 @@ let graphActionBusy = false;
 let ragActionBusy = false;
 let relationshipLaunchToken = 0;
 let configuredEmbeddingEndpoint = "";
-let sourceMode = "path";
 let currentUploadWorkspace = null;
 let uploadBusy = false;
 const DEFAULT_EMBEDDING_ENDPOINT = "http://localhost:11434/api/embeddings";
@@ -1439,7 +1455,6 @@ function initRunFormPersistence() {
     if (!element) continue;
     const eventName = element.tagName === "INPUT" && element.type !== "checkbox" ? "input" : "change";
     element.addEventListener(eventName, () => {
-      if (id === "run_source_dir" || id === "run_output_root") syncSourceModeFromRunPaths();
       if (id === "run_output_root") syncReadingTargetFromRunOutput({force: true});
       if (id === "run_source_dir") syncReadingSourceFromRunIfLinked();
       saveRunFormState();
@@ -1598,6 +1613,12 @@ function applyI18n() {
   document.querySelectorAll("[data-i18n-tip]").forEach(item => {
     item.dataset.tip = tr(item.dataset.i18nTip);
   });
+  document.querySelectorAll("[data-i18n-title]").forEach(item => {
+    item.title = tr(item.dataset.i18nTitle);
+  });
+  document.querySelectorAll("[data-i18n-aria-label]").forEach(item => {
+    item.setAttribute("aria-label", tr(item.dataset.i18nAriaLabel));
+  });
   if ($("reading_scope")) $("reading_scope").value = readingScope;
   renderStatsFromRows(filteredRows, allRows.length);
   renderPager();
@@ -1649,7 +1670,15 @@ function switchTab(name) {
 
 function loadReadingRowsIfReady() {
   if (!$("section-reading").classList.contains("active")) return;
-  if (readingPathPayload().output_root) loadRows();
+  if (!readingPathPayload().output_root) return;
+  const key = readingRowsCacheKey();
+  if (key === readingRowsLoadedKey || key === readingRowsLoadingKey) return;
+  loadRows();
+}
+
+function readingRowsCacheKey() {
+  const paths = readingPathPayload();
+  return [readingScope, paths.source_dir || "", paths.output_root || ""].join("\u0000");
 }
 
 async function loadConfig() {
@@ -1684,14 +1713,13 @@ async function loadConfig() {
   if (!ragApplied) syncRagTargetFromReadingOutput({force: true});
   if (!anydocsApplied) syncAnydocsTargetFromGraphOutput({force: true});
   normalizeSharedTargetFromTargets({persist: true});
-  syncSourceModeFromRunPaths();
   for (const id of ["pick_source_btn", "pick_output_btn", "pick_global_output_btn"]) {
     if ($(id)) {
       $(id).disabled = capabilities.folder_picker === false;
       $(id).title = capabilities.folder_picker === false ? tr("folder_picker_unavailable") : "";
     }
   }
-  renderSourceMode();
+  renderUploadStats();
   if (capabilities.headless_hint) {
     showToast(capabilities.headless_hint);
   }
@@ -1701,9 +1729,6 @@ async function loadConfig() {
 }
 
 async function pickFolder(targetId) {
-  if (targetId === "run_source_dir" || targetId === "run_output_root") {
-    setSourceMode("path");
-  }
   const response = await fetch("/api/pick-folder", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -1851,9 +1876,11 @@ async function applyGraphOutput() {
 
 function runPayload() {
   const llmEndpoint = $("run_llm_endpoint").value.trim();
+  const uploadId = currentUploadWorkspace?.complete ? currentUploadWorkspace.upload_id : "";
   return {
     source_dir: $("run_source_dir").value.trim(),
     output_root: $("run_output_root").value.trim(),
+    upload_id: uploadId,
     llm_endpoint: llmEndpoint,
     llm_model: $("run_llm_model").value.trim(),
     llm_api_key: $("run_llm_api_key") ? $("run_llm_api_key").value.trim() : "",
@@ -1952,33 +1979,20 @@ async function ensureEndpointReady(_requestPayload, {role = "analysis", endpoint
   return true;
 }
 
-function setSourceMode(mode) {
-  sourceMode = mode === "upload" ? "upload" : "path";
-  renderSourceMode();
-}
-
-function renderSourceMode() {
-  for (const mode of ["path", "upload"]) {
-    const button = $(`source_mode_${mode}_btn`);
-    if (button) button.classList.toggle("active", sourceMode === mode);
-  }
-  const uploadPanel = $("upload_panel");
-  if (uploadPanel) uploadPanel.hidden = sourceMode === "path";
-  if ($("pick_source_btn")) $("pick_source_btn").disabled = capabilities.folder_picker === false;
-  if (sourceMode === "path") closeUploadSourceMenu();
+function openUploadDialog() {
+  const dialog = $("upload_dialog");
+  if (!dialog) return;
   renderUploadStats();
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
 }
 
-function runPathsMatchUploadWorkspace() {
-  if (!currentUploadWorkspace) return false;
-  return runPathKey($("run_source_dir").value, $("run_output_root").value) === runPathKey(
-    currentUploadWorkspace.source_dir,
-    currentUploadWorkspace.output_root
-  );
-}
-
-function syncSourceModeFromRunPaths() {
-  setSourceMode(runPathsMatchUploadWorkspace() ? "upload" : "path");
+function closeUploadDialog() {
+  const dialog = $("upload_dialog");
+  if (!dialog) return;
+  closeUploadSourceMenu();
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
 }
 
 function setUploadSourceMenuOpen(open) {
@@ -2024,7 +2038,13 @@ function initUploadControls() {
   document.addEventListener("keydown", event => {
     if (event.key === "Escape") closeUploadSourceMenu();
   });
-  renderSourceMode();
+  const dialog = $("upload_dialog");
+  if (dialog) {
+    dialog.addEventListener("click", event => {
+      if (event.target === dialog) closeUploadDialog();
+    });
+  }
+  renderUploadStats();
 }
 
 async function ensureUploadWorkspace() {
@@ -2068,7 +2088,6 @@ function buildFolderRootAliases(fileList) {
 async function uploadSelectedFiles(fileList, {folder = false} = {}) {
   const files = Array.from(fileList || []);
   if (!files.length) return showToast(tr("upload_no_files"));
-  setSourceMode("upload");
   uploadBusy = true;
   updateUploadButtons();
   if ($("uploadBar")) $("uploadBar").style.width = "0%";
@@ -2111,25 +2130,13 @@ async function completeUploadWorkspace() {
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || tr("upload_failed"));
   currentUploadWorkspace = payload;
-  applyUploadWorkspacePaths(payload);
   if ($("uploadBar")) $("uploadBar").style.width = "100%";
   return payload;
-}
-
-function applyUploadWorkspacePaths(payload) {
-  if (!payload) return;
-  if ($("run_source_dir")) $("run_source_dir").value = payload.source_dir || "";
-  if ($("run_output_root")) $("run_output_root").value = payload.output_root || "";
-  setSourceMode("upload");
-  lastAppliedRunPathKey = runPathKey($("run_source_dir").value, $("run_output_root").value);
-  saveRunFormState();
-  syncReadingTargetFromRunOutput({force: true});
 }
 
 async function clearUploadWorkspace() {
   if (!currentUploadWorkspace || !currentUploadWorkspace.upload_id || uploadBusy) {
     currentUploadWorkspace = null;
-    setSourceMode("path");
     if ($("uploadBar")) $("uploadBar").style.width = "0%";
     renderUploadStats();
     return;
@@ -2139,14 +2146,13 @@ async function clearUploadWorkspace() {
   const payload = await response.json();
   if (!response.ok) return showToast(payload.error || tr("upload_failed"));
   currentUploadWorkspace = null;
-  setSourceMode("path");
   if ($("uploadBar")) $("uploadBar").style.width = "0%";
   renderUploadStats();
   showToast(tr("upload_cleared"));
 }
 
 function updateUploadButtons() {
-  for (const id of ["pick_upload_btn", "pick_upload_files_btn", "pick_upload_folder_btn", "clear_upload_workspace_btn"]) {
+  for (const id of ["open_upload_dialog_btn", "pick_upload_btn", "pick_upload_files_btn", "pick_upload_folder_btn", "clear_upload_workspace_btn"]) {
     const button = $(id);
     if (button) button.disabled = uploadBusy;
   }
@@ -2164,7 +2170,7 @@ function renderUploadStats(message = "") {
       parts.push(`${tr("folders_unit")} ${Number(currentUploadWorkspace.root_count)}`);
     }
     parts.push(formatBytes(currentUploadWorkspace.total_bytes || 0));
-  } else if (sourceMode !== "path") {
+  } else {
     parts.push(tr("upload_empty"));
   }
   target.innerHTML = parts.map(item => `<span class="pill">${escapeHtml(item)}</span>`).join("");
@@ -2221,8 +2227,11 @@ async function testVectorStore() {
 }
 
 function pathPayload() {
+  const uploadedSource = currentUploadWorkspace?.complete
+    ? String(currentUploadWorkspace.source_dir || "").trim()
+    : "";
   return {
-    source_dir: $("run_source_dir").value.trim(),
+    source_dir: $("run_source_dir").value.trim() || uploadedSource,
     output_root: $("run_output_root").value.trim()
   };
 }
@@ -2409,10 +2418,14 @@ async function toggleAnalysis() {
 
 async function startAnalysis(currentPayload = null) {
   saveRunFormState();
-  if (sourceMode === "upload" && (!currentUploadWorkspace || !currentUploadWorkspace.complete)) {
-    return showToast(tr("upload_no_files"));
+  if (currentUploadWorkspace?.upload_id && !currentUploadWorkspace.complete) {
+    return showToast(tr("upload_incomplete"));
   }
   const requestPayload = runPayload();
+  if (!requestPayload.source_dir && !requestPayload.upload_id) {
+    return showToast(tr("source_or_upload_required"));
+  }
+  if (!requestPayload.output_root) return showToast(tr("output_required"));
   requestPayload.preempt_relationships = true;
   const preemptRelationships = shouldPreemptRelationshipsForAnalysis(currentPayload);
   if (preemptRelationships) {
@@ -2619,6 +2632,10 @@ function updateAnalysisButtons(payload) {
 }
 
 function clearReadingRows() {
+  readingRowsLoadToken += 1;
+  readingRowsLoadedKey = "";
+  readingRowsLoadingKey = "";
+  readingRowsLoading = false;
   allRows = [];
   filteredRows = [];
   currentRows = [];
@@ -2632,6 +2649,8 @@ function clearReadingRows() {
 function renderReadingError(message) {
   const text = String(message || tr("rows_load_failed"));
   readingRowsLoading = false;
+  readingRowsLoadedKey = "";
+  readingRowsLoadingKey = "";
   allRows = [];
   filteredRows = [];
   currentRows = [];
@@ -2641,7 +2660,7 @@ function renderReadingError(message) {
   $("pagerBottom").innerHTML = "";
   renderSortMarks();
   $("rows").setAttribute("aria-busy", "false");
-  $("rows").innerHTML = `<tr><td colspan="10" class="status-failed">${escapeHtml(text)}</td></tr>`;
+  $("rows").innerHTML = `<tr><td colspan="8" class="status-failed">${escapeHtml(text)}</td></tr>`;
 }
 
 function renderReadingLoading() {
@@ -2661,13 +2680,11 @@ function renderReadingLoading() {
       <td><span class="reading-loading-spinner"></span></td>
       <td><span class="reading-loading-placeholder short"></span></td>
       <td><span class="reading-loading-placeholder short"></span></td>
-      <td><span class="reading-loading-placeholder medium"></span></td>
-      <td><span class="reading-loading-placeholder medium"></span></td>
-      <td><span class="reading-loading-placeholder short"></span></td>
+      <td class="document-profile"><span class="reading-loading-placeholder medium"></span></td>
       <td class="name"><span class="reading-loading-placeholder long"></span></td>
       <td><span class="reading-loading-placeholder medium"></span></td>
       <td><span class="reading-loading-placeholder ${index % 2 ? "medium" : "long"}"></span></td>
-      <td class="actions"><span class="reading-loading-placeholder long"></span></td>
+      <td><span class="reading-loading-placeholder long"></span></td>
     </tr>`).join("");
 }
 
@@ -2739,8 +2756,9 @@ function clearRagState(messageKey = "rag_no_index") {
 }
 
 async function resetAnalysis() {
-  const sourceDir = $("run_source_dir").value.trim();
-  const outputRoot = $("run_output_root").value.trim();
+  const paths = pathPayload();
+  const sourceDir = paths.source_dir;
+  const outputRoot = paths.output_root;
   if (!sourceDir || !outputRoot) return showToast(tr("need_source_output"));
   if (!window.confirm(trf("reset_confirm", {output: outputRoot}))) return;
   const response = await fetch("/api/analysis/reset", {
@@ -2954,11 +2972,15 @@ function localizedActivityDetail(detail) {
 }
 
 async function loadRows() {
+  const loadKey = readingRowsCacheKey();
+  const loadToken = ++readingRowsLoadToken;
+  readingRowsLoadingKey = loadKey;
   syncReadingScopeControls();
   renderReadingLoading();
   try {
     const response = await fetch("/api/state?" + readingParams());
     const payload = await response.json();
+    if (loadToken !== readingRowsLoadToken) return null;
     if (!response.ok) {
       const message = payload.error || tr("rows_load_failed");
       showToast(message);
@@ -2969,9 +2991,12 @@ async function loadRows() {
     populateFacetOptions(allRows);
     currentPage = 1;
     readingRowsLoading = false;
+    readingRowsLoadedKey = loadKey;
+    readingRowsLoadingKey = "";
     applyClientFilters();
     return payload;
   } catch (error) {
+    if (loadToken !== readingRowsLoadToken) return null;
     const message = error?.message || tr("rows_load_failed");
     showToast(message);
     renderReadingError(message);
@@ -2991,7 +3016,11 @@ function syncReadingScopeControls() {
 function syncReadingTarget(payload) {
   if (!payload) return;
   let changed = false;
-  if (payload.source_dir && $("run_source_dir").value !== payload.source_dir) {
+  const currentRunSource = $("run_source_dir").value.trim();
+  const uploadOnlySource = !currentRunSource
+    && currentUploadWorkspace?.complete
+    && String(currentUploadWorkspace.source_dir || "") === String(payload.source_dir || "");
+  if (payload.source_dir && !uploadOnlySource && $("run_source_dir").value !== payload.source_dir) {
     $("run_source_dir").value = payload.source_dir;
     changed = true;
   }
@@ -4164,9 +4193,7 @@ function renderRows(rows) {
       <td>${isPureFailureRow(row) ? "" : `<input type="checkbox" class="rowcheck" value="${escapeHtml(row.relative_path)}" />`}</td>
       <td class="status-${escapeAttr(row.status)}">${labelStatus(row.status)}</td>
       <td>${formatQuality(row)}</td>
-      <td>${escapeHtml(displayCategory(row))}</td>
-      <td>${escapeHtml(displayKind(row))}</td>
-      <td>${formatSensitivityPublic(row)}</td>
+      <td class="document-profile">${formatDocumentProfile(row)}</td>
       <td class="name">
         <span class="doc-name ${explanation ? "has-summary" : ""}" tabindex="${explanation ? "0" : "-1"}" data-tip="${escapeAttrValue(explanation)}">${escapeHtml(row.relative_path || "")}</span>
         ${row.source_path ? `<span class="doc-path">${escapeHtml(row.source_path)}</span>` : ""}
@@ -4174,7 +4201,7 @@ function renderRows(rows) {
       </td>
       <td>${escapeHtml(row.source_mtime_label || "")}${row.source_size_label ? `<br><span class="muted">${escapeHtml(row.source_size_label)}</span>` : ""}</td>
       <td>${escapeHtml((row.topic_tags || []).join(", "))}</td>
-      <td class="actions">${renderRowActions(row)}</td>
+      <td class="actions-cell"><div class="actions">${renderRowActions(row)}</div></td>
     </tr>`;
   }).join("");
   bindSummaryTooltips();
@@ -4198,10 +4225,23 @@ function displayKind(row) {
   return row.source_only ? tr("scope_source_unscored") : (row.document_kind || "");
 }
 
-function formatSensitivityPublic(row) {
+function formatDocumentProfile(row) {
   if (row.failure && !row.source_scope) return "—";
-  if (row.sensitivity_risk === null || row.sensitivity_risk === undefined || row.public_writing_suitability === null || row.public_writing_suitability === undefined) return "—";
-  return `${row.sensitivity_risk} / ${row.public_writing_suitability}`;
+  const category = displayCategory(row);
+  const kind = displayKind(row);
+  const hasScores = row.sensitivity_risk !== null
+    && row.sensitivity_risk !== undefined
+    && row.public_writing_suitability !== null
+    && row.public_writing_suitability !== undefined;
+  const scores = hasScores
+    ? `${tr("sensitivity_compact")} ${escapeHtml(row.sensitivity_risk)} · ${tr("public_compact")} ${escapeHtml(row.public_writing_suitability)}`
+    : "";
+  const parts = [
+    category ? `<span class="profile-category">${escapeHtml(category)}</span>` : "",
+    kind ? `<span class="profile-kind">${escapeHtml(kind)}</span>` : "",
+    scores ? `<span class="profile-scores">${scores}</span>` : ""
+  ].filter(Boolean);
+  return parts.join("") || "—";
 }
 
 function renderRowActions(row) {
@@ -4342,11 +4382,16 @@ function positionHelpTooltip(target) {
   tooltip.style.maxWidth = Math.min(320, Math.max(180, window.innerWidth - margin * 2)) + "px";
   const targetRect = target.getBoundingClientRect();
   const tooltipRect = tooltip.getBoundingClientRect();
+  const gap = 10;
   const left = Math.min(
     Math.max(margin, targetRect.left + targetRect.width / 2 - tooltipRect.width / 2),
     window.innerWidth - tooltipRect.width - margin
   );
-  const top = Math.max(margin, targetRect.top - tooltipRect.height - 10);
+  const spaceAbove = targetRect.top - margin;
+  const spaceBelow = window.innerHeight - targetRect.bottom - margin;
+  const top = spaceAbove >= tooltipRect.height + gap || spaceAbove >= spaceBelow
+    ? Math.max(margin, targetRect.top - tooltipRect.height - gap)
+    : Math.min(window.innerHeight - tooltipRect.height - margin, targetRect.bottom + gap);
   tooltip.style.left = left + "px";
   tooltip.style.top = top + "px";
   tooltip.style.visibility = "visible";
@@ -4449,8 +4494,17 @@ normalizeSharedTargetFromTargets({persist: true});
 clearGraphState("empty_graph");
 clearRagState("rag_no_index");
 applyI18n();
-loadConfig();
-switchTab(localStorage.getItem("doctriage_tab") || "analysis");
+
+async function bootstrap() {
+  try {
+    await loadConfig();
+  } catch (error) {
+    showToast(error?.message || tr("operation_failed"));
+  }
+  switchTab(localStorage.getItem("doctriage_tab") || "analysis");
+}
+
+bootstrap();
 setInterval(() => {
   if ($("section-analysis").classList.contains("active")) loadAnalysis();
   if ($("section-graph").classList.contains("active") && graphMeta && graphMeta.task && graphMeta.task.running) loadGraph();
