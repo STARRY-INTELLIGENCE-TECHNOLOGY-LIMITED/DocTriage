@@ -1,0 +1,50 @@
+@startuml
+title DocTriage Core Architecture
+
+top to bottom direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 18
+skinparam titleFontSize 24
+skinparam titleFontColor #172B4D
+skinparam rectangle {
+  BorderColor #52606D
+  BorderThickness 1.2
+  RoundCorner 8
+  FontColor #172B4D
+  FontSize 17
+  Padding 14
+}
+skinparam ArrowColor #52606D
+skinparam ArrowThickness 1.2
+skinparam linetype ortho
+skinparam nodesep 34
+skinparam ranksep 58
+
+rectangle "Inputs\nLocal folders / uploads\nSource stays read-only" as input #E8F1F5
+rectangle "Analysis Core\nScan and parse\nLocal rules + optional LLM scoring\nResumable state and failure journal" as core #DCEFEA
+
+rectangle "Human Review\nReading status and working set" as review #FFF4D6
+rectangle "Relationship + Retrieval Prep\nClusters / graph / RAG" as relations #F3E8FF
+rectangle "Stable Export\nAuditable results and downstream contract" as export #E5ECF8
+
+rectangle "Curated Working Set\nOptional routed copies" as curated #FFF9E8
+rectangle "Graph and Retrieval Assets" as graph #F8F0FF
+rectangle "doctriage_bundle.v2" as bundle #EAF0FB
+
+input -down-> core
+core -down-> review
+core -down-> relations
+core -down-> export
+review -down-> curated
+relations -down-> graph
+export -down-> bundle
+
+review -[hidden]right-> relations
+relations -[hidden]right-> export
+curated -[hidden]right-> graph
+graph -[hidden]right-> bundle
+
+footer DocTriage works standalone; AnyDocsToAgents is an optional downstream consumer.
+@enduml

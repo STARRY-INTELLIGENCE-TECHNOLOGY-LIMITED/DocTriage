@@ -14,6 +14,10 @@ Your source folder stays read-only. DocTriage writes state, logs, relationship r
 
 DocTriage follows a simple loop: run local analysis, review and mark documents in the reading console, then use relationship clusters when connected learning or downstream export is needed.
 
+## Core Architecture
+
+![DocTriage core architecture](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/architecture_en.png)
+
 ## Product Highlights and Knowledge Loop
 
 DocTriage is more than a file converter. Before documents enter RAG or an agent runtime, it answers which sources deserve inclusion, why they matter, and what selection boundary was applied. Read-only source handling, explainable quality scoring, human review, relationship mining, RAG preparation, and auditable export form one local-first governance layer for private knowledge.

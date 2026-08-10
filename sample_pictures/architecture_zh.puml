@@ -1,0 +1,50 @@
+@startuml
+title DocTriage 核心架构
+
+top to bottom direction
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName "Microsoft YaHei"
+skinparam defaultFontSize 18
+skinparam titleFontSize 24
+skinparam titleFontColor #172B4D
+skinparam rectangle {
+  BorderColor #52606D
+  BorderThickness 1.2
+  RoundCorner 8
+  FontColor #172B4D
+  FontSize 17
+  Padding 14
+}
+skinparam ArrowColor #52606D
+skinparam ArrowThickness 1.2
+skinparam linetype ortho
+skinparam nodesep 34
+skinparam ranksep 58
+
+rectangle "输入\n本地文件夹 / 上传文档\n源目录保持只读" as input #E8F1F5
+rectangle "分析核心\n扫描与解析\n本地规则 + 可选 LLM 评分\n可续跑状态与失败记录" as core #DCEFEA
+
+rectangle "人工复核\n阅读状态与工作集" as review #FFF4D6
+rectangle "关系与检索准备\n关系簇 / 图谱 / RAG" as relations #F3E8FF
+rectangle "稳定导出\n审计结果与下游契约" as export #E5ECF8
+
+rectangle "整理后的工作集\n可选分类副本" as curated #FFF9E8
+rectangle "关系图谱与检索资产" as graph #F8F0FF
+rectangle "doctriage_bundle.v2" as bundle #EAF0FB
+
+input -down-> core
+core -down-> review
+core -down-> relations
+core -down-> export
+review -down-> curated
+relations -down-> graph
+export -down-> bundle
+
+review -[hidden]right-> relations
+relations -[hidden]right-> export
+curated -[hidden]right-> graph
+graph -[hidden]right-> bundle
+
+footer DocTriage 可独立完成治理、阅读与导出；AnyDocsToAgents 仅作为可选下游消费者。
+@enduml

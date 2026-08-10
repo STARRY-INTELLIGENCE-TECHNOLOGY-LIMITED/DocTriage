@@ -14,6 +14,10 @@ DocTriage 会扫描源目录、提取正文、调用本地 LLM 给每个文档�
 
 DocTriage 围绕一个清晰的闭环设计：先本地分析，再在阅读台复核和标记文档，最后在需要关联学习或下游导出时生成关系簇。
 
+## 核心架构
+
+![DocTriage 核心架构](https://github.com/STARRY-INTELLIGENCE-TECHNOLOGY-LIMITED/DocTriage/raw/main/sample_pictures/architecture_zh.png)
+
 ## 产品亮点与知识闭环
 
 DocTriage 的核心价值不是简单转换文件，而是在 RAG 或 Agent 入库前回答“哪些资料值得进入知识库、为什么值得、边界是什么”。它把来源只读、质量分级、人工复核、关系挖掘、RAG 索引和可审计导出放在同一条本地优先链路中，适合作为个人或团队私域知识的上游治理层。
